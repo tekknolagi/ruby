@@ -1650,6 +1650,16 @@ rb_enc_aliases(VALUE klass)
     return aliases[0];
 }
 
+static VALUE
+encoding_compatibility_p()
+{
+    if (rb_encoding_compat) {
+	return Qtrue;
+    } else {
+	return Qfalse;
+    }
+}
+
 /*
  * An Encoding instance represents a character encoding usable in Ruby. It is
  * defined as a constant under the Encoding namespace. It has a name and
@@ -1873,6 +1883,7 @@ Init_Encoding(void)
     rb_define_singleton_method(rb_cEncoding, "aliases", rb_enc_aliases, 0);
     rb_define_singleton_method(rb_cEncoding, "find", enc_find, 1);
     rb_define_singleton_method(rb_cEncoding, "compatible?", enc_compatible_p, 2);
+    rb_define_singleton_method(rb_cEncoding, "compatibility?", encoding_compatibility_p, 0);
 
     rb_define_method(rb_cEncoding, "_dump", enc_dump, -1);
     rb_define_singleton_method(rb_cEncoding, "_load", enc_load, 1);
