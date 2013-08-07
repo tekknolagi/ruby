@@ -551,4 +551,34 @@ class TestMethod < Test::Unit::TestCase
     }, bug8100, timeout: 2
   rescue Timeout::Error
   end
+
+  class MethodVisibilityClass
+    def pub
+    end
+  protected
+    def prot
+    end
+  private
+    def priv
+    end
+  end
+
+  def test_method_visibility
+    o = MethodVisibilityClass.new
+    pub = o.method(:pub)
+    prot = o.method(:prot)
+    priv = o.method(:priv)
+
+    assert pub.public?
+    refute pub.protected?
+    refute pub.private?
+
+    refute prot.public?
+    assert prot.protected?
+    refute prot.private?
+
+    refute priv.public?
+    refute priv.protected?
+    assert priv.private?
+  end
 end

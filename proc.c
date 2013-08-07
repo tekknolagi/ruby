@@ -1076,6 +1076,31 @@ method_eq(VALUE method, VALUE other)
     return Qtrue;
 }
 
+static rb_method_flag_t
+mvisi(VALUE method)
+{
+    Check_TypedStruct(method, &method_data_type);
+    return ((struct METHOD *)DATA_PTR(method))->me->flag & NOEX_MASK;
+}
+
+static VALUE
+method_public_p(VALUE method)
+{
+    return (mvisi(method) == NOEX_PUBLIC) ? Qtrue : Qfalse;
+}
+
+static VALUE
+method_protected_p(VALUE method)
+{
+    return (mvisi(method) == NOEX_PROTECTED) ? Qtrue : Qfalse;
+}
+
+static VALUE
+method_private_p(VALUE method)
+{
+    return (mvisi(method) == NOEX_PRIVATE) ? Qtrue : Qfalse;
+}
+
 /*
  * call-seq:
  *    meth.hash   -> integer
@@ -2339,6 +2364,9 @@ Init_Proc(void)
     rb_cMethod = rb_define_class("Method", rb_cObject);
     rb_undef_alloc_func(rb_cMethod);
     rb_undef_method(CLASS_OF(rb_cMethod), "new");
+    rb_define_method(rb_cMethod, "public?", method_public_p, 0);
+    rb_define_method(rb_cMethod, "protected?", method_protected_p, 0);
+    rb_define_method(rb_cMethod, "private?", method_private_p, 0);
     rb_define_method(rb_cMethod, "==", method_eq, 1);
     rb_define_method(rb_cMethod, "eql?", method_eq, 1);
     rb_define_method(rb_cMethod, "hash", method_hash, 0);
