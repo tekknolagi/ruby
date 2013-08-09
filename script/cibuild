@@ -8,4 +8,5 @@ git clean -f -x
 autoconf
 ./configure --disable-install-doc --prefix=`pwd`/inst
 make -j $CORES
+make install
 make TESTS="-j $CORES" test-all
