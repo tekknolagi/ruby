@@ -14,6 +14,6 @@ function Q {
 Q git clean -f -x
 Q autoconf
 Q ./configure --disable-install-doc --prefix=`pwd`/inst
-make -j $CORES
-make install
+Q make -j $CORES
+Q make install
 make TESTS="-j $CORES" test-all
