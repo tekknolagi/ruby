@@ -5,7 +5,7 @@ if [ -z "$CORES" ]; then
 fi
 
 function Q {
-  if ! "$@" > /tmp/ruby_ci_log; then
+  if ! "$@" &> /tmp/ruby_ci_log; then
     cat /tmp/ruby_ci_log
     exit 1
   fi
