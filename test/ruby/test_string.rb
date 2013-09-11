@@ -2194,14 +2194,6 @@ class TestString < Test::Unit::TestCase
     assert_equal(false, ("\u3042"*10).byteslice(0, 20).valid_encoding?)
   end
 
-  def test_unknown_string_option
-    assert_raises(SyntaxError) do
-      eval(%{
-        "hello"x
-      })
-    end
-  end
-
   def test_frozen_string
     assert_equal "hello", "hello"f
 
