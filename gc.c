@@ -808,6 +808,20 @@ rb_free_m_table(st_table *tbl)
 }
 
 static int
+free_method_cache_entry_i(ID key, method_cache_entry_t *entry, st_data_t data)
+{
+    free(entry);
+    return ST_CONTINUE;
+}
+
+void
+rb_free_mc_table(st_table *tbl)
+{
+    st_foreach(tbl, free_method_cache_entry_i, 0);
+    st_free_table(tbl);
+}
+
+static int
 free_const_entry_i(ID key, rb_const_entry_t *ce, st_data_t data)
 {
     xfree(ce);
@@ -930,7 +944,6 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	break;
       case T_MODULE:
       case T_CLASS:
-	rb_clear_cache_by_class((VALUE)obj);
         if (RCLASS_M_TBL(obj)) {
             rb_free_m_table(RCLASS_M_TBL(obj));
         }
@@ -943,7 +956,23 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	if (RCLASS_IV_INDEX_TBL(obj)) {
 	    st_free_table(RCLASS_IV_INDEX_TBL(obj));
 	}
-        xfree(RANY(obj)->as.klass.ptr);
+	if (RCLASS_EXT(obj)->subclasses) {
+	    if (BUILTIN_TYPE(obj) == T_MODULE) {
+		rb_class_detach_module_subclasses(obj);
+	    } else {
+		rb_class_detach_subclasses(obj);
+	    }
+	    RCLASS_EXT(obj)->subclasses = NULL;
+	}
+	if (RCLASS_EXT(obj)->mc_tbl) {
+	    rb_free_mc_table(RCLASS_EXT(obj)->mc_tbl);
+	    RCLASS_EXT(obj)->mc_tbl = NULL;
+	}
+	rb_class_remove_from_module_subclasses(obj);
+	rb_class_remove_from_super_subclasses(obj);
+	if (RANY(obj)->as.klass.ptr)
+	    xfree(RANY(obj)->as.klass.ptr);
+	RANY(obj)->as.klass.ptr = NULL;
 	break;
       case T_STRING:
 	rb_str_free(obj);
@@ -995,7 +1024,14 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	break;
       case T_ICLASS:
 	/* iClass shares table with the module */
+	if (RCLASS_EXT(obj)->subclasses) {
+	    rb_class_detach_subclasses(obj);
+	    RCLASS_EXT(obj)->subclasses = NULL;
+	}
+	rb_class_remove_from_module_subclasses(obj);
+	rb_class_remove_from_super_subclasses(obj);
 	xfree(RANY(obj)->as.klass.ptr);
+	RANY(obj)->as.klass.ptr = NULL;
 	break;
 
       case T_FLOAT:
@@ -2792,7 +2828,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE ptr)
 	if (!RCLASS_EXT(obj)) break;
 	mark_tbl(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
-	ptr = RCLASS_SUPER(obj);
+	ptr = RCLASS_SUPER((VALUE)obj);
 	goto again;
 
       case T_ARRAY:
