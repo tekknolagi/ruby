@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 branch_name="$1"
 commit="$(git rev-parse --short HEAD)"
 
-sed -i '' -e "s/development/$branch_name $commit/" version.h
+perl -pi -e "s/development/$branch_name $commit/" version.h
 
 try autoconf
 try ./configure --prefix=/data/ruby --disable-install-doc
