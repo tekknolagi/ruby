@@ -15,15 +15,23 @@ branch_name="$1"
 commit="$(git rev-parse --short HEAD)"
 
 perl -pi -e "s/development/$branch_name $commit/" version.h
+cp version.h version.h.pristine
 
 try autoconf
 try ./configure --prefix=/data/ruby --disable-install-doc
 try make -j 4
 
-try make ruby-tcmalloc RUBY_INSTALL_NAME=ruby-tcmalloc MAINLIBS=-ltcmalloc
-try make ruby-jemalloc RUBY_INSTALL_NAME=ruby-jemalloc MAINLIBS=-ljemalloc
-
 try make install
+
+sleep 1
+cp version.h.pristine version.h
+perl -pi -e "s/-github/-github-tcmalloc/" version.h
+try make ruby-tcmalloc RUBY_INSTALL_NAME=ruby-tcmalloc MAINLIBS=-ltcmalloc
+
+sleep 1
+cp version.h.pristine version.h
+perl -pi -e "s/-github/-github-jemalloc/" version.h
+try make ruby-jemalloc RUBY_INSTALL_NAME=ruby-jemalloc MAINLIBS=-ljemalloc
 
 cp ruby-tcmalloc /data/ruby/bin
 cp -p ruby-tcmalloc /data/ruby/bin/ruby
