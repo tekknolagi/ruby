@@ -19,7 +19,15 @@ perl -pi -e "s/development/$branch_name $commit/" version.h
 try autoconf
 try ./configure --prefix=/data/ruby --disable-install-doc
 try make -j 4
+
+try make ruby-tcmalloc RUBY_INSTALL_NAME=ruby-tcmalloc MAINLIBS=-ltcmalloc
+try make ruby-jemalloc RUBY_INSTALL_NAME=ruby-jemalloc MAINLIBS=-ljemalloc
+
 try make install
+
+cp ruby-tcmalloc /data/ruby/bin
+cp -p ruby-tcmalloc /data/ruby/bin/ruby
+cp ruby-jemalloc /data/ruby/bin
 
 export PATH=/data/ruby/bin:$PATH
 try gem install vendor/bundler-1.3.5.gem
