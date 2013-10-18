@@ -20,21 +20,27 @@ cp version.h version.h.pristine
 try autoconf
 try ./configure --prefix=/data/ruby --disable-install-doc
 try make -j 4
-
 try make install
+
+# wait to touch version.h last modified timestamp (1 sec resolution),
+# so make recognizes the change and rebuilds
+sleep 1
+cp version.h.pristine version.h
+perl -pi -e 's/-github/-github-libcmalloc/' version.h
+try make ruby-libcmalloc RUBY_INSTALL_NAME=ruby-libcmalloc
+cp ruby-libcmalloc /data/ruby/bin
 
 sleep 1
 cp version.h.pristine version.h
 perl -pi -e "s/-github/-github-tcmalloc/" version.h
 try make ruby-tcmalloc RUBY_INSTALL_NAME=ruby-tcmalloc MAINLIBS=-ltcmalloc
+cp ruby-tcmalloc /data/ruby/bin
+cp -p ruby-tcmalloc /data/ruby/bin/ruby
 
 sleep 1
 cp version.h.pristine version.h
 perl -pi -e "s/-github/-github-jemalloc/" version.h
 try make ruby-jemalloc RUBY_INSTALL_NAME=ruby-jemalloc MAINLIBS=-ljemalloc
-
-cp ruby-tcmalloc /data/ruby/bin
-cp -p ruby-tcmalloc /data/ruby/bin/ruby
 cp ruby-jemalloc /data/ruby/bin
 
 export PATH=/data/ruby/bin:$PATH
