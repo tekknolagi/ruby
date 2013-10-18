@@ -20,3 +20,6 @@ try autoconf
 try ./configure --prefix=/data/ruby --disable-install-doc
 try make -j 4
 try make install
+
+export PATH=/data/ruby/bin:$PATH
+try gem install vendor/bundler-1.3.5.gem
