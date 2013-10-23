@@ -41,6 +41,7 @@ rb_class_clear_method_cache(VALUE klass)
 void
 rb_clear_cache(void)
 {
+    fprintf(stderr, "GLOBAL INVALIDATION (rb_clear_cache) at %s:%d\n", rb_sourcefile(), rb_sourceline());
     INC_VM_STATE_VERSION();
 }
 
@@ -49,8 +50,10 @@ rb_clear_cache_by_class(VALUE klass)
 {
     if (klass && klass != Qundef) {
 	if (klass == rb_cBasicObject || klass == rb_cObject || klass == rb_mKernel) {
+	    fprintf(stderr, "GLOBAL INVALIDATION (rb_clear_cache_by_class) at %s:%d\n", rb_sourcefile(), rb_sourceline());
 	    INC_VM_STATE_VERSION();
 	} else {
+	    fprintf(stderr, "HIERARCHICAL INVALIDATION at %s:%d\n", rb_sourcefile(), rb_sourceline());
 	    rb_class_clear_method_cache(klass);
 	}
     }
