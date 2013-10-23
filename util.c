@@ -716,6 +716,12 @@ extern void *MALLOC(size_t);
 #define MALLOC malloc
 #endif
 
+#ifdef FREE
+extern void FREE(void*);
+#else
+#define FREE free
+#endif
+
 #ifndef Omit_Private_Memory
 #ifndef PRIVATE_MEM
 #define PRIVATE_MEM 2304
@@ -1005,7 +1011,7 @@ Balloc(int k)
 #endif
 
     ACQUIRE_DTOA_LOCK(0);
-    if ((rv = freelist[k]) != 0) {
+    if (k <= Kmax && (rv = freelist[k]) != 0) {
         freelist[k] = rv->next;
     }
     else {
@@ -1034,6 +1040,10 @@ static void
 Bfree(Bigint *v)
 {
     if (v) {
+	if (v->k > Kmax) {
+	    FREE(v);
+	    return;
+	}
         ACQUIRE_DTOA_LOCK(0);
         v->next = freelist[v->k];
         freelist[v->k] = v;
@@ -2097,6 +2107,7 @@ break2:
         for (; c >= '0' && c <= '9'; c = *++s) {
 have_dig:
             nz++;
+	    if (nf > DBL_DIG * 2) continue;
             if (c -= '0') {
                 nf += nz;
                 for (i = 1; i < nz; i++)
