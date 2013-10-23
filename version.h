@@ -1,7 +1,6 @@
 #define RUBY_VERSION "2.0.0"
 #define RUBY_RELEASE_DATE "2013-06-27"
 #define RUBY_PATCHLEVEL 247
-#define RUBY_GITHUB_VERSION 6
 
 #define RUBY_RELEASE_YEAR 2013
 #define RUBY_RELEASE_MONTH 6
@@ -17,11 +16,7 @@
 # endif
 #endif
 
-#ifdef RUBY_GITHUB_BRANCH
-# define RUBY_PATCHLEVEL_SUFFIX "-github"STRINGIZE(RUBY_GITHUB_VERSION)"-"RUBY_GITHUB_BRANCH
-#else
-# define RUBY_PATCHLEVEL_SUFFIX "-github"STRINGIZE(RUBY_GITHUB_VERSION)
-#endif
+#define RUBY_PATCHLEVEL_SUFFIX "-github"
 
 #if RUBY_PATCHLEVEL == -1
 #define RUBY_PATCHLEVEL_STR "dev"
@@ -49,8 +44,7 @@
 # define RUBY_DESCRIPTION	    \
     "ruby "RUBY_VERSION		    \
     RUBY_PATCHLEVEL_STR		    \
-    " ("RUBY_RELEASE_DATE	    \
-    RUBY_REVISION_STR") "	    \
+    " (development) "               \
     "["RUBY_PLATFORM"]"
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \
