@@ -34,6 +34,109 @@
 extern st_table *rb_class_tbl;
 static ID id_attached;
 
+void
+rb_class_subclass_add(VALUE super, VALUE klass)
+{
+    rb_subclass_entry_t *entry, *head;
+
+    if (super && super != Qundef) {
+	entry = malloc(sizeof(*entry));
+	entry->klass = klass;
+	entry->next = NULL;
+
+	head = RCLASS_EXT(super)->subclasses;
+	if (head) {
+	    entry->next = head;
+	    RCLASS_EXT(head->klass)->parent_subclasses = &entry->next;
+	}
+
+	RCLASS_EXT(super)->subclasses = entry;
+	RCLASS_EXT(klass)->parent_subclasses = &RCLASS_EXT(super)->subclasses;
+    }
+}
+
+static void
+rb_module_add_to_subclasses_list(VALUE module, VALUE iclass)
+{
+    rb_subclass_entry_t *entry, *head;
+
+    entry = malloc(sizeof(*entry));
+    entry->klass = iclass;
+    entry->next = NULL;
+
+    head = RCLASS_EXT(module)->subclasses;
+    if (head) {
+	entry->next = head;
+	RCLASS_EXT(head->klass)->module_subclasses = &entry->next;
+    }
+
+    RCLASS_EXT(module)->subclasses = entry;
+    RCLASS_EXT(iclass)->module_subclasses = &RCLASS_EXT(module)->subclasses;
+}
+
+void
+rb_class_remove_from_super_subclasses(VALUE klass)
+{
+    rb_subclass_entry_t *entry;
+
+    if (RCLASS_EXT(klass)->parent_subclasses) {
+	entry = *RCLASS_EXT(klass)->parent_subclasses;
+
+	*RCLASS_EXT(klass)->parent_subclasses = entry->next;
+	if (entry->next) {
+	    RCLASS_EXT(entry->next->klass)->parent_subclasses = RCLASS_EXT(klass)->parent_subclasses;
+	}
+	free(entry);
+    }
+
+    RCLASS_EXT(klass)->parent_subclasses = NULL;
+}
+
+void
+rb_class_remove_from_module_subclasses(VALUE klass)
+{
+    rb_subclass_entry_t *entry;
+
+    if (RCLASS_EXT(klass)->module_subclasses) {
+	entry = *RCLASS_EXT(klass)->module_subclasses;
+	*RCLASS_EXT(klass)->module_subclasses = entry->next;
+
+	if (entry->next) {
+	    RCLASS_EXT(entry->next->klass)->module_subclasses = RCLASS_EXT(klass)->module_subclasses;
+	}
+
+	free(entry);
+    }
+
+    RCLASS_EXT(klass)->module_subclasses = NULL;
+}
+
+void
+rb_class_foreach_subclass(VALUE klass, void(*f)(VALUE))
+{
+    rb_subclass_entry_t *cur = RCLASS_EXT(klass)->subclasses;
+
+    /* do not be tempted to simplify this loop into a for loop, the order of
+       operations is important here if `f` modifies the linked list */
+    while (cur) {
+	VALUE curklass = cur->klass;
+	cur = cur->next;
+	f(curklass);
+    }
+}
+
+void
+rb_class_detach_subclasses(VALUE klass)
+{
+    rb_class_foreach_subclass(klass, rb_class_remove_from_super_subclasses);
+}
+
+void
+rb_class_detach_module_subclasses(VALUE klass)
+{
+    rb_class_foreach_subclass(klass, rb_class_remove_from_module_subclasses);
+}
+
 /**
  * Allocates a struct RClass for a new class.
  *
@@ -54,9 +157,15 @@ class_alloc(VALUE flags, VALUE klass)
     RCLASS_IV_TBL(obj) = 0;
     RCLASS_CONST_TBL(obj) = 0;
     RCLASS_M_TBL(obj) = 0;
-    RCLASS_SUPER(obj) = 0;
+    RCLASS_SET_SUPER((VALUE)obj, 0);
     RCLASS_ORIGIN(obj) = (VALUE)obj;
     RCLASS_IV_INDEX_TBL(obj) = 0;
+
+    RCLASS_EXT(obj)->subclasses = NULL;
+    RCLASS_EXT(obj)->parent_subclasses = NULL;
+    RCLASS_EXT(obj)->module_subclasses = NULL;
+    RCLASS_EXT(obj)->seq = rb_next_class_sequence();
+
     RCLASS_REFINED_CLASS(obj) = Qnil;
     RCLASS_EXT(obj)->allocator = 0;
     return (VALUE)obj;
@@ -77,7 +186,7 @@ rb_class_boot(VALUE super)
 {
     VALUE klass = class_alloc(T_CLASS, rb_cClass);
 
-    RCLASS_SUPER(klass) = super;
+    RCLASS_SET_SUPER(klass, super);
     RCLASS_M_TBL(klass) = st_init_numtable();
 
     OBJ_INFECT(klass, super);
@@ -203,7 +312,7 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
 	RBASIC(clone)->klass = rb_singleton_class_clone(orig);
 	rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)clone);
     }
-    RCLASS_SUPER(clone) = RCLASS_SUPER(orig);
+    RCLASS_SET_SUPER(clone, RCLASS_SUPER(orig));
     RCLASS_EXT(clone)->allocator = RCLASS_EXT(orig)->allocator;
     if (RCLASS_IV_TBL(orig)) {
 	st_data_t id;
@@ -261,7 +370,7 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
 	    RBASIC(clone)->klass = rb_singleton_class_clone(klass);
 	}
 
-	RCLASS_SUPER(clone) = RCLASS_SUPER(klass);
+	RCLASS_SET_SUPER(clone, RCLASS_SUPER(klass));
 	RCLASS_EXT(clone)->allocator = RCLASS_EXT(klass)->allocator;
 	if (RCLASS_IV_TBL(klass)) {
 	    RCLASS_IV_TBL(clone) = st_copy(RCLASS_IV_TBL(klass));
@@ -356,7 +465,7 @@ make_metaclass(VALUE klass)
 
     super = RCLASS_SUPER(klass);
     while (RB_TYPE_P(super, T_ICLASS)) super = RCLASS_SUPER(super);
-    RCLASS_SUPER(metaclass) = super ? ENSURE_EIGENCLASS(super) : rb_cClass;
+    RCLASS_SET_SUPER(metaclass, super ? ENSURE_EIGENCLASS(super) : rb_cClass);
 
     OBJ_INFECT(metaclass, RCLASS_SUPER(metaclass));
 
@@ -676,7 +785,7 @@ rb_include_class_new(VALUE module, VALUE super)
     RCLASS_IV_TBL(klass) = RCLASS_IV_TBL(module);
     RCLASS_CONST_TBL(klass) = RCLASS_CONST_TBL(module);
     RCLASS_M_TBL(klass) = RCLASS_M_TBL(RCLASS_ORIGIN(module));
-    RCLASS_SUPER(klass) = super;
+    RCLASS_SET_SUPER(klass, super);
     if (RB_TYPE_P(module, T_ICLASS)) {
 	RBASIC(klass)->klass = RBASIC(module)->klass;
     }
@@ -710,7 +819,6 @@ rb_include_module(VALUE klass, VALUE module)
     changed = include_modules_at(klass, RCLASS_ORIGIN(klass), module);
     if (changed < 0)
 	rb_raise(rb_eArgError, "cyclic include detected");
-    if (changed) rb_clear_cache();
 }
 
 static int
@@ -723,8 +831,8 @@ add_refined_method_entry_i(st_data_t key, st_data_t value, st_data_t data)
 static int
 include_modules_at(const VALUE klass, VALUE c, VALUE module)
 {
-    VALUE p;
-    int changed = 0;
+    VALUE p, iclass;
+    int method_changed = 0, constant_changed = 0;
     const st_table *const klass_m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(klass));
 
     while (module) {
@@ -750,7 +858,15 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module)
 		break;
 	    }
 	}
-	c = RCLASS_SUPER(c) = rb_include_class_new(module, RCLASS_SUPER(c));
+	iclass = rb_include_class_new(module, RCLASS_SUPER(c));
+	c = RCLASS_SET_SUPER(c, iclass);
+
+	if (BUILTIN_TYPE(module) == T_ICLASS) {
+	    rb_module_add_to_subclasses_list(RBASIC(module)->klass, iclass);
+	} else {
+	    rb_module_add_to_subclasses_list(module, iclass);
+	}
+
 	if (FL_TEST(klass, RMODULE_IS_REFINEMENT)) {
 	    VALUE refined_class =
 		rb_refinement_module_get_refined_class(klass);
@@ -760,14 +876,17 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module)
 	    FL_SET(c, RMODULE_INCLUDED_INTO_REFINEMENT);
 	}
 	if (RMODULE_M_TBL(module) && RMODULE_M_TBL(module)->num_entries)
-	    changed = 1;
+	    method_changed = 1;
 	if (RMODULE_CONST_TBL(module) && RMODULE_CONST_TBL(module)->num_entries)
-	    changed = 1;
+	    constant_changed = 1;
       skip:
 	module = RCLASS_SUPER(module);
     }
 
-    return changed;
+    if (method_changed) rb_clear_cache_by_class(klass);
+    if (constant_changed) rb_clear_cache();
+
+    return method_changed;
 }
 
 static int
@@ -816,8 +935,8 @@ rb_prepend_module(VALUE klass, VALUE module)
     origin = RCLASS_ORIGIN(klass);
     if (origin == klass) {
 	origin = class_alloc(T_ICLASS, klass);
-	RCLASS_SUPER(origin) = RCLASS_SUPER(klass);
-	RCLASS_SUPER(klass) = origin;
+	RCLASS_SET_SUPER(origin, RCLASS_SUPER(klass));
+	RCLASS_SET_SUPER(klass, origin);
 	RCLASS_ORIGIN(klass) = origin;
 	RCLASS_M_TBL(origin) = RCLASS_M_TBL(klass);
 	RCLASS_M_TBL(klass) = st_init_numtable();
@@ -828,7 +947,6 @@ rb_prepend_module(VALUE klass, VALUE module)
     if (changed < 0)
 	rb_raise(rb_eArgError, "cyclic prepend detected");
     if (changed) {
-	rb_clear_cache();
 	rb_vm_check_redefinition_by_prepend(klass);
     }
 }

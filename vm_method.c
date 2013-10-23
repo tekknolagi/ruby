@@ -2,9 +2,11 @@
  * This file is included by vm.c
  */
 
-#define CACHE_SIZE 0x800
-#define CACHE_MASK 0x7ff
-#define EXPR1(c,m) ((((c)>>3)^(m))&CACHE_MASK)
+#define GLOBAL_METHOD_CACHE_SIZE 0x800
+#define GLOBAL_METHOD_CACHE_MASK 0x7ff
+#define GLOBAL_METHOD_CACHE_KEY(c,m) ((((c)>>3)^(m))&GLOBAL_METHOD_CACHE_MASK)
+#define GLOBAL_METHOD_CACHE(c,m) (global_method_cache + GLOBAL_METHOD_CACHE_KEY(c,m))
+#include "method.h"
 
 #define NOEX_NOREDEF 0
 #ifndef NOEX_NOREDEF
@@ -17,53 +19,41 @@ static ID object_id;
 static ID removed, singleton_removed, undefined, singleton_undefined;
 static ID added, singleton_added, attached;
 
-struct cache_entry {		/* method hash table. */
-    VALUE filled_version;        /* filled state version */
-    ID mid;			/* method's id */
-    VALUE klass;		/* receiver's class */
-    rb_method_entry_t *me;
+struct cache_entry {
+    vm_state_version_t vm_state;
+    vm_state_version_t seq;
+    ID mid;
+    rb_method_entry_t* me;
     VALUE defined_class;
 };
 
-static struct cache_entry cache[CACHE_SIZE];
+static struct cache_entry global_method_cache[GLOBAL_METHOD_CACHE_SIZE];
 #define ruby_running (GET_VM()->running)
 /* int ruby_running = 0; */
 
 static void
-vm_clear_global_method_cache(void)
+rb_class_clear_method_cache(VALUE klass)
 {
-    struct cache_entry *ent, *end;
-
-    ent = cache;
-    end = ent + CACHE_SIZE;
-    while (ent < end) {
-	ent->filled_version = 0;
-	ent++;
-    }
+    RCLASS_EXT(klass)->seq = rb_next_class_sequence();
+    rb_class_foreach_subclass(klass, rb_class_clear_method_cache);
 }
 
 void
 rb_clear_cache(void)
 {
-    rb_vm_change_state();
-}
-
-static void
-rb_clear_cache_for_undef(VALUE klass, ID id)
-{
-    rb_vm_change_state();
-}
-
-static void
-rb_clear_cache_by_id(ID id)
-{
-    rb_vm_change_state();
+    INC_VM_STATE_VERSION();
 }
 
 void
 rb_clear_cache_by_class(VALUE klass)
 {
-    rb_vm_change_state();
+    if (klass && klass != Qundef) {
+	if (klass == rb_cBasicObject || klass == rb_cObject || klass == rb_mKernel) {
+	    INC_VM_STATE_VERSION();
+	} else {
+	    rb_class_clear_method_cache(klass);
+	}
+    }
 }
 
 VALUE
@@ -315,7 +305,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 
     me = ALLOC(rb_method_entry_t);
 
-    rb_clear_cache_by_id(mid);
+    rb_clear_cache_by_class(klass);
 
     me->flag = NOEX_WITH_SAFE(noex);
     me->mark = 0;
@@ -457,6 +447,7 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
     if (type != VM_METHOD_TYPE_UNDEF && type != VM_METHOD_TYPE_REFINED) {
 	method_added(klass, mid);
     }
+    rb_clear_cache_by_class(klass);
     return me;
 }
 
@@ -526,18 +517,17 @@ rb_method_entry_get_without_cache(VALUE klass, ID id,
 
     if (ruby_running) {
 	struct cache_entry *ent;
-	ent = cache + EXPR1(klass, id);
-	ent->filled_version = GET_VM_STATE_VERSION();
-	ent->klass = klass;
+	ent = GLOBAL_METHOD_CACHE(klass, id);
+	ent->seq = RCLASS_EXT(klass)->seq;
+	ent->vm_state = GET_VM_STATE_VERSION();
 	ent->defined_class = defined_class;
+	ent->mid = id;
 
 	if (UNDEFINED_METHOD_ENTRY_P(me)) {
-	    ent->mid = id;
 	    ent->me = 0;
 	    me = 0;
 	}
 	else {
-	    ent->mid = id;
 	    ent->me = me;
 	}
     }
@@ -547,17 +537,34 @@ rb_method_entry_get_without_cache(VALUE klass, ID id,
     return me;
 }
 
+#if VM_DEBUG_VERIFY_METHOD_CACHE
+static void
+verify_method_cache(VALUE klass, ID id, VALUE defined_class, rb_method_entry_t *me)
+{
+    VALUE actual_defined_class;
+    rb_method_entry_t *actual_me =
+	rb_method_entry_get_without_cache(klass, id, &actual_defined_class);
+
+    if (me != actual_me || defined_class != actual_defined_class) {
+	rb_bug("method cache verification failed");
+    }
+}
+#endif
+
 rb_method_entry_t *
 rb_method_entry(VALUE klass, ID id, VALUE *defined_class_ptr)
 {
 #if OPT_GLOBAL_METHOD_CACHE
     struct cache_entry *ent;
-
-    ent = cache + EXPR1(klass, id);
-    if (ent->filled_version == GET_VM_STATE_VERSION() &&
-	ent->mid == id && ent->klass == klass) {
+    ent = GLOBAL_METHOD_CACHE(klass, id);
+    if (ent->vm_state == GET_VM_STATE_VERSION() &&
+	ent->seq == RCLASS_EXT(klass)->seq &&
+	ent->mid == id) {
 	if (defined_class_ptr)
 	    *defined_class_ptr = ent->defined_class;
+#if VM_DEBUG_VERIFY_METHOD_CACHE
+	verify_method_cache(klass, id, ent->defined_class, ent->me);
+#endif
 	return ent->me;
     }
 #endif
@@ -672,7 +679,7 @@ remove_method(VALUE klass, ID mid)
     st_delete(RCLASS_M_TBL(klass), &key, &data);
 
     rb_vm_check_redefinition_opt_method(me, klass);
-    rb_clear_cache_for_undef(klass, mid);
+    rb_clear_cache_by_class(klass);
     rb_unlink_method_entry(me);
 
     CALL_METHOD_HOOK(self, removed, mid);
@@ -1206,6 +1213,7 @@ rb_alias(VALUE klass, ID name, ID def)
 
     if (flag == NOEX_UNDEF) flag = orig_me->flag;
     rb_method_entry_set(target_klass, name, orig_me, flag);
+    rb_clear_cache_by_class(target_klass);
 }
 
 /*
