@@ -2078,6 +2078,12 @@ ruby_vm_constant_state_version()
     return ULONG2NUM(ruby_constant_global_state_version);
 }
 
+static VALUE
+ruby_vm_method_state_version()
+{
+    return ULONG2NUM(ruby_method_global_state_version);
+}
+
 void
 Init_VM(void)
 {
@@ -2092,6 +2098,7 @@ Init_VM(void)
 
     /* method cache metrics */
     rb_define_singleton_method(rb_cRubyVM, "constant_state_version", ruby_vm_constant_state_version, 0);
+    rb_define_singleton_method(rb_cRubyVM, "method_state_version", ruby_vm_method_state_version, 0);
 
     /* ::VM::FrozenCore */
     fcore = rb_class_new(rb_cBasicObject);
