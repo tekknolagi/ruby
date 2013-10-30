@@ -2084,6 +2084,21 @@ ruby_vm_method_state_version()
     return ULONG2NUM(ruby_method_global_state_version);
 }
 
+static VALUE constant_invalidation_proc = Qnil;
+static VALUE method_invalidation_proc = Qnil;
+
+static VALUE
+on_constant_invalidation()
+{
+    return constant_invalidation_proc = rb_block_proc();
+}
+
+static VALUE
+on_method_invalidation()
+{
+    return method_invalidation_proc = rb_block_proc();
+}
+
 void
 Init_VM(void)
 {
@@ -2099,6 +2114,12 @@ Init_VM(void)
     /* method cache metrics */
     rb_define_singleton_method(rb_cRubyVM, "constant_state_version", ruby_vm_constant_state_version, 0);
     rb_define_singleton_method(rb_cRubyVM, "method_state_version", ruby_vm_method_state_version, 0);
+
+    rb_define_singleton_method(rb_cRubyVM, "on_constant_invalidation", on_constant_invalidation, 0);
+    rb_define_singleton_method(rb_cRubyVM, "on_method_invalidation", on_method_invalidation, 0);
+
+    rb_global_variable(&constant_invalidation_proc);
+    rb_global_variable(&method_invalidation_proc);
 
     /* ::VM::FrozenCore */
     fcore = rb_class_new(rb_cBasicObject);
@@ -2308,6 +2329,10 @@ void
 rb_inc_method_state_version()
 {
     ruby_method_global_state_version++;
+
+    if(method_invalidation_proc != Qnil) {
+	rb_proc_call(method_invalidation_proc, rb_ary_new());
+    }
 }
 
 uint64_t
@@ -2320,5 +2345,9 @@ void
 rb_inc_constant_state_version()
 {
     ruby_constant_global_state_version++;
+
+    if(constant_invalidation_proc != Qnil) {
+	rb_proc_call(constant_invalidation_proc, rb_ary_new());
+    }
 }
 
