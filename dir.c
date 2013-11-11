@@ -381,6 +381,7 @@ dir_memsize(const void *ptr)
 static const rb_data_type_t dir_data_type = {
     "dir",
     {dir_mark, dir_free, dir_memsize,},
+    NULL, NULL, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
 static VALUE dir_close(VALUE);
@@ -1763,7 +1764,7 @@ rb_push_glob(VALUE str, int flags) /* '\0' is delimiter */
 }
 
 static VALUE
-dir_globs(long argc, VALUE *argv, int flags)
+dir_globs(long argc, const VALUE *argv, int flags)
 {
     VALUE ary = rb_ary_new();
     long i;
@@ -1890,7 +1891,7 @@ dir_s_glob(int argc, VALUE *argv, VALUE obj)
     }
     else {
 	volatile VALUE v = ary;
-	ary = dir_globs(RARRAY_LEN(v), RARRAY_PTR(v), flags);
+	ary = dir_globs(RARRAY_LEN(v), RARRAY_CONST_PTR(v), flags);
     }
 
     if (rb_block_given_p()) {

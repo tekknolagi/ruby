@@ -27,8 +27,6 @@ with all sufficient information, see the ChangeLog file.
 
 * def-expr now returns the symbol of its name instead of nil.
 
-* Added 'f' suffix for string literals that returns a frozen String object.
-
 === Core classes updates (outstanding ones only)
 
 * Array
@@ -44,6 +42,11 @@ with all sufficient information, see the ChangeLog file.
 * Enumerable
   * New methods
     * Enumerable#to_h converts a list of key-value pairs into a Hash.
+
+* Exception
+  * New methods
+    * Exception#cause provides the previous exception which has been caught
+      at where raising the new exception.
 
 * GC
   * added environment variable:
@@ -152,7 +155,7 @@ with all sufficient information, see the ChangeLog file.
 
 * Proc
   * Returning from lambda proc now always exits from the Proc, not from the
-    method where the lambda is created.  Returing from non-lambda proc exits
+    method where the lambda is created.  Returning from non-lambda proc exits
     from the method, same as the former behavior.
 
 === Stdlib updates (outstanding ones only)
@@ -208,7 +211,7 @@ with all sufficient information, see the ChangeLog file.
 
 * REXML::Parsers::SAX2Parser
   * Fixes wrong number of arguments of entitydecl event. Document of the event
-    says "an array of the entity declaration" but implemenation passes two
+    says "an array of the entity declaration" but implementation passes two
     or more arguments. It is an implementation bug but it breaks backword
     compatibility.
 
@@ -248,7 +251,7 @@ with all sufficient information, see the ChangeLog file.
     * Tempfile.create
 
 * Timeout
-  * No longer an exception to terminate the given block can be rescued
+  * The exception to terminate the given block can no longer be rescued
     inside the block, by default, unless the exception class is given
     explicitly.
 

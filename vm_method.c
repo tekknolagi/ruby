@@ -25,8 +25,8 @@ static void rb_vm_check_redefinition_opt_method(const rb_method_entry_t *me, VAL
 #define attached            id__attached__
 
 struct cache_entry {
-    vm_state_version_t vm_state;
-    vm_state_version_t seq;
+    rb_serial_t method_serial;
+    rb_serial_t class_serial;
     ID mid;
     rb_method_entry_t* me;
     VALUE defined_class;
@@ -39,22 +39,30 @@ static struct cache_entry global_method_cache[GLOBAL_METHOD_CACHE_SIZE];
 static void
 rb_class_clear_method_cache(VALUE klass)
 {
-    RCLASS_EXT(klass)->seq = rb_next_class_sequence();
+    RCLASS_EXT(klass)->class_serial = rb_next_class_serial();
     rb_class_foreach_subclass(klass, rb_class_clear_method_cache);
 }
 
 void
 rb_clear_cache(void)
 {
-    INC_VM_STATE_VERSION();
+    rb_warning("rb_clear_cache() is deprecated.");
+    INC_METHOD_SERIAL();
+    INC_CONSTANT_SERIAL();
 }
 
 void
-rb_clear_cache_by_class(VALUE klass)
+rb_clear_constant_cache(void)
+{
+    INC_CONSTANT_SERIAL();
+}
+
+void
+rb_clear_method_cache_by_class(VALUE klass)
 {
     if (klass && klass != Qundef) {
 	if (klass == rb_cBasicObject || klass == rb_cObject || klass == rb_mKernel) {
-	    INC_VM_STATE_VERSION();
+	    INC_METHOD_SERIAL();
 	}
 	else {
 	    rb_class_clear_method_cache(klass);
@@ -203,7 +211,7 @@ rb_add_refined_method_entry(VALUE refined_class, ID mid)
 
     if (me) {
 	make_method_entry_refined(me);
-	rb_clear_cache_by_class(refined_class);
+	rb_clear_method_cache_by_class(refined_class);
     }
     else {
 	rb_add_method(refined_class, mid, VM_METHOD_TYPE_REFINED, 0,
@@ -302,7 +310,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 
     me = ALLOC(rb_method_entry_t);
 
-    rb_clear_cache_by_class(klass);
+    rb_clear_method_cache_by_class(klass);
 
     me->flag = NOEX_WITH_SAFE(noex);
     me->mark = 0;
@@ -315,7 +323,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 
 	switch(def->type) {
 	  case VM_METHOD_TYPE_ISEQ:
-	    OBJ_WRITTEN(klass, Qundef, def->body.iseq);
+	    OBJ_WRITTEN(klass, Qundef, def->body.iseq->self);
 	    break;
 	  case VM_METHOD_TYPE_IVAR:
 	    OBJ_WRITTEN(klass, Qundef, def->body.attr.location);
@@ -464,7 +472,7 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
     if (type != VM_METHOD_TYPE_UNDEF && type != VM_METHOD_TYPE_REFINED) {
 	method_added(klass, mid);
     }
-    rb_clear_cache_by_class(klass);
+    rb_clear_method_cache_by_class(klass);
     return me;
 }
 
@@ -541,8 +549,8 @@ rb_method_entry_get_without_cache(VALUE klass, ID id,
     if (ruby_running) {
 	struct cache_entry *ent;
 	ent = GLOBAL_METHOD_CACHE(klass, id);
-	ent->seq = RCLASS_EXT(klass)->seq;
-	ent->vm_state = GET_VM_STATE_VERSION();
+	ent->class_serial = RCLASS_EXT(klass)->class_serial;
+	ent->method_serial = GET_METHOD_SERIAL();
 	ent->defined_class = defined_class;
 	ent->mid = id;
 
@@ -580,8 +588,8 @@ rb_method_entry(VALUE klass, ID id, VALUE *defined_class_ptr)
 #if OPT_GLOBAL_METHOD_CACHE
     struct cache_entry *ent;
     ent = GLOBAL_METHOD_CACHE(klass, id);
-    if (ent->vm_state == GET_VM_STATE_VERSION() &&
-	ent->seq == RCLASS_EXT(klass)->seq &&
+    if (ent->method_serial == GET_METHOD_SERIAL() &&
+	ent->class_serial == RCLASS_EXT(klass)->class_serial &&
 	ent->mid == id) {
 	if (defined_class_ptr)
 	    *defined_class_ptr = ent->defined_class;
@@ -701,7 +709,7 @@ remove_method(VALUE klass, ID mid)
     st_delete(RCLASS_M_TBL(klass), &key, &data);
 
     rb_vm_check_redefinition_opt_method(me, klass);
-    rb_clear_cache_by_class(klass);
+    rb_clear_method_cache_by_class(klass);
     rb_unlink_method_entry(me);
 
     CALL_METHOD_HOOK(self, removed, mid);
@@ -1232,7 +1240,7 @@ rb_alias(VALUE klass, ID name, ID def)
 
     if (flag == NOEX_UNDEF) flag = orig_me->flag;
     rb_method_entry_set(target_klass, name, orig_me, flag);
-    rb_clear_cache_by_class(target_klass);
+    rb_clear_method_cache_by_class(target_klass);
 }
 
 /*
@@ -1287,7 +1295,7 @@ set_method_visibility(VALUE self, int argc, VALUE *argv, rb_method_flag_t ex)
 	}
 	rb_export_method(self, id, ex);
     }
-    rb_clear_cache_by_class(self);
+    rb_clear_method_cache_by_class(self);
 }
 
 static VALUE

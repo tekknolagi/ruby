@@ -56,6 +56,7 @@ enum {
   BOP_NOT,
   BOP_NEQ,
   BOP_MATCH,
+  BOP_FREEZE,
 
   BOP_LAST_
 };
@@ -259,13 +260,11 @@ enum vm_regan_acttype {
     CALL_METHOD(ci); \
 } while (0)
 
-#define NEXT_CLASS_SEQUENCE() (++ruby_vm_sequence)
-#define GET_VM_STATE_VERSION() (ruby_vm_global_state_version)
-#define INC_VM_STATE_VERSION() do { \
-    ruby_vm_global_state_version = (ruby_vm_global_state_version + 1); \
-    if (ruby_vm_global_state_version == 0) vm_clear_all_cache(); \
-} while (0)
-static void vm_clear_all_cache(void);
+#define NEXT_CLASS_SERIAL() (++ruby_vm_class_serial)
+#define GET_METHOD_SERIAL() (ruby_vm_method_serial)
+#define INC_METHOD_SERIAL() (++ruby_vm_method_serial)
+#define GET_CONSTANT_SERIAL() (ruby_vm_constant_serial)
+#define INC_CONSTANT_SERIAL() (++ruby_vm_constant_serial)
 
 static VALUE make_no_method_exception(VALUE exc, const char *format,
 				      VALUE obj, int argc, const VALUE *argv);

@@ -49,13 +49,6 @@ VALUE rb_cSymbol;
 
 #define RUBY_MAX_CHAR_LEN 16
 #define STR_TMPLOCK FL_USER7
-#define STR_NOEMBED FL_USER1
-#define STR_SHARED  FL_USER2 /* = ELTS_SHARED */
-#define STR_ASSOC   FL_USER3
-#define STR_SHARED_P(s) FL_ALL((s), STR_NOEMBED|ELTS_SHARED)
-#define STR_ASSOC_P(s)  FL_ALL((s), STR_NOEMBED|STR_ASSOC)
-#define STR_NOCAPA  (STR_NOEMBED|ELTS_SHARED|STR_ASSOC)
-#define STR_NOCAPA_P(s) (FL_TEST((s),STR_NOEMBED) && FL_ANY((s),ELTS_SHARED|STR_ASSOC))
 #define STR_UNSET_NOCAPA(s) do {\
     if (FL_TEST((s),STR_NOEMBED)) FL_UNSET((s),(ELTS_SHARED|STR_ASSOC));\
 } while (0)
@@ -65,7 +58,6 @@ VALUE rb_cSymbol;
     STR_SET_EMBED_LEN((str), 0);\
 } while (0)
 #define STR_SET_EMBED(str) FL_UNSET((str), STR_NOEMBED)
-#define STR_EMBED_P(str) (!FL_TEST((str), STR_NOEMBED))
 #define STR_SET_EMBED_LEN(str, n) do { \
     long tmp_n = (n);\
     RBASIC(str)->flags &= ~RSTRING_EMBED_LEN_MASK;\
@@ -128,9 +120,6 @@ VALUE rb_cSymbol;
 
 #define STR_HEAP_PTR(str)  (RSTRING(str)->as.heap.ptr)
 #define STR_HEAP_SIZE(str) (RSTRING(str)->as.heap.aux.capa + TERM_LEN(str))
-
-#define is_ascii_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT)
-#define is_broken_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN)
 
 #define STR_ENC_GET(str) rb_enc_from_index(ENCODING_GET(str))
 
@@ -7993,20 +7982,18 @@ str_compat_and_valid(VALUE str, rb_encoding *enc)
  * @param repl the replacement character
  * @return If given string is invalid, returns a new string. Otherwise, returns Qnil.
  */
-static VALUE
-str_scrub0(int argc, VALUE *argv, VALUE str)
+VALUE
+rb_str_scrub(VALUE str, VALUE repl)
 {
     int cr = ENC_CODERANGE(str);
     rb_encoding *enc;
     int encidx;
-    VALUE repl;
 
     if (cr == ENC_CODERANGE_7BIT || cr == ENC_CODERANGE_VALID)
 	return Qnil;
 
     enc = STR_ENC_GET(str);
-    rb_scan_args(argc, argv, "01", &repl);
-    if (argc != 0) {
+    if (!NIL_P(repl)) {
 	repl = str_compat_and_valid(repl, enc);
     }
 
@@ -8091,7 +8078,7 @@ str_scrub0(int argc, VALUE *argv, VALUE str)
 		    if (!rep7bit_p) cr = ENC_CODERANGE_VALID;
 		}
 		else {
-		    repl = rb_yield(rb_enc_str_new(p1, clen, enc));
+		    repl = rb_yield(rb_enc_str_new(p, clen, enc));
 		    repl = str_compat_and_valid(repl, enc);
 		    rb_str_buf_cat(buf, RSTRING_PTR(repl), RSTRING_LEN(repl));
 		    if (ENC_CODERANGE(repl) == ENC_CODERANGE_VALID)
@@ -8245,10 +8232,11 @@ str_scrub0(int argc, VALUE *argv, VALUE str)
  *     "abc\u3042\x81".scrub("*") #=> "abc\u3042*"
  *     "abc\u3042\xE3\x80".scrub{|bytes| '<'+bytes.unpack('H*')[0]+'>' } #=> "abc\u3042<e380>"
  */
-VALUE
-rb_str_scrub(int argc, VALUE *argv, VALUE str)
+static VALUE
+str_scrub(int argc, VALUE *argv, VALUE str)
 {
-    VALUE new = str_scrub0(argc, argv, str);
+    VALUE repl = argc ? (rb_check_arity(argc, 0, 1), argv[0]) : Qnil;
+    VALUE new = rb_str_scrub(str, repl);
     return NIL_P(new) ? rb_str_dup(str): new;
 }
 
@@ -8269,7 +8257,8 @@ rb_str_scrub(int argc, VALUE *argv, VALUE str)
 static VALUE
 str_scrub_bang(int argc, VALUE *argv, VALUE str)
 {
-    VALUE new = str_scrub0(argc, argv, str);
+    VALUE repl = argc ? (rb_check_arity(argc, 0, 1), argv[0]) : Qnil;
+    VALUE new = rb_str_scrub(str, repl);
     if (!NIL_P(new)) rb_str_replace(str, new);
     return str;
 }
@@ -8763,8 +8752,9 @@ Init_String(void)
     rb_define_method(rb_cString, "getbyte", rb_str_getbyte, 1);
     rb_define_method(rb_cString, "setbyte", rb_str_setbyte, 2);
     rb_define_method(rb_cString, "byteslice", rb_str_byteslice, -1);
-    rb_define_method(rb_cString, "scrub", rb_str_scrub, -1);
+    rb_define_method(rb_cString, "scrub", str_scrub, -1);
     rb_define_method(rb_cString, "scrub!", str_scrub_bang, -1);
+    rb_define_method(rb_cString, "freeze", rb_obj_freeze, 0);
 
     rb_define_method(rb_cString, "to_i", rb_str_to_i, -1);
     rb_define_method(rb_cString, "to_f", rb_str_to_f, 0);

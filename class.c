@@ -166,7 +166,7 @@ class_alloc(VALUE flags, VALUE klass)
     RCLASS_EXT(obj)->subclasses = NULL;
     RCLASS_EXT(obj)->parent_subclasses = NULL;
     RCLASS_EXT(obj)->module_subclasses = NULL;
-    RCLASS_EXT(obj)->seq = rb_next_class_sequence();
+    RCLASS_EXT(obj)->class_serial = rb_next_class_serial();
 
     RCLASS_REFINED_CLASS(obj) = Qnil;
     RCLASS_EXT(obj)->allocator = 0;
@@ -900,8 +900,8 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module)
 	module = RCLASS_SUPER(module);
     }
 
-    if (method_changed) rb_clear_cache_by_class(klass);
-    if (constant_changed) rb_clear_cache();
+    if (method_changed) rb_clear_method_cache_by_class(klass);
+    if (constant_changed) rb_clear_constant_cache();
 
     return method_changed;
 }

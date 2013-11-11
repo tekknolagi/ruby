@@ -245,11 +245,11 @@ struct rb_subclass_entry {
 };
 
 #if defined(HAVE_LONG_LONG)
-typedef unsigned LONG_LONG vm_state_version_t;
+typedef unsigned LONG_LONG rb_serial_t;
 #elif defined(HAVE_UINT64_T)
-typedef uint64_t vm_state_version_t;
+typedef uint64_t rb_serial_t;
 #else
-typedef unsigned long vm_state_version_t;
+typedef unsigned long rb_serial_t;
 #endif
 
 struct rb_classext_struct {
@@ -264,7 +264,7 @@ struct rb_classext_struct {
      * included. Hopefully that makes sense.
      */
     rb_subclass_entry_t **module_subclasses;
-    vm_state_version_t seq;
+    rb_serial_t class_serial;
     VALUE origin;
     VALUE refined_class;
     rb_alloc_func_t allocator;
@@ -439,6 +439,8 @@ struct st_table *rb_hash_tbl_raw(VALUE hash);
 #define RHASH_TBL_RAW(h) rb_hash_tbl_raw(h)
 VALUE rb_hash_keys(VALUE hash);
 VALUE rb_hash_values(VALUE hash);
+#define HASH_DELETED  FL_USER1
+#define HASH_PROC_DEFAULT FL_USER2
 
 /* inits.c */
 void rb_call_inits(void);
@@ -677,6 +679,16 @@ VALUE rb_str_locktmp_ensure(VALUE str, VALUE (*func)(VALUE), VALUE arg);
 #ifdef RUBY_ENCODING_H
 VALUE rb_external_str_with_enc(VALUE str, rb_encoding *eenc);
 #endif
+#define STR_NOEMBED FL_USER1
+#define STR_SHARED  FL_USER2 /* = ELTS_SHARED */
+#define STR_ASSOC   FL_USER3
+#define STR_SHARED_P(s) FL_ALL((s), STR_NOEMBED|ELTS_SHARED)
+#define STR_ASSOC_P(s)  FL_ALL((s), STR_NOEMBED|STR_ASSOC)
+#define STR_NOCAPA  (STR_NOEMBED|ELTS_SHARED|STR_ASSOC)
+#define STR_NOCAPA_P(s) (FL_TEST((s),STR_NOEMBED) && FL_ANY((s),ELTS_SHARED|STR_ASSOC))
+#define STR_EMBED_P(str) (!FL_TEST((str), STR_NOEMBED))
+#define is_ascii_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT)
+#define is_broken_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN)
 
 /* struct.c */
 VALUE rb_struct_init_copy(VALUE copy, VALUE s);
@@ -703,7 +715,7 @@ void ruby_kill(rb_pid_t pid, int sig);
 void Init_native_thread(void);
 
 /* vm_insnhelper.h */
-vm_state_version_t rb_next_class_sequence(void);
+rb_serial_t rb_next_class_serial(void);
 
 /* vm.c */
 VALUE rb_obj_is_thread(VALUE obj);
@@ -749,7 +761,7 @@ void rb_backtrace_print_as_bugreport(void);
 int rb_backtrace_p(VALUE obj);
 VALUE rb_backtrace_to_str_ary(VALUE obj);
 void rb_backtrace_print_to(VALUE output);
-VALUE rb_vm_backtrace_object();
+VALUE rb_vm_backtrace_object(void);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 const char *rb_objspace_data_type_name(VALUE obj);
@@ -820,7 +832,8 @@ int rb_st_insert_id_and_value(VALUE obj, st_table *tbl, ID key, VALUE value);
 st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
 
 /* gc.c */
-size_t rb_gc_count();
+size_t rb_gc_count(void);
+size_t rb_obj_memsize_of(VALUE);
 
 RUBY_SYMBOL_EXPORT_END
 

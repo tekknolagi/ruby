@@ -15,8 +15,8 @@
 
 #include "ruby/ruby.h"
 #include "ruby/debug.h"
-
-size_t rb_gc_count(void); /* from gc.c */
+#include "objspace.h"
+#include "internal.h"
 
 struct traceobj_arg {
     int running;
@@ -26,20 +26,6 @@ struct traceobj_arg {
     st_table *object_table; /* obj (VALUE) -> allocation_info */
     st_table *str_table;    /* cstr -> refcount */
     struct traceobj_arg *prev_traceobj_arg;
-};
-
-/* all of information don't need marking. */
-struct allocation_info {
-    int living;
-    VALUE flags;
-    VALUE klass;
-
-    /* allocation info */
-    const char *path;
-    unsigned long line;
-    const char *class_path;
-    VALUE mid;
-    size_t generation;
 };
 
 static const char *
@@ -207,8 +193,8 @@ trace_object_allocations_start(VALUE self)
  *
  * Stop tracing object allocations.
  *
- * Note that if ::trace_object_allocations_start is called n-times, then stop
- * tracing after calling ::trace_object_allocations_stop n-times.
+ * Note that if ::trace_object_allocations_start is called n-times, then
+ * tracing will stop after calling ::trace_object_allocations_stop n-times.
  *
  */
 static VALUE
@@ -339,6 +325,12 @@ lookup_allocation_info(VALUE obj)
 	}
     }
     return NULL;
+}
+
+struct allocation_info *
+objspace_lookup_allocation_info(VALUE obj)
+{
+    return lookup_allocation_info(obj);
 }
 
 /*

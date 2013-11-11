@@ -961,8 +961,8 @@ new_callinfo(rb_iseq_t *iseq, ID mid, int argc, VALUE block, unsigned long flag)
 	    ci->flag |= VM_CALL_ARGS_SKIP_SETUP;
 	}
     }
-    ci->vmstat = 0;
-    ci->seq = 0;
+    ci->method_serial = 0;
+    ci->class_serial = 0;
     ci->blockptr = 0;
     ci->recv = Qundef;
     ci->call = 0; /* TODO: should set default function? */
@@ -2508,8 +2508,7 @@ case_when_optimizable_literal(NODE * node)
 	    modf(RFLOAT_VALUE(v), &ival) == 0.0) {
 	    return FIXABLE(ival) ? LONG2FIX((long)ival) : rb_dbl2big(ival);
 	}
-	if (SYMBOL_P(v) || RB_TYPE_P(v, T_STRING) ||
-	    rb_obj_is_kind_of(v, rb_cNumeric)) {
+	if (SYMBOL_P(v) || rb_obj_is_kind_of(v, rb_cNumeric)) {
 	    return v;
 	}
 	break;
@@ -4314,6 +4313,17 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	break;
       }
       case NODE_CALL:
+	if (node->nd_recv && nd_type(node->nd_recv) == NODE_STR &&
+	    node->nd_mid == idFreeze && node->nd_args == NULL)
+	{
+	    VALUE str = rb_fstring(node->nd_recv->nd_lit);
+	    iseq_add_mark_object(iseq, str);
+	    ADD_INSN1(ret, line, opt_str_freeze, str);
+	    if (poped) {
+		ADD_INSN(ret, line, pop);
+	    }
+	    break;
+	}
       case NODE_FCALL:
       case NODE_VCALL:{		/* VCALL: variable or call */
 	/*
@@ -5578,7 +5588,8 @@ iseq_build_from_ary_exception(rb_iseq_t *iseq, struct st_table *labels_table,
     int i;
 
     for (i=0; i<RARRAY_LEN(exception); i++) {
-	VALUE v, type, *ptr, eiseqval;
+	VALUE v, type, eiseqval;
+	const VALUE *ptr;
 	LABEL *lstart, *lend, *lcont;
 	int sp;
 
@@ -5587,7 +5598,7 @@ iseq_build_from_ary_exception(rb_iseq_t *iseq, struct st_table *labels_table,
 	if (RARRAY_LEN(v) != 6) {
 	    rb_raise(rb_eSyntaxError, "wrong exception entry");
 	}
-	ptr  = RARRAY_PTR(v);
+	ptr  = RARRAY_CONST_PTR(v);
 	type = get_exception_sym2type(ptr[0]);
 	if (ptr[1] == Qnil) {
 	    eiseqval = 0;
@@ -5644,7 +5655,7 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *anchor,
 		VALUE body, struct st_table *labels_table)
 {
     /* TODO: body should be frozen */
-    VALUE *ptr = RARRAY_PTR(body);
+    const VALUE *ptr = RARRAY_CONST_PTR(body);
     long i, len = RARRAY_LEN(body);
     int j;
     int line_no = 0;

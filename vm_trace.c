@@ -294,6 +294,7 @@ rb_threadptr_exec_event_hooks_orig(rb_trace_arg_t *trace_arg, int pop_p)
 	const int outer_state = th->state;
 	int state = 0;
 	th->state = 0;
+	th->errinfo = Qnil;
 
 	th->vm->trace_running++;
 	th->trace_arg = trace_arg;
@@ -621,12 +622,6 @@ tp_mark(void *ptr)
     }
 }
 
-static void
-tp_free(void *ptr)
-{
-    /* do nothing */
-}
-
 static size_t
 tp_memsize(const void *ptr)
 {
@@ -635,7 +630,8 @@ tp_memsize(const void *ptr)
 
 static const rb_data_type_t tp_data_type = {
     "tracepoint",
-    {tp_mark, tp_free, tp_memsize,},
+    {tp_mark, RUBY_TYPED_NEVER_FREE, tp_memsize,},
+    NULL, NULL, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
 static VALUE
@@ -666,6 +662,8 @@ symbol2event_flag(VALUE v)
     C(thread_end, THREAD_END);
     C(specified_line, SPECIFIED_LINE);
 #undef C
+    CONST_ID(id, "a_call"); if (sym == ID2SYM(id)) return RUBY_EVENT_CALL | RUBY_EVENT_B_CALL | RUBY_EVENT_C_CALL;
+    CONST_ID(id, "a_return"); if (sym == ID2SYM(id)) return RUBY_EVENT_RETURN | RUBY_EVENT_B_RETURN | RUBY_EVENT_C_RETURN;
     rb_raise(rb_eArgError, "unknown event: %s", rb_id2name(SYM2ID(sym)));
 }
 

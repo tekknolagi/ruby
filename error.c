@@ -641,11 +641,9 @@ static VALUE
 exc_to_s(VALUE exc)
 {
     VALUE mesg = rb_attr_get(exc, rb_intern("mesg"));
-    VALUE r = Qnil;
 
     if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
-    r = rb_String(mesg);
-    return r;
+    return rb_String(mesg);
 }
 
 /*
@@ -780,6 +778,14 @@ VALUE
 rb_exc_set_backtrace(VALUE exc, VALUE bt)
 {
     return exc_set_backtrace(exc, bt);
+}
+
+VALUE
+exc_cause(VALUE exc)
+{
+    ID id_cause;
+    CONST_ID(id_cause, "cause");
+    return rb_attr_get(exc, id_cause);
 }
 
 static VALUE
@@ -993,24 +999,6 @@ name_err_name(VALUE self)
 
 /*
  * call-seq:
- *  name_error.to_s   -> string
- *
- * Produce a nicely-formatted string representing the +NameError+.
- */
-
-static VALUE
-name_err_to_s(VALUE exc)
-{
-    VALUE mesg = rb_attr_get(exc, rb_intern("mesg"));
-    VALUE str = mesg;
-
-    if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
-    StringValue(str);
-    return str;
-}
-
-/*
- * call-seq:
  *   NoMethodError.new(msg, name [, args])  -> no_method_error
  *
  * Construct a NoMethodError exception for a method of the given name
@@ -1053,6 +1041,7 @@ static const rb_data_type_t name_err_mesg_data_type = {
 	name_err_mesg_free,
 	name_err_mesg_memsize,
     },
+    NULL, NULL, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
 /* :nodoc: */
@@ -1761,6 +1750,7 @@ Init_Exception(void)
     rb_define_method(rb_eException, "inspect", exc_inspect, 0);
     rb_define_method(rb_eException, "backtrace", exc_backtrace, 0);
     rb_define_method(rb_eException, "set_backtrace", exc_set_backtrace, 1);
+    rb_define_method(rb_eException, "cause", exc_cause, 0);
 
     rb_eSystemExit  = rb_define_class("SystemExit", rb_eException);
     rb_define_method(rb_eSystemExit, "initialize", exit_initialize, -1);
@@ -1790,7 +1780,6 @@ Init_Exception(void)
     rb_eNameError     = rb_define_class("NameError", rb_eStandardError);
     rb_define_method(rb_eNameError, "initialize", name_err_initialize, -1);
     rb_define_method(rb_eNameError, "name", name_err_name, 0);
-    rb_define_method(rb_eNameError, "to_s", name_err_to_s, 0);
     rb_cNameErrorMesg = rb_define_class_under(rb_eNameError, "message", rb_cData);
     rb_define_singleton_method(rb_cNameErrorMesg, "!", rb_name_err_mesg_new, NAME_ERR_MESG_COUNT);
     rb_define_method(rb_cNameErrorMesg, "==", name_err_mesg_equal, 1);

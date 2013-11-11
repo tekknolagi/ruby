@@ -362,6 +362,7 @@ stat_memsize(const void *p)
 static const rb_data_type_t stat_data_type = {
     "stat",
     {NULL, RUBY_TYPED_DEFAULT_FREE, stat_memsize,},
+    NULL, NULL, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
 static VALUE
@@ -4301,7 +4302,6 @@ rb_file_truncate(VALUE obj, VALUE len)
 
 #ifdef __CYGWIN__
 #include <winerror.h>
-extern unsigned long __attribute__((stdcall)) GetLastError(void);
 #endif
 
 static VALUE
