@@ -32,25 +32,22 @@ struct rb_subclass_entry {
 };
 
 struct rb_classext_struct {
-    VALUE super;
     struct st_table *iv_tbl;
-    struct st_table *const_tbl;
     struct sa_table *mc_tbl;
     rb_subclass_entry_t *subclasses;
     rb_subclass_entry_t **parent_subclasses;
     rb_subclass_entry_t **module_subclasses;
-    VALUE seq;
     VALUE iclasstarget;
 };
 
 #undef RCLASS_SUPER
 #define RCLASS_EXT(c) (RCLASS(c)->ptr)
-#define RCLASS_SUPER(c) (RCLASS_EXT(c)->super)
+#define RCLASS_SUPER(c) (RCLASS(c)->super)
 #define RCLASS_IV_TBL(c) (RCLASS_EXT(c)->iv_tbl)
-#define RCLASS_CONST_TBL(c) (RCLASS_EXT(c)->const_tbl)
+#define RCLASS_CONST_TBL(c) (RCLASS(c)->const_tbl)
 #define RCLASS_M_TBL(c) (RCLASS(c)->m_tbl)
 #define RCLASS_MC_TBL(c) (RCLASS_EXT(c)->mc_tbl)
-#define RCLASS_SEQ(c) (RCLASS_EXT(c)->seq)
+#define RCLASS_SEQ(c) (RCLASS(c)->seq)
 #define RCLASS_SUBCLASSES(c) (RCLASS_EXT(c)->subclasses)
 #define RCLASS_PARENT_SUBCLASSES(c) (RCLASS_EXT(c)->parent_subclasses)
 #define RCLASS_MODULE_SUBCLASSES(c) (RCLASS_EXT(c)->module_subclasses)

@@ -647,9 +647,12 @@ struct RClass {
     rb_classext_t *ptr;
     struct st_table *m_tbl;
     struct st_table *iv_index_tbl;
+    VALUE super;
+    VALUE seq;
+    struct st_table *const_tbl;
 };
 
-#define RCLASS_SUPER(c) rb_class_get_superclass(c)
+#define RCLASS_SUPER(c) RCLASS(c)->super
 #define RMODULE_IV_TBL(m) RCLASS_IV_TBL(m)
 #define RMODULE_CONST_TBL(m) RCLASS_CONST_TBL(m)
 #define RMODULE_M_TBL(m) RCLASS_M_TBL(m)
