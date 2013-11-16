@@ -276,8 +276,11 @@ typedef struct RVALUE {
 	struct RMatch  match;
 	struct RRational rational;
 	struct RComplex complex;
+	char pad[64];
     } as;
 } RVALUE;
+
+char rvalue_is_no_bigger_than_64_bytes[64 - sizeof(RVALUE)];
 
 #if defined(_MSC_VER) || defined(__BORLANDC__) || defined(__CYGWIN__)
 #pragma pack(pop)
