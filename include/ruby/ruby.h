@@ -598,7 +598,7 @@ struct RBasic {
     VALUE klass;
 };
 
-#define ROBJECT_EMBED_LEN_MAX 3
+#define ROBJECT_EMBED_LEN_MAX 6
 struct RObject {
     struct RBasic basic;
     union {
