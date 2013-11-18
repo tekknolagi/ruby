@@ -715,6 +715,7 @@ if test "$GCC:${warnflags+set}:no" = yes::no; then
 		 -Werror=declaration-after-statement \
 		 -Werror=shorten-64-to-32 \
 		 -Werror=implicit-function-declaration \
+		 -Werror=division-by-zero \
 		 $extra_warning \
 		 ; do
 	if test "$particular_werror_flags" != yes; then
@@ -3106,6 +3107,7 @@ AS_CASE("$enable_shared", [yes], [
 	LIBRUBY_DLDFLAGS="$LIBRUBY_DLDFLAGS "' $(XLDFLAGS)'
 	LIBRUBY_SO='lib$(RUBY_SO_NAME).dylib'
 	LIBRUBY_ALIASES='lib$(RUBY_BASE_NAME).$(MAJOR).$(MINOR).dylib lib$(RUBY_INSTALL_NAME).dylib'
+	SOLIBS='$(LIBS)'
 	],
     [interix*], [
 	LIBRUBYARG_SHARED='-L. -L${libdir} -l$(RUBY_SO_NAME)'

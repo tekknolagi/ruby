@@ -141,10 +141,12 @@ struct foreach_safe_arg {
 };
 
 static int
-foreach_safe_i(st_data_t key, st_data_t value, struct foreach_safe_arg *arg)
+foreach_safe_i(st_data_t key, st_data_t value, st_data_t args, int error)
 {
     int status;
+    struct foreach_safe_arg *arg = (void *)args;
 
+    if (error) return ST_STOP;
     status = (*arg->func)(key, value, arg->arg);
     if (status == ST_CONTINUE) {
 	return ST_CHECK;
@@ -174,12 +176,13 @@ struct hash_foreach_arg {
 };
 
 static int
-hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp)
+hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp, int error)
 {
     struct hash_foreach_arg *arg = (struct hash_foreach_arg *)argp;
     int status;
     st_table *tbl;
 
+    if (error) return ST_STOP;
     tbl = RHASH(arg->hash)->ntbl;
     status = (*arg->func)((VALUE)key, (VALUE)value, arg->arg);
     if (RHASH(arg->hash)->ntbl != tbl) {
@@ -195,6 +198,13 @@ hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp)
 	return ST_STOP;
     }
     return ST_CHECK;
+}
+
+static VALUE
+hash_foreach_ensure_rollback(VALUE hash)
+{
+    RHASH_ITER_LEV(hash)++;
+    return 0;
 }
 
 static VALUE
@@ -325,14 +335,14 @@ struct update_callback_arg {
 };
 
 #define NOINSERT_UPDATE_CALLBACK(func)                                       \
-int                                                                          \
+static int                                                                   \
 func##_noinsert(st_data_t *key, st_data_t *val, st_data_t arg, int existing) \
 {                                                                            \
     if (!existing) no_new_key();                                             \
     return func(key, val, (struct update_arg *)arg, existing);               \
 }                                                                            \
                                                                              \
-int                                                                          \
+static int                                                                   \
 func##_insert(st_data_t *key, st_data_t *val, st_data_t arg, int existing)   \
 {                                                                            \
     return func(key, val, (struct update_arg *)arg, existing);               \
@@ -1250,8 +1260,8 @@ hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existi
     return hash_aset(key, val, arg, existing);
 }
 
-static NOINSERT_UPDATE_CALLBACK(hash_aset)
-static NOINSERT_UPDATE_CALLBACK(hash_aset_str)
+NOINSERT_UPDATE_CALLBACK(hash_aset);
+NOINSERT_UPDATE_CALLBACK(hash_aset_str);
 
 /*
  *  call-seq:
@@ -1266,6 +1276,7 @@ static NOINSERT_UPDATE_CALLBACK(hash_aset_str)
  *     h["a"] = 9
  *     h["c"] = 4
  *     h   #=> {"a"=>9, "b"=>200, "c"=>4}
+ *     h.store("d", 42) #=> {"a"=>9, "b"=>200, "c"=>4, "d"=>42}
  *
  *  +key+ should not have its value changed while it is in use as a key (an
  *  <tt>unfrozen String</tt> passed as a key will be duplicated and frozen).
@@ -1972,7 +1983,7 @@ rb_hash_update_callback(st_data_t *key, st_data_t *value, struct update_arg *arg
     return ST_CONTINUE;
 }
 
-static NOINSERT_UPDATE_CALLBACK(rb_hash_update_callback)
+NOINSERT_UPDATE_CALLBACK(rb_hash_update_callback);
 
 static int
 rb_hash_update_i(VALUE key, VALUE value, VALUE hash)
@@ -1999,7 +2010,7 @@ rb_hash_update_block_callback(st_data_t *key, st_data_t *value, struct update_ar
     return ST_CONTINUE;
 }
 
-static NOINSERT_UPDATE_CALLBACK(rb_hash_update_block_callback)
+NOINSERT_UPDATE_CALLBACK(rb_hash_update_block_callback);
 
 static int
 rb_hash_update_block_i(VALUE key, VALUE value, VALUE hash)
@@ -2070,7 +2081,7 @@ rb_hash_update_func_callback(st_data_t *key, st_data_t *value, struct update_arg
     return ST_CONTINUE;
 }
 
-static NOINSERT_UPDATE_CALLBACK(rb_hash_update_func_callback)
+NOINSERT_UPDATE_CALLBACK(rb_hash_update_func_callback);
 
 static int
 rb_hash_update_func_i(VALUE key, VALUE value, VALUE arg0)
@@ -3761,4 +3772,7 @@ Init_Hash(void)
      * See ENV (the class) for more details.
      */
     rb_define_global_const("ENV", envtbl);
+
+    /* for callcc */
+    ruby_register_rollback_func_for_ensure(hash_foreach_ensure, hash_foreach_ensure_rollback);
 }

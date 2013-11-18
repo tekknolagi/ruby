@@ -431,6 +431,34 @@ rb_frozen_class_p(VALUE klass)
 }
 
 NORETURN(static void rb_longjmp(int, volatile VALUE));
+static VALUE get_errinfo(void);
+static VALUE get_thread_errinfo(rb_thread_t *th);
+
+static VALUE
+exc_setup_cause(VALUE exc, VALUE cause)
+{
+    ID id_cause;
+    CONST_ID(id_cause, "cause");
+
+#if SUPPORT_JOKE
+    if (NIL_P(cause)) {
+	ID id_true_cause;
+	CONST_ID(id_true_cause, "true_cause");
+
+	cause = rb_attr_get(rb_eFatal, id_true_cause);
+	if (NIL_P(cause)) {
+	    cause = rb_exc_new_cstr(rb_eFatal, "because using such Ruby");
+	    rb_ivar_set(cause, id_cause, INT2FIX(42)); /* the answer */
+	    OBJ_FREEZE(cause);
+	    rb_ivar_set(rb_eFatal, id_true_cause, cause);
+	}
+    }
+#endif
+    if (!NIL_P(cause) && cause != exc) {
+	rb_ivar_set(exc, id_cause, cause);
+    }
+    return exc;
+}
 
 static void
 setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg)
@@ -447,6 +475,7 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg)
     if (NIL_P(mesg)) {
 	mesg = rb_exc_new(rb_eRuntimeError, 0, 0);
     }
+    exc_setup_cause(mesg, get_thread_errinfo(th));
 
     file = rb_sourcefile();
     if (file) line = rb_sourceline();
@@ -552,8 +581,6 @@ rb_interrupt(void)
     rb_raise(rb_eInterrupt, "%s", "");
 }
 
-static VALUE get_errinfo(void);
-
 /*
  *  call-seq:
  *     raise
@@ -640,10 +667,6 @@ make_exception(int argc, VALUE *argv, int isstr)
 	    rb_raise(rb_eTypeError, "exception object expected");
 	if (argc > 2)
 	    set_backtrace(mesg, argv[2]);
-    }
-    {
-	VALUE cause = get_errinfo();
-	if (!NIL_P(cause)) rb_iv_set(mesg, "cause", cause);
     }
 
     return mesg;
@@ -817,7 +840,12 @@ rb_ensure(VALUE (*b_proc)(ANYARGS), VALUE data1, VALUE (*e_proc)(ANYARGS), VALUE
     volatile VALUE result = Qnil;
     volatile VALUE errinfo;
     rb_thread_t *const th = GET_THREAD();
-
+    rb_ensure_list_t ensure_list;
+    ensure_list.entry.marker = 0;
+    ensure_list.entry.e_proc = e_proc;
+    ensure_list.entry.data2 = data2;
+    ensure_list.next = th->ensure_list;
+    th->ensure_list = &ensure_list;
     PUSH_TAG();
     if ((state = EXEC_TAG()) == 0) {
 	result = (*b_proc) (data1);
@@ -826,7 +854,8 @@ rb_ensure(VALUE (*b_proc)(ANYARGS), VALUE data1, VALUE (*e_proc)(ANYARGS), VALUE
     /* TODO: fix me */
     /* retval = prot_tag ? prot_tag->retval : Qnil; */     /* save retval */
     errinfo = th->errinfo;
-    (*e_proc) (data2);
+    th->ensure_list=ensure_list.next;
+    (*ensure_list.entry.e_proc)(ensure_list.entry.data2);
     th->errinfo = errinfo;
     if (state)
 	JUMP_TAG(state);

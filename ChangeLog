@@ -1,3 +1,226 @@
+Mon Nov 18 22:47:54 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* eval_intern.h (TH_PUSH_TAG, TH_EXEC_TAG): refine stack overflow
+	  detection.  chain local tag after setjmp() successed on it, because
+	  calling setjmp() also can overflow the stack.
+	  [ruby-dev:47804] [Bug #9109]
+
+	* vm_eval.c (rb_catch_obj): now th->tag points previous tag until
+	  TH_EXEC_TAG().
+
+	* thread_pthread.c (ruby_init_stack): set stack_start properly by
+	  get_main_stack() if possible.
+
+Mon Nov 18 22:45:49 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* eval_jump.c (rb_exec_end_proc): unlink and free procs data before
+	  calling for each procs.  [Bug #9110]
+
+Sun Nov 17 06:33:32 2013  Shota Fukumori  <her@sorah.jp>
+
+	* configure.in: Use $LIBS for base of $SOLIBS, also in darwin.
+	  By this fix, environment that libgmp is located in $LIBS can build
+	  ruby.
+
+Sun Nov 17 01:56:32 2013  Tanaka Akira  <akr@fsij.org>
+
+	* thread_pthread.c (rb_thread_create_timer_thread): Show error
+	  message instead of error number.
+	  (thread_create_core): Ditto.
+
+	* cont.c (fiber_machine_stack_alloc): Ditto.
+
+Sat Nov 16 18:28:08 2013  Kouhei Sutou  <kou@cozmixng.org>
+
+	* lib/rexml/parsers/ultralightparser.rb
+	  (REXML::Parsers::UltraLightParser#parse): Fix wrong :start_doctype
+	  position.
+	  [Bug #9061] [ruby-dev:47778]
+	  Patch by Ippei Obayashi. Thanks!!!
+
+	* test/rexml/parser/test_ultra_light.rb: Add a test for this case.
+
+Sat Nov 16 02:13:56 2013  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* cont.c : Introduce ensure rollback mechanism. Please see below.
+
+	* internal.h (ruby_register_rollback_func_for_ensure): catch up above change.
+	  Add rollback mechanism API.
+
+	* vm_core.h (typedef struct rb_vm_struct): catch up above change.
+	  Introduce ensure-rollback relation table.
+
+	* vm_core.h (typedef struct rb_thread_struct): catch up above change.
+	  Introduce ensure stack.
+
+	* eval.c (rb_ensure): catch up above change.
+	  Introduce ensure stack.
+
+	* hash.c : New function for rollback ensure, and register it to
+	  ensure-rollback relation table. [ruby-dev:47803] [Bug #9105]
+
+	Ensure Rollback Mechanism:
+	A rollback's function is a function to rollback a state before ensure's
+	function execution.
+	When the jump of callcc is across the scope of rb_ensure,
+	ensure's functions and rollback's functions are executed appropriately
+	for keeping consistency.
+
+	Current API is unstable, and only internal use.
+
+	ruby_register_rollback_func_for_ensure(ensure_func,rollback_func)
+	This API create relation ensure's function to rollback's function.
+	By registered rollback's function, it is executed When jumping into
+	corresponding rb_ensure scope.
+
+Sat Nov 16 00:18:36 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* eval_jump.c (rb_exec_end_proc): fix double free or corruption error
+	  when reentering by callcc. [ruby-core:58329] [Bug #9110]
+
+	* test/ruby/test_beginendblock.rb: test for above.
+
+Fri Nov 15 17:07:31 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/delegate.rb (Delegator#send): override to get rid of global function interference.
+	  [Fixes GH-449]
+
+Fri Nov 15 01:06:04 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/objspace/objspace_dump.c (dump_output): allow IO object as
+	  output, and use Tempfile.create and return open file instead of
+	  mkstemp() and path name for :file output.
+	  [ruby-core:58266] [Bug #9102]
+
+	* test/objspace/test_objspace.rb (TestObjSpace#dump_my_heap_please):
+	  remove temporary output file.
+
+Thu Nov 14 23:39:00 2013  CHIKANAGA Tomoyuki  <nagachika@ruby-lang.org>
+
+	* ext/bigdecimal/lib/bigdecimal/util.rb: [DOC] remove example of
+	  Rational#to_d without argument. [Bug #8958]
+
+Thu Nov 14 20:24:15 2013  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* ruby_atomic.h (ATOMIC_SIZE_CAS): fix compile error on Solaris
+	  since r43460.
+
+Thu Nov 14 19:53:00 2013  Tanaka Akira  <akr@fsij.org>
+
+	* test/openssl/test_cipher.rb (test_aes_gcm_wrong_tag): Don't use
+	  String#succ because it can make modified (wrong) auth_tag longer
+	  than 16 bytes.  The longer auth_tag makes that
+	  EVP_CIPHER_CTX_ctrl (and internally aes_gcm_ctrl) fail.
+	  [ruby-core:55143] [Bug #8439] reported by Vit Ondruch.
+
+Thu Nov 14 11:33:47 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* hash.c (foreach_safe_i, hash_foreach_iter): deal with error detected
+	  by ST_CHECK.
+
+	* st.c (st_foreach_check): call with non-error argument in normal case.
+
+Thu Nov 14 02:37:14 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/thread/thread.c: [DOC] This patch accomplishes the following:
+
+	  - Teach RDoc about ConditionVariable
+	  - Teach RDoc about Queue
+	  - Teach RDoc about SizedQueue
+	  - Use fully-qualified namespace for Document-method
+	    This is necessary to separate definitions between classes
+	  - Fix rdoc bug in call_seq vs. call-seq
+	  - Correct doc for SizedQueue#pop patch by @jackdanger [Bug #8988]
+
+Thu Nov 14 01:11:54 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/bigdecimal/lib/bigdecimal/util.rb: [DOC] +precision+ is required
+
+Wed Nov 13 19:21:36 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/bigdecimal/lib/bigdecimal/util.rb: [DOC] Document the required
+	  +precision+ argument for Rational#to_d [Bug #8958]
+
+Wed Nov 13 19:02:05 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/digest/*: [DOC] Fix several typos and broken http links.
+	  Improved examples for Digest overview and fixed a broken example in
+	  Digest::HMAC overview. This patch also adds a description of
+	  Digest::SHA256.bubblebabble to the Digest overview.
+
+	  Patched by @stomar [Bug #9027]
+
+Wed Nov 13 18:32:12 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/openssl/ossl_config.c: [DOC] Document the following:
+
+	  - OpenSSL::ConfigError
+	  - OpenSSL::Config::DEFAULT_CONFIG_FILE
+
+	  Patched by @vbatts via GH-436
+	  https://github.com/ruby/ruby/pull/436
+
+Wed Nov 13 18:03:00 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/openssl/ossl_asn1.c: [DOC] Document parts of
+	  OpenSSL::ASN1::ObjectId included a fix for the class overview, which
+	  previously showed the documentation for Constructive due to missing
+	  ObjectId overview. This patch also includes a note for Primitive.
+
+	  Based on a patch by @vbatts via GH-436
+	  https://github.com/ruby/ruby/pull/436
+
+Wed Nov 13 17:19:36 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/openssl/lib/openssl/config.rb: In #parse use +string+ for +str+
+
+Wed Nov 13 17:09:45 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/openssl/lib/openssl/*.rb: [DOC] Document the following:
+
+	  - Integer#to_bn
+	  - OpenSSL::Buffering module
+	  - Deprecated OpenSSL::Digest::Digest compatibility class
+	  - OpenSSL::Config
+
+	  These changes were based on a patch by @vbatts via GH-436
+	  https://github.com/ruby/ruby/pull/436
+
+Wed Nov 13 10:55:43 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/regexp.rdoc: [DOC] Fix typo in Special global variables section.
+	  Reported by Alex Johnson on ruby-doc.org
+
+Wed Nov 13 10:43:19 2013  Zachary Scott  <e@zzak.io>
+
+	* hash.c: [DOC] Adds an example for Hash#store
+
+Wed Nov 13 09:03:40 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/regexp.rdoc: [DOC] add note about Bug #4044 as suggested by
+	  duerst-san in [ruby-core:43612] [Fixes GH-443] Patched by @rosenfeld
+	  https://github.com/ruby/ruby/pull/443
+
+Tue Nov 12 10:15:14 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rubygems/insure_session.rb:  Remove unused test file.
+
+Tue Nov 12 09:16:24 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master b9213d7.  Changes include:
+
+	  Fixed tests on Windows (I hope) by forcing platform for
+	  platform-dependent tests.
+
+	  Fixed File.exists? warnings.
+
+	  Improved testing infrastructure.
+
+	* test/rubygems:  ditto.
+
+	* test/rdoc/test_rdoc_rubygems_hook.rb:  Switch to util_spec like
+	  RubyGems.
+
 Mon Nov 11 18:31:12 2013  Aman Gupta <ruby@tmm1.net>
 
 	* internal.h: move common string/hash flags to include file.
