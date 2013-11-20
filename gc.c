@@ -2168,12 +2168,8 @@ is_id_value(rb_objspace_t *objspace, VALUE ptr)
 static inline int
 heap_is_swept_object(rb_objspace_t *objspace, rb_heap_t *heap, VALUE ptr)
 {
-    struct heap_page *page = heap->sweep_pages;
-    while (page) {
-	if ((VALUE)page->start <= ptr && ptr < (VALUE)(page->start + page->limit)) return FALSE;
-	page = page->next;
-    }
-    return TRUE;
+    struct heap_page *page = GET_HEAP_PAGE(ptr);
+    return page->before_sweep ? FALSE : TRUE;
 }
 
 static inline int
@@ -3569,6 +3565,20 @@ void
 rb_gc_mark(VALUE ptr)
 {
     gc_mark(&rb_objspace, ptr);
+}
+
+/* resurrect non-marked `obj' if obj is before swept */
+
+void
+rb_gc_resurrect(VALUE obj)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+
+    if (is_lazy_sweeping(heap_eden) &&
+	!gc_marked(objspace, obj) &&
+	!is_swept_object(objspace, obj)) {
+	gc_mark_ptr(objspace, obj);
+    }
 }
 
 static void
@@ -5299,7 +5309,7 @@ rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE,
 
     objspace->mark_func_data = &mfd;
     {
-	gc_mark_roots(objspace, FALSE, &data.category);
+	gc_mark_roots(objspace, TRUE, &data.category);
     }
     objspace->mark_func_data = 0;
 }

@@ -1,3 +1,124 @@
+Wed Nov 20 20:54:01 2013  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* tool/instruction.rb : fix typo.
+
+Wed Nov 20 19:45:22 2013  Tanaka Akira  <akr@fsij.org>
+
+	* random.c (rand_init): Make it possible to specify arbitrary array
+	  for init_genrand().
+
+Wed Nov 20 17:34:13 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* parse.y (rb_gc_mark_symbols): set global_symbols.minor_marked only
+	  when full_mark is 0.
+	  rb_gc_mark_symbols() (with full_mark == 1) can be called by other
+	  than GC (such as rb_objspace_reachable_objects_from_root()).
+
+Wed Nov 20 11:46:38 2013  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* ext/json: merge JSON 1.8.1.
+	  https://github.com/nurse/json/compare/002ac2771ce32776b32ccd2d06e5604de6c36dcd...e09ffc0d7da25d0393873936c118c188c78dbac3
+	* Remove Rubinius exception since transcoding should be working now.
+	* Fix https://github.com/flori/json/issues/162 reported by Marc-Andre
+	  Lafortune <github_rocks@marc-andre.ca>. Thanks!
+	* Applied patches by Yui NARUSE <naruse@airemix.jp> to suppress
+	  warning with -Wchar-subscripts and better validate UTF-8 strings.
+	* Applied patch by ginriki@github to remove unnecessary if.
+	* Add load/dump interface to JSON::GenericObject to make
+	  serialize :some_attribute, JSON::GenericObject
+	  work in Rails active models for convenient
+	  SomeModel#some_attribute.foo.bar access to serialised JSON data.
+
+Wed Nov 20 01:39:02 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/rdoc/constant.rb (RDoc::Constant#documented?): workaround for
+	  NoMethodError when the original of alias is not found.
+
+Wed Nov 20 01:27:33 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/delegate.rb (Delegator#send): separate from method_missing so
+	  that super calls proper method.
+
+Tue Nov 19 23:38:49 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* configure.in (--with-os-version-style): option to transform target
+	  OS version string.
+
+Tue Nov 19 21:27:33 2013  Tanaka Akira  <akr@fsij.org>
+
+	* test/net/http/utils.rb (spawn_server): Specify zero for port to
+	  avoid reusing an allocated port.
+
+	* test/net/http/test_http.rb: Don't specify port here.
+
+	* test/net/http/test_https.rb: Ditto.
+
+Tue Nov 19 18:52:10 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (heap_is_swept_object): use heap_page::before_sweep flag.
+
+Tue Nov 19 18:49:32 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_objspace_reachable_objects_from_root): do major marking.
+
+Tue Nov 19 18:45:40 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_gc_resurrect): added.
+	  rb_fstring() used rb_gc_mark() to avoid freeing used string.
+	  However, rb_gc_mark() set mark bit *and* pushes mark_stack.
+	  rb_gc_resurrect() does only set mark bit if it is before sweeping.
+
+	* string.c (rb_fstring): use rb_gc_resurrect.
+
+	* internal.h: add decl.
+
+Tue Nov 19 09:47:02 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc:  Update to RDoc master a1195ce.  Changes include:
+
+	  Improved accessibility of the main sidebar navigation.
+
+	  Fixed handling of regexp options in HTML source highlighting.
+
+	* test/rdoc:  ditto.
+
+Tue Nov 19 09:33:52 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master 6a3d9f9.  Changes include:
+
+	  Compatibly renamed Gem::DependencyResolver to Gem::Resolver.
+
+	  Added support for git gems in gem.deps.rb and Gemfile.
+
+	  Fixed resolver bugs.
+
+	* test/rubygems: ditto.
+
+	* lib/rubygems/LICENSE.txt:  Updated to license from RubyGems trunk.
+	  [ruby-trunk - Bug #9086]
+
+	* lib/rubygems/commands/which_command.rb:  RubyGems now indicates
+	  failure when any file is missing.  [ruby-trunk - Bug #9004]
+
+	* lib/rubygems/ext/builder:  Extensions are now installed into the
+	  extension install directory and the first directory in the require
+	  path from the gem.  This allows backwards compatibility with msgpack
+	  and other gems that calculate full require paths.
+	  [ruby-trunk - Bug #9106]
+
+
+Tue Nov 19 07:21:56 2013  Tanaka Akira  <akr@fsij.org>
+
+	* configure.in (LOCALTIME_OVERFLOW_PROBLEM): Define it for cross
+	  compiling.
+	  [ruby-core:58391] [Bug #9119] Reported by Luis Lavena.
+	  Analyzed by Heesob Park.
+
+Tue Nov 19 05:55:05 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/rubygems_hook.rb:  Remove debugging puts committed by
+	  accident.
+
 Mon Nov 18 22:47:54 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* eval_intern.h (TH_PUSH_TAG, TH_EXEC_TAG): refine stack overflow
