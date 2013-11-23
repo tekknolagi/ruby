@@ -428,8 +428,10 @@ NORETURN(void rb_syserr_fail_path_in(const char *func_name, int err, VALUE path)
 /* gc.c */
 void Init_heap(void);
 void *ruby_mimmalloc(size_t size);
+void ruby_mimfree(void *ptr);
 void rb_objspace_set_event_hook(const rb_event_flag_t event);
 void rb_gc_writebarrier_remember_promoted(VALUE obj);
+void ruby_gc_set_params(void);
 
 void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR_ALLOC_SIZE((2));
 void ruby_sized_xfree(void *x, size_t size);
@@ -835,7 +837,6 @@ int rb_st_insert_id_and_value(VALUE obj, st_table *tbl, ID key, VALUE value);
 st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
 
 /* gc.c */
-size_t rb_gc_count(void);
 size_t rb_obj_memsize_of(VALUE);
 
 RUBY_SYMBOL_EXPORT_END

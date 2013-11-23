@@ -146,7 +146,9 @@ BigDecimal_memsize(const void *ptr)
 static const rb_data_type_t BigDecimal_data_type = {
     "BigDecimal",
     { 0, BigDecimal_delete, BigDecimal_memsize, },
+#ifdef RUBY_TYPED_FREE_IMMEDIATELY
     NULL, NULL, RUBY_TYPED_FREE_IMMEDIATELY
+#endif
 };
 
 static inline int
@@ -1591,10 +1593,10 @@ BigDecimal_sqrt(VALUE self, VALUE nFig)
     size_t mx, n;
 
     GUARD_OBJ(a, GetVpValue(self, 1));
-    mx = a->Prec *(VpBaseFig() + 1);
+    mx = a->Prec * (VpBaseFig() + 1);
 
-    n = GetPositiveInt(nFig) + VpDblFig() + 1;
-    if(mx <= n) mx = n;
+    n = GetPositiveInt(nFig) + VpDblFig() + BASE_FIG;
+    if (mx <= n) mx = n;
     GUARD_OBJ(c, VpCreateRbObject(mx, "0"));
     VpSqrt(c, a);
     return ToValue(c);
@@ -2381,6 +2383,9 @@ retry:
 	GUARD_OBJ(y, VpCreateRbObject(1, "0"));
     }
     VpPower(y, x, int_exp);
+    if (!NIL_P(prec) && VpIsDef(y)) {
+	VpMidRound(y, VpGetRoundMode(), n);
+    }
     return ToValue(y);
 }
 
@@ -2674,18 +2679,18 @@ BigMath_s_exp(VALUE klass, VALUE x, VALUE vprec)
      *       BigDecimalCmp function. */
     switch (TYPE(x)) {
       case T_DATA:
-	  if (!is_kind_of_BigDecimal(x)) break;
-	  vx = DATA_PTR(x);
-	  negative = VpGetSign(vx) < 0;
-	  infinite = VpIsPosInf(vx) || VpIsNegInf(vx);
-	  nan = VpIsNaN(vx);
-	  break;
+	if (!is_kind_of_BigDecimal(x)) break;
+	vx = DATA_PTR(x);
+	negative = VpGetSign(vx) < 0;
+	infinite = VpIsPosInf(vx) || VpIsNegInf(vx);
+	nan = VpIsNaN(vx);
+	break;
 
       case T_FIXNUM:
-	  /* fall through */
+	/* fall through */
       case T_BIGNUM:
-	  vx = GetVpValue(x, 0);
-	  break;
+	vx = GetVpValue(x, 0);
+	break;
 
       case T_FLOAT:
 	flo = RFLOAT_VALUE(x);
@@ -2711,22 +2716,22 @@ BigMath_s_exp(VALUE klass, VALUE x, VALUE vprec)
 	else {
 	    Real* vy;
 	    vy = VpCreateRbObject(prec, "#0");
-	    RB_GC_GUARD(vy->obj);
 	    VpSetInf(vy, VP_SIGN_POSITIVE_INFINITE);
+	    RB_GC_GUARD(vy->obj);
 	    return ToValue(vy);
 	}
     }
     else if (nan) {
 	Real* vy;
 	vy = VpCreateRbObject(prec, "#0");
-	RB_GC_GUARD(vy->obj);
 	VpSetNaN(vy);
+	RB_GC_GUARD(vy->obj);
 	return ToValue(vy);
     }
     else if (vx == NULL) {
 	cannot_be_coerced_into_BigDecimal(rb_eArgError, x);
     }
-    x = RB_GC_GUARD(vx->obj);
+    x = vx->obj;
 
     n = prec + rmpd_double_figures();
     negative = VpGetSign(vx) < 0;
@@ -2734,18 +2739,21 @@ BigMath_s_exp(VALUE klass, VALUE x, VALUE vprec)
 	VpSetSign(vx, 1);
     }
 
-    RB_GC_GUARD(one) = ToValue(VpCreateRbObject(1, "1"));
-    RB_GC_GUARD(x1)  = one;
-    RB_GC_GUARD(y)   = one;
-    RB_GC_GUARD(d)   = y;
-    RB_GC_GUARD(z)   = one;
-    i  = 0;
+    one = ToValue(VpCreateRbObject(1, "1"));
+    x1  = one;
+    y   = one;
+    d   = y;
+    z   = one;
+    i   = 0;
 
     while (!VpIsZero((Real*)DATA_PTR(d))) {
 	VALUE argv[2];
 	SIGNED_VALUE const ey = VpExponent10(DATA_PTR(y));
 	SIGNED_VALUE const ed = VpExponent10(DATA_PTR(d));
 	ssize_t m = n - vabs(ey - ed);
+
+	rb_thread_check_ints();
+
 	if (m <= 0) {
 	    break;
 	}
@@ -2772,6 +2780,13 @@ BigMath_s_exp(VALUE klass, VALUE x, VALUE vprec)
 	vprec = SSIZET2NUM(prec - VpExponent10(DATA_PTR(y)));
 	return BigDecimal_round(1, &vprec, y);
     }
+
+    RB_GC_GUARD(one);
+    RB_GC_GUARD(x);
+    RB_GC_GUARD(x1);
+    RB_GC_GUARD(y);
+    RB_GC_GUARD(d);
+    RB_GC_GUARD(z);
 }
 
 /* call-seq:
@@ -3816,7 +3831,9 @@ VpAlloc(size_t mx, const char *szVal)
     size_t mf = VpGetPrecLimit();
     VALUE buf;
 
-    mx = (mx + BASE_FIG - 1) / BASE_FIG + 1;    /* Determine allocation unit. */
+    mx = (mx + BASE_FIG - 1) / BASE_FIG;    /* Determine allocation unit. */
+    if (mx == 0) ++mx;
+
     if (szVal) {
 	while (ISSPACE(*szVal)) szVal++;
 	if (*szVal != '#') {
@@ -5654,6 +5671,7 @@ VpSqrt(Real *y, Real *x)
 
     n = (SIGNED_VALUE)y->MaxPrec;
     if (x->MaxPrec > (size_t)n) n = (ssize_t)x->MaxPrec;
+
     /* allocate temporally variables  */
     f = VpAlloc(y->MaxPrec * (BASE_FIG + 2), "#1");
     r = VpAlloc((n + n) * (BASE_FIG + 2), "#1");
@@ -5691,8 +5709,7 @@ VpSqrt(Real *y, Real *x)
 	if (VpIsZero(f))         goto converge;
 	VpAddSub(r, f, y, 1);    /* r = y + f  */
 	VpAsgn(y, r, 1);         /* y = r      */
-	if (f->exponent <= prec) goto converge;
-    } while(++nr < n);
+    } while (++nr < n);
 
 #ifdef BIGDECIMAL_DEBUG
     if (gfDebug) {

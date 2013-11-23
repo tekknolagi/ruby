@@ -1738,6 +1738,10 @@ dependencies: []
     RbConfig::CONFIG['ENABLE_SHARED'] = enable_shared
   end
 
+  def test_source
+    assert_kind_of Gem::Source::Installed, @a1.source
+  end
+
   def test_full_require_paths
     ext_spec
 
@@ -2447,8 +2451,8 @@ duplicate dependency on b (>= 1.2.3), (~> 1.2) use:
     end
 
     assert_match <<-warning, @ui.error
-WARNING:  licenses is empty.  Use a license abbreviation from:
-  http://opensource.org/licenses/alphabetical
+WARNING:  licenses is empty, but is recommended.  Use a license abbreviation from:
+http://opensource.org/licenses/alphabetical
     warning
   end
 

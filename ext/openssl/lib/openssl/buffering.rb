@@ -1,4 +1,4 @@
-=begin
+<<EOL
 = $RCSfile$ -- Buffering mix-in module.
 
 = Info
@@ -12,7 +12,7 @@
 
 = Version
   $Id$
-=end
+EOL
 
 ##
 # OpenSSL IO buffering mix-in module.
@@ -40,7 +40,8 @@ module OpenSSL::Buffering
   ##
   # Creates an instance of OpenSSL's buffering IO module.
 
-  def initialize(*args)
+  def initialize(*)
+    super
     @eof = false
     @rbuffer = ""
     @sync = @io.sync

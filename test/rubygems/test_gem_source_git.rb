@@ -51,6 +51,10 @@ class TestGemSourceGit < Gem::TestCase
     assert_equal @head[0..11], @source.dir_shortref
   end
 
+  def test_download
+    refute @source.download nil, nil
+  end
+
   def test_equals2
     assert_equal @source, @source
 
@@ -76,12 +80,6 @@ class TestGemSourceGit < Gem::TestCase
                            true
 
     refute_equal @source, source
-  end
-
-  def test_load_spec
-    spec = @source.load_spec @name
-
-    assert_equal "#{@name}-#{@version}", spec.full_name
   end
 
   def test_install_dir
@@ -131,6 +129,38 @@ class TestGemSourceGit < Gem::TestCase
 
     assert_equal( 1, installed.<=>(git),       'installed <=> git')
     assert_equal(-1, git.      <=>(installed), 'git       <=> installed')
+  end
+
+  def test_specs
+    source = Gem::Source::Git.new @name, @repository, 'master', true
+
+    Dir.chdir 'git/a' do
+      FileUtils.mkdir 'b'
+
+      Dir.chdir 'b' do
+        b = Gem::Specification.new 'b', 1
+
+        open 'b.gemspec', 'w' do |io|
+          io.write b.to_ruby
+        end
+
+        system @git, 'add', 'b.gemspec'
+        system @git, 'commit', '--quiet', '-m', 'add b/b.gemspec'
+      end
+
+      FileUtils.touch 'c.gemspec'
+
+      system @git, 'add', 'c.gemspec'
+      system @git, 'commit', '--quiet', '-m', 'add c.gemspec'
+    end
+
+    specs = nil
+
+    capture_io do
+      specs = source.specs
+    end
+
+    assert_equal %w[a-1 b-1], specs.map { |spec| spec.full_name }
   end
 
   def test_uri_hash

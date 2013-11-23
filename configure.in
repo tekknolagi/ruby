@@ -1009,6 +1009,7 @@ main()
 		ac_cv_type_struct_timeval=yes
                 ac_cv_func_clock_gettime=yes
                 ac_cv_func_clock_getres=yes
+		ac_cv_func_malloc_usable_size=no
 		AC_CHECK_TYPE([NET_LUID], [], [],
 			      [@%:@include <windows.h>
 		  	      @%:@include <iphlpapi.h>])
@@ -1090,6 +1091,8 @@ AC_CHECK_HEADERS( \
   process.h \
   sys/prctl.h \
   atomic.h \
+  malloc.h \
+  malloc_np.h \
   setjmpex.h
 )
 
@@ -1851,6 +1854,7 @@ AC_CHECK_FUNCS(llabs)
 AC_CHECK_FUNCS(lockf)
 AC_CHECK_FUNCS(log2)
 AC_CHECK_FUNCS(lstat)
+AC_CHECK_FUNCS(malloc_usable_size)
 AC_CHECK_FUNCS(mblen)
 AC_CHECK_FUNCS(memalign)
 AC_CHECK_FUNCS(memrchr)
