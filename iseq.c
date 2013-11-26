@@ -264,8 +264,8 @@ prepare_iseq_build(rb_iseq_t *iseq,
     OBJ_WRITE(iseq->self, &iseq->klass, 0);
     set_relation(iseq, parent);
 
-    OBJ_FREEZE(name);
-    OBJ_FREEZE(path);
+    name = rb_fstring(name);
+    path = rb_fstring(path);
 
     iseq_location_setup(iseq, path, absolute_path, name, first_lineno);
     if (iseq != iseq->local_iseq) {
