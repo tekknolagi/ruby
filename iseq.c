@@ -190,7 +190,6 @@ iseq_location_setup(rb_iseq_t *iseq, VALUE path, VALUE absolute_path, VALUE name
     else {
 	OBJ_WRITE(iseq->self, &loc->absolute_path, absolute_path);
     }
-    name = rb_fstring(name);
     OBJ_WRITE(iseq->self, &loc->label, name);
     OBJ_WRITE(iseq->self, &loc->base_label, name);
     loc->first_lineno = first_lineno;
