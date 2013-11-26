@@ -2254,8 +2254,9 @@ compile_dstr_fragments(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE *node, int *cntp)
 
     debugp_param("nd_lit", lit);
     if (!NIL_P(lit)) {
-	hide_obj(lit);
 	cnt++;
+	if (RB_TYPE_P(lit, T_STRING))
+	    lit = node->nd_lit = rb_fstring(node->nd_lit);
 	ADD_INSN1(ret, nd_line(node), putobject, lit);
     }
 
