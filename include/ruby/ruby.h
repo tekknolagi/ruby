@@ -1067,8 +1067,13 @@ struct RStruct {
 #define RSTRUCT_SET(st, idx, v) OBJ_WRITE(st, &RSTRUCT_CONST_PTR(st)[idx], (v))
 #define RSTRUCT_GET(st, idx)    (RSTRUCT_CONST_PTR(st)[idx])
 
+#define RBIGNUM_EMBED_LEN_NUMBITS 3
 #ifndef RBIGNUM_EMBED_LEN_MAX
-# define RBIGNUM_EMBED_LEN_MAX ((int)((sizeof(VALUE)*3)/sizeof(BDIGIT)))
+# if (SIZEOF_VALUE*3/SIZEOF_ACTUAL_BDIGIT) < (1 << RBIGNUM_EMBED_LEN_NUMBITS)-1
+#   define RBIGNUM_EMBED_LEN_MAX (SIZEOF_VALUE*3/SIZEOF_ACTUAL_BDIGIT)
+# else
+#   define RBIGNUM_EMBED_LEN_MAX ((1 << RBIGNUM_EMBED_LEN_NUMBITS)-1)
+# endif
 #endif
 struct RBignum {
     struct RBasic basic;
@@ -1091,7 +1096,7 @@ struct RBignum {
 
 #define RBIGNUM_EMBED_FLAG FL_USER2
 #define RBIGNUM_EMBED_LEN_MASK (FL_USER5|FL_USER4|FL_USER3)
-#define RBIGNUM_EMBED_LEN_SHIFT (FL_USHIFT+3)
+#define RBIGNUM_EMBED_LEN_SHIFT (FL_USHIFT+RBIGNUM_EMBED_LEN_NUMBITS)
 #define RBIGNUM_LEN(b) \
     ((RBASIC(b)->flags & RBIGNUM_EMBED_FLAG) ? \
      (long)((RBASIC(b)->flags >> RBIGNUM_EMBED_LEN_SHIFT) & \

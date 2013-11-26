@@ -1,3 +1,225 @@
+Tue Nov 26 06:42:50 2013  Aman Gupta <ruby@tmm1.net>
+
+	* NEWS: Add ObjectSpace.after_gc_{start,end}_hook=
+	* ext/objspace/objspace_dump.c: [DOC] catch up dump/dump_all to r43679
+
+Tue Nov 26 04:12:10 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master 612f85a.  Notable changes:
+
+	  Fixed installation and activation of git: and path: gems via
+	  Gem.use_gemdeps
+
+	  Improved documentation coverage
+
+	* test/rubygems:  ditto.
+
+Mon Nov 25 22:23:03 2013  Zachary Scott  <e@zzak.io>
+
+	* lib/xmlrpc.rb: [DOC] Fix link to xmlrpc4r site [Bug #9148]
+	  Patch by Giorgos Tsiftsis
+
+Mon Nov 25 19:48:10 2013  Zachary Scott  <e@zzak.io>
+
+	* lib/uri/common.rb: [DOC] typo fixes by @vipulnsward [Fixes GH-456]
+	  https://github.com/ruby/ruby/pull/456
+	* lib/uri/generic.rb: [DOC] ditto.
+
+Mon Nov 25 14:34:42 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/bigdecimal/bigdecimal.gemspec: bump BigDecimal to 1.2.3 for
+	  proper release date in RubyGems
+
+Mon Nov 25 14:25:08 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/bigdecimal/bigdecimal.gemspec: Remove Gem::Specification#date
+	  We should rely on rubygems to create the date the gem was released
+	  for each version.
+
+Mon Nov 25 06:53:30 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* internal.h: do not use ruby_sized_xrealloc() and ruby_sized_xfree()
+	  if HAVE_MALLOC_USABLE_SIZE (or _WIN32) is defined.
+
+	  We don't need these function if malloc_usable_size() is available.
+
+	* gc.c: catch up this change.
+
+	* gc.c: define HAVE_MALLOC_USABLE_SIZE on _WIN32.
+
+	* array.c (ary_resize_capa): do not use ruby_sized_xfree() with
+	  local variable to avoid "unused local variable" warning.
+	  This change only has few impact.
+
+	* string.c (rb_str_resize): ditto.
+
+Mon Nov 25 05:05:04 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* test/-ext-/tracepoint/test_tracepoint.rb: catch up GC.stat changes
+	  at r43835.
+
+Mon Nov 25 04:45:59 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: continue to change OLDSPACE -> OLDMALLOC.
+	  RGENGC_ESTIMATE_OLDSPACE -> RGENGC_ESTIMATE_OLDMALLOC.
+
+	* gc.c: add a new major GC reason GPR_FLAG_MAJOR_BY_OLDMALLOC.
+
+Mon Nov 25 04:16:09 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: change terminology "..._num" to "..._slots" about slot operation.
+	  * final_num -> final_slots
+	  * objspace_live_num() -> objspace_live_slots()
+	  * objspace_limit_num() -> objspace_limit_slots()
+	  * objspace_free_num() -> objspace_free_slots()
+
+Mon Nov 25 04:03:12 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_stat): add internal information.
+	  * heap_swept_slot
+	  * malloc_increase
+	  * malloc_limit
+	  * remembered_shady_object
+	  * remembered_shady_object_limit
+	  * old_object
+	  * old_object_limit
+	  * oldmalloc_increase
+	  * oldmalloc_limit
+
+	* gc.c (gc_stat): rename names.
+	  * heap_live_num -> heap_live_slot
+	  * heap_free_num -> heap_free_slot
+	  * heap_final_slot -> heap_final_slot
+
+	  Quote from RDoc of GC.stat():
+	    "The contents of the hash are implementation specific and may
+	    be changed in the future."
+
+	* test/ruby/test_gc.rb: catch up this change.
+
+Mon Nov 25 03:59:45 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* test/ruby/test_gc.rb: catch up last commit.
+	  Now RUBY_GC_OLDSPACE_LIMIT(...) is RUBY_GC_OLDMALLOC_LIMIT(...).
+
+Mon Nov 25 03:10:46 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: change terminology OLDSPACE -> OLDMALLOC.
+	  (oldspace -> oldmalloc for variable names)
+
+	  OLDSPACE is confusing because it is not includes slots.
+	  To more clearly, rename such as (oldspace_limit -> oldmalloc_limit).
+	  It is clear that it measures (estimates) malloc()'ed size.
+
+Mon Nov 25 00:50:03 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* internal.h: use __builtin_bswap16() if possible.
+
+	* configure.in: check existence of __builtin_bswap16().
+
+Sun Nov 24 22:24:19 2013  Tanaka Akira  <akr@fsij.org>
+
+	* bignum.c (bigxor_int): Apply BIGLO for long in a BDIGIT expression.
+	  (bigor_int): Ditto.
+	  (bigand_int): Ditto.
+
+Sun Nov 24 18:13:23 2013  Tanaka Akira  <akr@fsij.org>
+
+	* include/ruby/defines.h (SIZEOF_ACTUAL_BDIGIT): Defined.
+
+	* include/ruby/ruby.h (RBIGNUM_EMBED_LEN_MAX): Use
+	  SIZEOF_ACTUAL_BDIGIT instead of SIZEOF_BDIGITS.
+	  SIZEOF_BDIGITS can be different to sizeof(BDIGIT).
+
+Sun Nov 24 13:49:08 2013  Tanaka Akira  <akr@fsij.org>
+
+	* include/ruby/defines.h: Don't use int128_t for Bignum.
+	  It's not always faster.
+
+	* bignum.c: Ditto.
+
+Sun Nov 24 10:18:15 2013  Aman Gupta <ruby@tmm1.net>
+
+	* NEWS: Add details about new debugging features and APIs.
+
+Sun Nov 24 09:37:20 2013  Andrew Vit  <andrew@avit.ca>
+
+	* lib/csv.rb: Optimize header hashes by freezing string keys.
+	  [ruby-core:58510]
+
+Sun Nov 24 09:18:06 2013  Aman Gupta <ruby@tmm1.net>
+
+	* ext/objspace/objspace_dump.c (dump_object): Use PRIuSIZE to print
+	  size_t for better win32 compatibility.
+	* test/objspace/test_objspace.rb (test_dump_all): Hold reference to
+	  test string to avoid failure due to GC. Reduce size of failure message
+	  using grep(/TEST STRING/).
+
+Sun Nov 24 08:38:00 2013  Kyle Stevens  <kstevens715@gmail.com>
+
+	* lib/csv.rb: If skip_lines is set to a String, convert it to a Regexp
+	  to prevent the alternative, which is that each line in the CSV gets
+	  converted to a Regexp when calling skip_lines#match.
+
+Sun Nov 24 01:03:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (BigDecimal_power): Use FIX2LONG instead
+	  of FIX2INT to avoid conversion error.
+
+Sun Nov 24 00:44:30 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* include/ruby/ruby.h (RBIGNUM_EMBED_LEN_MAX): define by macros
+	  defined in defines.h, instead of complex and repeated expression.
+
+Sat Nov 23 22:22:26 2013  Tanaka Akira  <akr@fsij.org>
+
+	* include/ruby/ruby.h (RBIGNUM_EMBED_LEN_MAX): Limit the value to
+	  less than 8.
+
+Sat Nov 23 19:52:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/lib/bigdecimal/math.rb (BigMath.E): Use BigMath.exp.
+	  [Feature #6857] [ruby-core:47130]
+
+Sat Nov 23 19:46:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (BigMath_s_exp): Optimize the
+	  calculation algorithm to reduce the number of divisions.
+	  This optimization was proposed by Rafal Michalski.
+	  [Feature #6857] [ruby-core:47130]
+
+Sat Nov 23 19:20:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (BigDecimal_div2): The signature was
+	  changed to allow us to pass arguments directly.
+
+	* ext/bigdecimal/bigdecimal.c (BigDecimal_div3): Added for the role of
+	  the old BigDecimal_div2.
+
+Sat Nov 23 12:31:00 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: fix global variable name.
+	  Now we have following environments (and related variable names).
+
+	  * RUBY_GC_HEAP_INIT_SLOTS
+	  * RUBY_GC_HEAP_FREE_SLOTS
+	  * RUBY_GC_HEAP_GROWTH_FACTOR (new from 2.1)
+	  * RUBY_GC_HEAP_GROWTH_MAX_SLOTS (new from 2.1)
+
+	  * obsolete
+	    * RUBY_FREE_MIN       -> RUBY_GC_HEAP_FREE_SLOTS (from 2.1)
+	    * RUBY_HEAP_MIN_SLOTS -> RUBY_GC_HEAP_INIT_SLOTS (from 2.1)
+
+	  * RUBY_GC_MALLOC_LIMIT
+	  * RUBY_GC_MALLOC_LIMIT_MAX (new from 2.1)
+	  * RUBY_GC_MALLOC_LIMIT_GROWTH_FACTOR (new from 2.1)
+
+	  * RUBY_GC_OLDSPACE_LIMIT (new from 2.1)
+	  * RUBY_GC_OLDSPACE_LIMIT_MAX (new from 2.1)
+	  * RUBY_GC_OLDSPACE_LIMIT_GROWTH_FACTOR (new from 2.1)
+
+	* test/ruby/test_gc.rb: catch up this change.
+
 Sat Nov 23 09:45:49 2013  Aman Gupta <ruby@tmm1.net>
 
 	* marshal.c (w_object): Use HASH_PROC_DEFAULT directly from internal.h
@@ -267,7 +489,7 @@ Thu Nov 21 13:43:07 2013  Koichi Sasada  <ko1@atdot.net>
 	  "struct reflist".
 
 	* gc.c (init_mark_stack): do not use push_mark_stack_chunk() at init.
-	  This pre-allocation causes failure on is_mark_stask_empty()
+	  This pre-allocation causes failure on is_mark_stack_empty()
 	  without any pushing.
 
 Thu Nov 21 13:40:20 2013  Zachary Scott  <e@zzak.io>
