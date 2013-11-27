@@ -76,10 +76,17 @@ rb_any_cmp(VALUE a, VALUE b)
     return !rb_eql(a, b);
 }
 
+static VALUE
+hash_recursive(VALUE obj, VALUE arg, int recurse)
+{
+    if (recurse) return INT2FIX(0);
+    return rb_funcallv(obj, id_hash, 0, 0);
+}
+
 VALUE
 rb_hash(VALUE obj)
 {
-    VALUE hval = rb_funcall(obj, id_hash, 0);
+    VALUE hval = rb_exec_recursive(hash_recursive, obj, 0);
   retry:
     switch (TYPE(hval)) {
       case T_FIXNUM:
@@ -1255,7 +1262,9 @@ static int
 hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
 {
     if (!existing) {
-	*key = rb_str_new_frozen((VALUE)*key);
+	VALUE str = (VALUE)*key;
+	if (!OBJ_FROZEN(str))
+	    *key = rb_fstring(str);
     }
     return hash_aset(key, val, arg, existing);
 }
@@ -1937,7 +1946,7 @@ recursive_hash(VALUE hash, VALUE dummy, int recur)
 static VALUE
 rb_hash_hash(VALUE hash)
 {
-    return rb_exec_recursive_outer(recursive_hash, hash, 0);
+    return rb_exec_recursive_paired(recursive_hash, hash, hash, 0);
 }
 
 static int

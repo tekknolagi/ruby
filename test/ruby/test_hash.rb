@@ -209,6 +209,12 @@ class TestHash < Test::Unit::TestCase
     assert_equal(256,     h[z])
   end
 
+  def test_ASET_string
+    a = {"ABC" => :t}
+    b = {"ABC" => :t}
+    assert_same a.keys[0], b.keys[0]
+  end
+
   def test_EQUAL # '=='
     h1 = @cls[ "a" => 1, "c" => 2 ]
     h2 = @cls[ "a" => 1, "c" => 2, 7 => 35 ]
@@ -1058,6 +1064,20 @@ class TestHash < Test::Unit::TestCase
     [@cls[1=>2], @cls[123=>"abc"]].each do |h|
       assert_not_equal(h.hash, h.invert.hash, feature4262)
     end
+  end
+
+  def test_recursive_hash_value
+    bug9151 = '[ruby-core:58567] [Bug #9151]'
+
+    s = Struct.new(:x) {def hash; [x,""].hash; end}
+    a = s.new
+    b = s.new
+    a.x = b
+    b.x = a
+    ah = assert_nothing_raised(SystemStackError, bug9151) {a.hash}
+    bh = assert_nothing_raised(SystemStackError, bug9151) {b.hash}
+    assert_equal(ah, bh, bug9151)
+    assert_not_equal([a,"hello"].hash, [b,"world"].hash, bug9151)
   end
 
   class TestSubHash < TestHash

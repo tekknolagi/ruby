@@ -1,3 +1,163 @@
+Wed Nov 27 16:07:19 2013  Aman Gupta <ruby@tmm1.net>
+
+	* test/ruby/test_gc.rb (class TestGc): Fix warning in
+	  test_expand_heap.
+
+Wed Nov 27 15:55:52 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c (Init_GC): Add new GC::INTERNAL_CONSTANTS for information about
+	  GC heap/page/slot sizing.
+	* test/ruby/test_gc.rb (class TestGc): test for above.
+
+Wed Nov 27 15:21:17 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c (gc_page_sweep): Fix compile warning from last commit.
+	* hash.c (hash_aset_str): Re-use existing variable to avoid
+	  unnecessary pointer dereferencing.
+
+Wed Nov 27 15:12:55 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_page_sweep): disable debug print.
+
+Wed Nov 27 15:05:59 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_stat): add new information heap_eden_page_length and
+	  heap_tomb_page_length.
+
+	* test/ruby/test_gc.rb: fix to use GC.stat[:heap_eden_page_length]
+	  instead of GC.stat[:heap_length].
+	  This test expects `heap_eden_page_length' (used pages size).
+
+Wed Nov 27 15:02:53 2013  Aman Gupta <ruby@tmm1.net>
+
+	* test/ruby/test_eval.rb (class TestEval): Use assert_same instead of
+	  assert_equal.
+	* test/ruby/test_hash.rb (class TestHash): ditto.
+	* test/ruby/test_iseq.rb (class TestISeq): ditto.
+
+Wed Nov 27 14:50:02 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rinda/ring.rb:  Announce RingServer for the same process.
+	  [ruby-trunk - Bug #9163]
+	* test/rinda/test_rinda.rb:  Tests for the above.
+
+Wed Nov 27 14:37:33 2013  Aman Gupta <ruby@tmm1.net>
+
+	* test/ruby/test_eval.rb (class TestEval): Add test for shared eval
+	  filenames via rb_fstring().
+	* test/ruby/test_iseq.rb (class TestISeq): Add test for shared
+	  iseq labels via rb_fstring(). [Bug #9159]
+
+Wed Nov 27 14:24:55 2013  Aman Gupta <ruby@tmm1.net>
+
+	* hash.c (hash_aset_str): Use rb_fstring() to de-duplicate hash string
+	  keys. Patch by Eric Wong. [Bug #8998] [ruby-core:57727]
+	* test/ruby/test_hash.rb (class TestHash): test for above.
+
+Wed Nov 27 10:39:39 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c: Rename rb_heap_t members:
+	    used -> page_length
+	    limit -> total_slots
+
+Wed Nov 27 08:24:49 2013  Aman Gupta <ruby@tmm1.net>
+
+	* compile.c: Use rb_fstring() to de-duplicate string literals in code.
+	  [ruby-core:58599] [Bug #9159] [ruby-core:54405]
+	* iseq.c (prepare_iseq_build): De-duplicate iseq labels and source
+	  locations.
+	* re.c (rb_reg_initialize): Use rb_fstring() for regex string.
+	* string.c (rb_fstring): Handle non-string and already-fstr arguments.
+	* vm_eval.c (eval_string_with_cref): De-duplicate eval source
+	  filename.
+
+Wed Nov 27 07:13:54 2013  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/psych/lib/psych.rb: psych version 2.0.2
+	* ext/psych/psych.gemspec: ditto
+
+Wed Nov 27 06:40:18 2013  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/psych/lib/psych/scalar_scanner.rb: fix support for negative
+	  years.
+	* ext/psych/lib/psych/visitors/yaml_tree.rb: ditto
+	* test/psych/test_date_time.rb: test for change.
+	  Fixes: https://github.com/tenderlove/psych/issues/168
+
+Wed Nov 27 04:46:55 2013  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/psych/lib/psych/scalar_scanner.rb: fix regexp for matching TIME
+	  strings.
+	* test/psych/test_date_time.rb: test for change.
+	  Fixes: https://github.com/tenderlove/psych/issues/171
+
+Wed Nov 27 02:26:58 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* string.c (str_new4): copy the original capacity so that memsize of
+	  frozen shared string returns correct size.
+
+Wed Nov 27 02:20:13 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* array.c (rb_ary_hash): should not ignore the rest of recursive
+	  constructs.
+
+	* hash.c (rb_hash_hash): ditto.
+
+	* range.c (range_hash): ditto.
+
+	* struct.c (rb_struct_hash): ditto.
+
+	* test/-ext-/test_recursion.rb (TestRecursion): separate from
+	  test/ruby/test_thread.rb.
+
+Tue Nov 26 22:43:36 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* hash.c (rb_hash): cut off if recursion detected to get rid of stack
+	  overflow.  [ruby-core:58567] [Bug #9151]
+
+Tue Nov 26 20:02:39 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* test/ruby/test_settracefunc.rb: add tests for a_call/a_return
+	  by Brandur <brandur@mutelight.org> [Feature #9120]
+
+Tue Nov 26 19:29:52 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* common.mk: add useful config "set breakpoint pending on"
+	  for run.gdb.
+
+Tue Nov 26 19:17:47 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* ext/objspace/object_tracing.c (newobj_i): skip class_path if class
+	  is frozen.
+
+	  rb_class_path() can modify frozen classes (and causes errors).
+	  This patch is temporary. We need no-modification/no-allocation
+	  class path function.
+
+Tue Nov 26 18:12:13 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c: skip "exception check" and "reentrant check (only normal
+	  events)  for internal events.
+
+	  Reentrant check for internal events are remaining.
+
+Tue Nov 26 17:38:16 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c: prohibit to specify normal events and internal events
+	  simultaneously.
+	  I will introduce special care for internal events later.
+
+	* ext/-test-/tracepoint/tracepoint.c: test this behavior.
+
+	* test/-ext-/tracepoint/test_tracepoint.rb: ditto.
+
+Tue Nov 26 16:30:31 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* file.c (rb_readlink): fix buffer overflow on a long symlink. since
+	  rb_str_modify_expand() expands from its length but not its capacity,
+	  need to set the length properly for each expansion.
+	  [ruby-core:58592] [Bug #9157]
+
 Tue Nov 26 14:23:17 2013  Aman Gupta <ruby@tmm1.net>
 
 	* ext/objspace/objspace_dump.c (dump_append_string_value): Escape
