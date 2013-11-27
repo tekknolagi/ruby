@@ -181,7 +181,7 @@ static ruby_gc_params_t gc_params = {
  * 3: show all references
  */
 #ifndef RGENGC_CHECK_MODE
-#define RGENGC_CHECK_MODE  3
+#define RGENGC_CHECK_MODE  0
 #endif
 
 /* RGENGC_PROFILE
@@ -3544,7 +3544,8 @@ rb_gc_resurrect(VALUE obj)
     if (is_lazy_sweeping(heap_eden) &&
 	!gc_marked(objspace, obj) &&
 	!is_swept_object(objspace, obj)) {
-	gc_mark_ptr(objspace, obj);
+	if (!gc_mark_ptr(objspace, obj)) return; /* already marked */
+	push_mark_stack(&objspace->mark_stack, obj);
     }
 }
 
