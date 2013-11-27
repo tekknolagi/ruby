@@ -1257,7 +1257,7 @@ hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existi
     if (!existing) {
 	VALUE str = (VALUE)*key;
 	if (RB_TYPE_P(str, T_SYMBOL))
-	    *key = rb_id2str(SYM2ID(*key));
+	    *key = rb_str_new_frozen((VALUE)*key);
 	else
 	    *key = rb_fstring((VALUE)*key);
     }
