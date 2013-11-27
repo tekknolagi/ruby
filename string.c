@@ -142,12 +142,17 @@ rb_fstring(VALUE str)
 	return str;
 
     if (st_lookup(frozen_strings, (st_data_t)str, &fstr)) {
+	if (rb_gc_is_dying_object(fstr)) {
+	    /* because of lazy sweep, str may be unmaked already and swept at next time */
+	    st_delete(frozen_strings, &fstr, NULL);
+	    goto rebuild;
+	}
+	else {
 	str = (VALUE)fstr;
-	/* because of lazy sweep, str may be unmaked already and swept
-	 * at next time */
-	rb_gc_resurrect(str);
+	}
     }
     else {
+      rebuild:
 	str = rb_str_new_frozen(str);
 	RBASIC(str)->flags |= RSTRING_FSTR;
 	st_insert(frozen_strings, str, str);

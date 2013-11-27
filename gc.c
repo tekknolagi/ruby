@@ -2176,16 +2176,20 @@ is_id_value(rb_objspace_t *objspace, VALUE ptr)
 }
 
 static inline int
-heap_is_swept_object(rb_objspace_t *objspace, rb_heap_t *heap, VALUE ptr)
+is_swept_object(rb_objspace_t *objspace, VALUE ptr)
 {
     struct heap_page *page = GET_HEAP_PAGE(ptr);
     return page->before_sweep ? FALSE : TRUE;
 }
 
-static inline int
-is_swept_object(rb_objspace_t *objspace, VALUE ptr)
+int
+rb_gc_is_dying_object(VALUE obj)
 {
-    if (heap_is_swept_object(objspace, heap_eden, ptr)) {
+    rb_objspace_t *objspace = &rb_objspace;
+
+    if (is_lazy_sweeping(heap_eden) &&
+	!is_swept_object(objspace, obj) &&
+	!gc_marked(objspace, obj)) {
 	return TRUE;
     }
     else {
@@ -3532,20 +3536,6 @@ void
 rb_gc_mark(VALUE ptr)
 {
     gc_mark(&rb_objspace, ptr);
-}
-
-/* resurrect non-marked `obj' if obj is before swept */
-
-void
-rb_gc_resurrect(VALUE obj)
-{
-    rb_objspace_t *objspace = &rb_objspace;
-
-    if (is_lazy_sweeping(heap_eden) &&
-	!gc_marked(objspace, obj) &&
-	!is_swept_object(objspace, obj)) {
-	gc_mark_ptr(objspace, obj);
-    }
 }
 
 static void
