@@ -3542,8 +3542,7 @@ rb_gc_resurrect(VALUE obj)
     rb_objspace_t *objspace = &rb_objspace;
 
     if (is_lazy_sweeping(heap_eden) &&
-	!gc_marked(objspace, obj) &&
-	!is_swept_object(objspace, obj)) {
+	!gc_marked(objspace, obj)) {
 	gc_mark(objspace, obj);
     }
 }
