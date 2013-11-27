@@ -3544,7 +3544,7 @@ rb_gc_resurrect(VALUE obj)
     if (is_lazy_sweeping(heap_eden) &&
 	!gc_marked(objspace, obj)) {
 	gc_mark_ptr(objspace, obj);
-	push_mark_stack(&objspace->mark_stack, obj);
+	/*push_mark_stack(&objspace->mark_stack, obj);*/
     }
 }
 
