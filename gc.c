@@ -2188,7 +2188,6 @@ rb_gc_is_dying_object(VALUE obj)
     rb_objspace_t *objspace = &rb_objspace;
 
     if (is_lazy_sweeping(heap_eden) &&
-	!is_swept_object(objspace, obj) &&
 	!gc_marked(objspace, obj)) {
 	return TRUE;
     }
