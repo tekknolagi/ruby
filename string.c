@@ -150,6 +150,10 @@ rb_fstring(VALUE str)
     else {
 	str = rb_str_new_frozen(str);
 	RBASIC(str)->flags |= RSTRING_FSTR;
+	if (STR_SHARED_P(str))
+	    fprintf(stderr, "SHARED FSTRING\n");
+	else if (STR_ASSOC_P(str))
+	    fprintf(stderr, "ASSOC FSTRING\n");
 	st_insert(frozen_strings, str, str);
     }
     return str;
