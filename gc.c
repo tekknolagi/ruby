@@ -3908,9 +3908,6 @@ gc_mark_stacked_objects(rb_objspace_t *objspace)
 
     if (!mstack->index) return;
     while (pop_mark_stack(mstack, &obj)) {
-	if (!gc_marked(objspace, obj)) {
-	    rb_bug("gc_mark_stacked_objects: %p (%s) is infant, but not marked.", (void *)obj, obj_type_name(obj));
-	}
         gc_mark_children(objspace, obj);
     }
     shrink_stack_chunk_cache(mstack);
