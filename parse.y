@@ -10333,7 +10333,7 @@ register_symid(ID id, const char *name, long len, rb_encoding *enc)
 static ID
 register_symid_str(ID id, VALUE str)
 {
-    str = rb_fstring(str);
+    OBJ_FREEZE(str);
 
     if (RUBY_DTRACE_SYMBOL_CREATE_ENABLED()) {
 	RUBY_DTRACE_SYMBOL_CREATE(RSTRING_PTR(str), rb_sourcefile(), rb_sourceline());

@@ -138,9 +138,6 @@ rb_fstring(VALUE str)
     st_data_t fstr;
     Check_Type(str, T_STRING);
 
-    if (!frozen_strings)
-	frozen_strings = st_init_table(&fstring_hash_type);
-
     if (FL_TEST(str, RSTRING_FSTR))
 	return str;
 
@@ -8719,6 +8716,8 @@ Init_String(void)
 {
 #undef rb_intern
 #define rb_intern(str) rb_intern_const(str)
+
+    frozen_strings = st_init_table(&fstring_hash_type);
 
     rb_cString  = rb_define_class("String", rb_cObject);
     rb_include_module(rb_cString, rb_mComparable);
