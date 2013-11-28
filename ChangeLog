@@ -1,3 +1,51 @@
+Thu Nov 28 09:18:39 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* string.c (rb_fstring): fstrings should be ELTS_SHARED.
+	  If we resurrect dying objects (non-marked, but not swept yet),
+	  pointing shared string can be collected.
+	  To avoid such issue, fstrings (recorded to fstring_table)
+	  should not be ELTS_SHARED (should not have a shared string).
+
+Thu Nov 28 01:35:08 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* st.c (st_keys): fix to use st_index_t for size of hash.
+
+Thu Nov 28 00:36:52 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* st.c (st_keys): define st_keys(). it writes each key to buffer.
+
+	* hash.c (rb_hash_keys): use st_keys() for performance improvement
+	  if st_data_t and VALUE are compatible.
+
+	* st.h: define macro ST_DATA_COMPATIBLE_P() to predicate whether
+	  st_data_t and passed type are compatible.
+
+	* configure.in: check existence of builtin function to use in
+	  ST_DATA_COMPATIBLE_P().
+
+Thu Nov 28 00:07:28 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* ruby_atomic.h: remove duplicate definisions between ATOMIC_XXX
+	  and ATOMIC_SIZE_XXX.
+
+Wed Nov 27 23:55:50 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* ruby_atomic.h: define ATOMIC_SIZE_CAS() with
+	  __atomic_compare_exchange_n() and refactoring.
+
+Tue Nov 27 21:43:00 2013  Akira Matsuda  <ronnie@dio.jp>
+
+	* lib/irb/notifier.rb:  [Doc] Fix typo
+	* ext/json/lib/json/common.rb:  Ditto.
+
+Tue Nov 27 18:04:57 2013  Akira Matsuda  <ronnie@dio.jp>
+
+	* lib/irb/notifier.rb:  Fix typo
+
+Wed Nov 27 17:54:57 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_mark_stacked_objects): check only when check_mode > 0.
+
 Wed Nov 27 16:07:19 2013  Aman Gupta <ruby@tmm1.net>
 
 	* test/ruby/test_gc.rb (class TestGc): Fix warning in
