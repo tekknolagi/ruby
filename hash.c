@@ -1713,7 +1713,7 @@ rb_hash_keys(VALUE hash)
 
 	if (OBJ_PROMOTED(keys)) rb_gc_writebarrier_remember_promoted(keys);
 	RARRAY_PTR_USE(keys, ptr, {
-	    size = st_keys(table, ptr, size);
+	    size = st_keys_check(table, ptr, size, Qundef);
 	});
 	rb_ary_set_len(keys, size);
     }
@@ -1746,12 +1746,26 @@ values_i(VALUE key, VALUE value, VALUE ary)
 VALUE
 rb_hash_values(VALUE hash)
 {
-    VALUE ary;
+    VALUE values;
+    st_index_t size = RHASH_SIZE(hash);
 
-    ary = rb_ary_new_capa(RHASH_SIZE(hash));
-    rb_hash_foreach(hash, values_i, ary);
+    values = rb_ary_new_capa(size);
+    if (size == 0) return values;
 
-    return ary;
+    if (ST_DATA_COMPATIBLE_P(VALUE)) {
+	st_table *table = RHASH(hash)->ntbl;
+
+	if (OBJ_PROMOTED(values)) rb_gc_writebarrier_remember_promoted(values);
+	RARRAY_PTR_USE(values, ptr, {
+	    size = st_values_check(table, ptr, size, Qundef);
+	});
+	rb_ary_set_len(values, size);
+    }
+    else {
+	rb_hash_foreach(hash, values_i, values);
+    }
+
+    return values;
 }
 
 /*

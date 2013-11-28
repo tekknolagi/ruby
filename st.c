@@ -1091,10 +1091,10 @@ st_foreach(st_table *table, int (*func)(ANYARGS), st_data_t arg)
     return 0;
 }
 
-st_index_t
-st_keys(st_table *table, st_data_t *keys, st_index_t size)
+static st_index_t
+get_keys(st_table *table, st_data_t *keys, st_index_t size, int check, st_data_t never)
 {
-    st_data_t key, never = (st_data_t)Qundef;
+    st_data_t key;
     st_data_t *keys_start = keys;
 
     if (table->entries_packed) {
@@ -1103,21 +1103,74 @@ st_keys(st_table *table, st_data_t *keys, st_index_t size)
 	if (size > table->real_entries) size = table->real_entries;
 	for (i = 0; i < size; i++) {
 	    key = PKEY(table, i);
-	    if (key == never) continue;
+	    if (check && key == never) continue;
 	    *keys++ = key;
 	}
     }
     else {
 	st_table_entry *ptr = table->head;
 	st_data_t *keys_end = keys + size;
-	while (ptr && keys < keys_end) {
+	for (; ptr && keys < keys_end; ptr = ptr->fore) {
 	    key = ptr->key;
-	    if (key != never) *keys++ = key;
-	    ptr = ptr->fore;
+	    if (check && key == never) continue;
+	    *keys++ = key;
 	}
     }
 
     return keys - keys_start;
+}
+
+st_index_t
+st_keys(st_table *table, st_data_t *keys, st_index_t size)
+{
+    return get_keys(table, keys, size, 0, 0);
+}
+
+st_index_t
+st_keys_check(st_table *table, st_data_t *keys, st_index_t size, st_data_t never)
+{
+    return get_keys(table, keys, size, 1, never);
+}
+
+static st_index_t
+get_values(st_table *table, st_data_t *values, st_index_t size, int check, st_data_t never)
+{
+    st_data_t key;
+    st_data_t *values_start = values;
+
+    if (table->entries_packed) {
+	st_index_t i;
+
+	if (size > table->real_entries) size = table->real_entries;
+	for (i = 0; i < size; i++) {
+	    key = PKEY(table, i);
+	    if (check && key == never) continue;
+	    *values++ = PVAL(table, i);
+	}
+    }
+    else {
+	st_table_entry *ptr = table->head;
+	st_data_t *values_end = values + size;
+	for (; ptr && values < values_end; ptr = ptr->fore) {
+	    key = ptr->key;
+	    if (check && key == never) continue;
+	    *values++ = ptr->record;
+	}
+    }
+
+    return values - values_start;
+}
+
+st_index_t
+st_values(st_table *table, st_data_t *values, st_index_t size)
+{
+    return get_values(table, values, size, 0, 0);
+}
+
+st_index_t
+st_values_check(st_table *table, st_data_t *values, st_index_t size, st_data_t never)
+{
+    return get_values(table, values, size, 1, never);
 }
 
 #if 0  /* unused right now */

@@ -146,6 +146,24 @@ A good template for feature proposal should look something like this:
 [See also]
   Links to the other related resources
 
+=== Slideshow
+
+On Ruby Developer Meeting Japan, committers discuss about Feature Proposals together at Tokyo. We'll judge proposals accept, reject, or feedback. If you have a stalled proposal, making a slide to submit is good way to get feedback.
+
+Slides should be:
+
+* One-page slide
+* Include a corresponding ticket number
+* MUST include a figure and/or short example code
+* SHOULD have less sentence in natural language (try to write less than 140 characters)
+* It is RECOMMENDED to itemize: motivation/use case, propoasl, pros/cons, corner case
+* PDF or Image (Web browsers can show it)
+
+Please note:
+
+* Even if the proposal is generally acceptable, it won't be accepted without writing corner cases in the ticket
+* Slide's exapmle: DevelopersMeeting20130727Japan
+
 == Backport Requests
 
 When a new version of Ruby is released it starts at patch level 0 (p0), and
@@ -254,6 +272,24 @@ Manual}[https://bugs.ruby-lang.org/projects/rurema] in Japanese.
 
 == Contributing A Patch
 
+=== Deciding what to patch
+
+Before you submit a patch, there are a few things you should know:
+
+* Pay attention to the maintenance policy for stable and maintained versions of Ruby.
+* Released versions in security mode will not merge feature changes.
+* Search for previous discussions on ruby-core to verify the maintenance policy
+* Patches must be distributed under Ruby's license.
+* This license may change in the future, you must join the discussion if you don't agree to the change
+
+To improve the chance your patch will be accepted please follow these simple rules:
+
+* Bug fixes should be committed on trunk first
+* Format of the patch file must be a unified diff (ie: diff -pu, svn diff, or git diff)
+* Don't introduce cosmetic changes
+* Follow the original coding style of the code
+* Don't mix different changes in one commit
+
 First thing you should do is check out the code if you haven't already:
 
   git clone git://github.com/ruby/ruby.git ruby-trunk
@@ -268,6 +304,8 @@ your local computer and won't be part of the official Ruby repository. It will
 be used to create patches based on the differences between your branch and
 trunk, or edge Ruby.
 
+=== Coding style
+
 Here are some general rules to follow when writing Ruby and C code for CRuby:
 
 * Indent 4 spaces for C with tabs for eight-space indentation (emacs default)
@@ -280,6 +318,11 @@ Here are some general rules to follow when writing Ruby and C code for CRuby:
 * Capitalize words.
 * ABBRs should be all upper case.
 * Do as others do
+
+=== ChangeLog
+
+Although not required, if you wish to add a ChangeLog entry for your change
+please note:
 
 You can use the following template for the ChangeLog entry on your commit:
 

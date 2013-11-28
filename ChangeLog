@@ -1,3 +1,80 @@
+Thu Nov 28 21:43:48 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/dtrace_probes.rdoc: [DOC] Import dtrace probes doc from wiki
+
+Thu Nov 28 21:17:32 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Add heading above ChangeLog tips to
+	  setup entry for commits, its not required. Actually easier if
+	  contributors don't include a ChangeLog entry.
+
+Thu Nov 28 21:16:18 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Add coding style heading for patch
+	  rules
+
+Thu Nov 28 21:15:45 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Add notes about deciding what to patch
+
+Thu Nov 28 19:43:45 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* benchmark/bm_hash_flatten.rb: added. r43896 is about 4 times faster
+	  than 2.0.0p353.
+
+	* benchmark/bm_hash_keys.rb: added. r43896 is about 5 times faster
+	  than 2.0.0p353.
+
+	* benchmark/bm_hash_values.rb: added. r43896 is about 5 times faster
+	  than 2.0.0p353.
+
+Thu Nov 28 19:29:04 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Add notes about slideshow proposals
+	  from wiki page: HowToRequestFeatures
+
+Thu Nov 28 17:34:42 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* st.c: add st_values() and st_values_check().
+
+	* include/ruby/st.h: add prototypes for above.
+
+	* hash.c (rb_hash_values): use st_values_check() for performance
+	 improvement if VALUE and st_data_t are compatible.
+
+Thu Nov 28 17:14:14 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* st.c (st_keys): fix not to use Qundef in st.c.
+
+	* include/ruby/st.h: define modified prototype.
+
+	* hash.c (rb_hash_keys): use modified st_keys().
+
+Thu Nov 28 16:34:43 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c: Expose details about last garbage collection via GC.stat.
+	* gc.c (gc_stat): Add :last_collection_flags for reason/trigger/type of
+	  last GC run.
+	* gc.c (gc_prof_sweep_timer_stop): Record HAVE_FINALIZE GPR even
+	  without GC_PROFILE_MORE_DETAIL.
+	* gc.c (gc_profile_flags): Add GC::Profiler.decode_flags to make sense
+	  of GC.stat[:last_collection_flags]
+	* test/ruby/test_gc.rb (class TestGc): Test for above.
+
+Thu Nov 28 16:15:47 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* win32/win32.c (rb_w32_dup2): extract from rb_cloexec_dup2() and
+	  redirect_dup2().
+
+Tue Nov 28 14:40:00 2013  Akira Matsuda  <ronnie@dio.jp>
+
+	* lib/drb/ssl.rb:  [Doc] Fix typo
+
+Thu Nov 28 13:56:05 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* common.mk (Doxyfile): tool/file2lastrev.rb needs running with
+	  BASERUBY since r43617.  [ruby-dev:47823] [Bug #9169]
+
 Thu Nov 28 09:18:39 2013  Koichi Sasada  <ko1@atdot.net>
 
 	* string.c (rb_fstring): fstrings should be ELTS_SHARED.
@@ -17,8 +94,8 @@ Thu Nov 28 00:36:52 2013  Masaki Matsushita  <glass.saga@gmail.com>
 	* hash.c (rb_hash_keys): use st_keys() for performance improvement
 	  if st_data_t and VALUE are compatible.
 
-	* st.h: define macro ST_DATA_COMPATIBLE_P() to predicate whether
-	  st_data_t and passed type are compatible.
+	* include/ruby/st.h: define macro ST_DATA_COMPATIBLE_P() to predicate
+	  whether st_data_t and passed type are compatible.
 
 	* configure.in: check existence of builtin function to use in
 	  ST_DATA_COMPATIBLE_P().
