@@ -2616,7 +2616,7 @@ rb_ary_bsearch(VALUE ary)
 
 
 static VALUE
-sort_by_i(VALUE i)
+sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, dummy))
 {
     return rb_yield(i);
 }
@@ -3169,8 +3169,9 @@ rb_ary_delete_if(VALUE ary)
 }
 
 static VALUE
-take_i(VALUE val, VALUE *args, int argc, VALUE *argv)
+take_i(RB_BLOCK_CALL_FUNC_ARGLIST(val, cbarg))
 {
+    VALUE *args = (VALUE *)cbarg;
     if (args[1]-- == 0) rb_iter_break();
     if (argc > 1) val = rb_ary_new4(argc, argv);
     rb_ary_push(args[0], val);
