@@ -1120,7 +1120,7 @@ rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
     RCLASS_REFINED_CLASS(c) = klass;
 
     RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(c)) =
-	RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(RCLASS_ORIGIN(module)));
+	RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(module));
 
     module = RCLASS_SUPER(module);
     while (module && module != klass) {

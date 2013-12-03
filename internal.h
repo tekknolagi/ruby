@@ -300,7 +300,7 @@ RCLASS_M_TBL_INIT(VALUE c)
     struct method_table_wrapper *wrapper;
     wrapper = ALLOC(struct method_table_wrapper);
     wrapper->tbl = st_init_numtable();
-
+    wrapper->serial = 0;
     RCLASS_M_TBL_WRAPPER(c) = wrapper;
 }
 
