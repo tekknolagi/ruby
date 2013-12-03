@@ -156,6 +156,7 @@ class_alloc(VALUE flags, VALUE klass)
 {
     NEWOBJ_OF(obj, struct RClass, klass, (flags & T_MASK) | (RGENGC_WB_PROTECTED_CLASS ? FL_WB_PROTECTED : 0));
     obj->ptr = ALLOC(rb_classext_t);
+    obj->m_tbl = ALLOC(struct method_table);
     RCLASS_IV_TBL(obj) = 0;
     RCLASS_CONST_TBL(obj) = 0;
     RCLASS_M_TBL(obj) = 0;

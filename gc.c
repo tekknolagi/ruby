@@ -1487,6 +1487,9 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         if (RCLASS_M_TBL(obj)) {
             rb_free_m_table(RCLASS_M_TBL(obj));
         }
+	if (RCLASS_M_TBL_WRAPPER(obj)) {
+	    xfree(RCLASS_M_TBL_WRAPPER(obj));
+	}
 	if (RCLASS_IV_TBL(obj)) {
 	    st_free_table(RCLASS_IV_TBL(obj));
 	}
@@ -2393,6 +2396,7 @@ obj_memsize_of(VALUE obj, int use_tdata)
 	break;
       case T_MODULE:
       case T_CLASS:
+	size += sizeof(struct method_table);
 	if (RCLASS_M_TBL(obj)) {
 	    size += st_memsize(RCLASS_M_TBL(obj));
 	}
@@ -3368,12 +3372,17 @@ mark_method_entry_i(ID key, const rb_method_entry_t *me, st_data_t data)
 }
 
 static void
-mark_m_tbl(rb_objspace_t *objspace, st_table *tbl)
+mark_m_tbl(rb_objspace_t *objspace, struct method_table *m_tbl)
 {
     struct mark_tbl_arg arg;
-    if (!tbl) return;
+    if (!m_tbl->tbl) return;
+    if (LIKELY(objspace->mark_func_data == 0)) {
+	size_t serial = rb_gc_count();
+	if (m_tbl->serial == serial) return;
+	m_tbl->serial = serial;
+    }
     arg.objspace = objspace;
-    st_foreach(tbl, mark_method_entry_i, (st_data_t)&arg);
+    st_foreach(m_tbl->tbl, mark_method_entry_i, (st_data_t)&arg);
 }
 
 static int
@@ -3787,7 +3796,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE ptr)
       case T_ICLASS:
       case T_CLASS:
       case T_MODULE:
-	mark_m_tbl(objspace, RCLASS_M_TBL(obj));
+	mark_m_tbl(objspace, RCLASS_M_TBL_WRAPPER(obj));
 	if (!RCLASS_EXT(obj)) break;
 	mark_tbl(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));

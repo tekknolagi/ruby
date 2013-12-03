@@ -1,3 +1,128 @@
+Tue Dec  3 12:20:21 2013  Aman Gupta <ruby@tmm1.net>
+
+	* string.c (rb_fstring): Use st_update instead of st_lookup +
+	  st_insert.
+	* string.c (fstr_update_callback): New callback for st_update.
+
+Tue Dec  3 12:17:59 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/rdoc/constant.rb (RDoc::Constant#documented?): workaround for
+	  NoMethodError when the original of alias is not found.
+
+Tue Dec  3 10:43:58 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* ext/openssl/lib/openssl/buffering.rb:  Return ASCII-8BIT strings from
+	  SSLSocket methods.  [ruby-trunk - Bug #9028]
+	* test/openssl/test_ssl.rb:  Test for the above.
+
+Tue Dec  3 09:42:27 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc:  Update to RDoc master 900de99.  Changes include:
+
+	  Fixed documentation display of constants
+
+	  Fixed handling of unknown parsers
+
+	* test/rdoc:  ditto.
+
+Mon Dec  2 22:30:10 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* hash.c (getenv): fixed test failures introduced by r43950.
+	  [ruby-core:58774] [Bug #9195] reported by phasis68 (Heesob Park).
+
+Mon Dec  2 21:49:19 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* hash.c (rb_hash_rehash): make temporary st_table under the control
+	  of GC. [Bug #9187]
+
+	* test/ruby/test_hash.rb: add a test for above.
+
+Mon Dec  2 17:23:00 2013  Charlie Somerville  <charliesome@ruby-lang.org>
+
+	* variable.c (rb_mod_constants): when calling Module#constants with
+	  inherit=false, there is no need to use a hashtable to deduplicate
+	  constant names. [Feature #9196] [ruby-core:58786]
+
+Mon Dec  2 14:16:52 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/net/smtp.rb (Net::SMTP#critical):  Always return a
+	  Net::SMTP::Response.  Patch by Pawel Veselov.
+	  [ruby-trunk - Bug #9125]
+	* test/net/smtp/test_smtp.rb:  Test for the above.
+
+Mon Dec  2 05:52:33 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master baa965b.  Notable changes:
+
+	  Copy directories to lib/ when installing extensions.  This completes
+	  the fix for [ruby-trunk - Bug #9106]
+
+	* test/rubygems:  ditto.
+
+Mon Dec  2 02:03:47 2013  Shota Fukumori  <her@sorah.jp>
+
+	* test/ruby/test_case.rb (test_nomethoderror):
+	  Add test related to r43913, r43914
+
+Mon Dec  2 00:53:01 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* hash.c (getenv): use ANSI codepage version of getenv() for miniruby
+	  on Windows.
+	  [ruby-core:58732] [Bug #9189] reported by phasis68 (Heesob Park).
+
+Sun Dec  1 22:14:27 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributors.rdoc: [DOC] Import contributors from redmine wiki
+	  Many wiki pages have become outdated and spam-ridden, we will import
+	  these to trunk and begin maintaining them in ruby-trunk. This will
+	  also allow new contributors to easily contribute patches to update
+	  these pages, where previously a redmine account with wiki access was
+	  required. Another bonus is having a contributors file to show thanks
+	  to all of the people who have submitted a patch to Ruby.
+
+Sun Dec  1 18:03:26 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/maintainers.rdoc: [DOC] Current maintainers of Ruby
+
+Sun Dec  1 17:17:36 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Current branch maintainers
+
+Sun Dec  1 17:16:36 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Reporting other (ruby-lang.org) issues
+
+Sun Dec  1 17:15:51 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Current platform maintainers
+
+Sun Dec  1 17:14:55 2013  Zachary Scott  <e@zzak.io>
+
+	* doc/contributing.rdoc: [DOC] Reporting downstream distro issues
+
+Sun Dec  1 14:37:20 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* hash.c (rb_hash_to_a): specify array capa.
+
+Sun Dec  1 14:15:36 2013  Masaki Matsushita  <glass.saga@gmail.com>
+
+	* hash.c (rb_hash_rehash): fix to free new st_table when exception
+	  is raised in do_hash(). [Bug #9187]
+
+Sun Dec  1 11:57:59 2013  Zachary Scott  <e@zzak.io>
+
+	* ext/openssl/lib/openssl/buffering.rb: Fix warning in copyright
+
+Sun Dec  1 08:27:28 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master 66e5c39.  Notable changes:
+
+	  Implement gem.deps.rb (Gemfile) .lock support
+
+	  Fixed `gem uninstall` for a relative directory in GEM_HOME.
+
+	* test/rubygems:  ditto.
+
 Sun Dec  1 06:00:49 2013  Aman Gupta <ruby@tmm1.net>
 
 	* test/ruby/test_gc.rb (test_gc_reason): Force minor GC by consuming
