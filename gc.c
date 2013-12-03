@@ -1414,10 +1414,19 @@ free_method_entry_i(ID key, rb_method_entry_t *me, st_data_t data)
 }
 
 void
-rb_free_m_table(st_table *tbl)
+rb_free_m_tbl(st_table *tbl)
 {
     st_foreach(tbl, free_method_entry_i, 0);
     st_free_table(tbl);
+}
+
+void
+rb_free_m_tbl_wrapper(struct method_table_wrapper *wrapper)
+{
+    if (wrapper->tbl) {
+	rb_free_m_tbl(wrapper->tbl);
+    }
+    xfree(wrapper);
 }
 
 static int
@@ -1484,12 +1493,9 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	break;
       case T_MODULE:
       case T_CLASS:
-        if (RCLASS_M_TBL(obj)) {
-            rb_free_m_table(RCLASS_M_TBL(obj));
+        if (RCLASS_M_TBL_WRAPPER(obj)) {
+            rb_free_m_tbl_wrapper(RCLASS_M_TBL_WRAPPER(obj));
         }
-	if (RCLASS_M_TBL_WRAPPER(obj)) {
-	    xfree(RCLASS_M_TBL_WRAPPER(obj));
-	}
 	if (RCLASS_IV_TBL(obj)) {
 	    st_free_table(RCLASS_IV_TBL(obj));
 	}
@@ -2396,7 +2402,7 @@ obj_memsize_of(VALUE obj, int use_tdata)
 	break;
       case T_MODULE:
       case T_CLASS:
-	size += sizeof(struct method_table);
+	size += sizeof(struct method_table_wrapper);
 	if (RCLASS_M_TBL(obj)) {
 	    size += st_memsize(RCLASS_M_TBL(obj));
 	}
@@ -3372,17 +3378,19 @@ mark_method_entry_i(ID key, const rb_method_entry_t *me, st_data_t data)
 }
 
 static void
-mark_m_tbl(rb_objspace_t *objspace, struct method_table *m_tbl)
+mark_m_tbl_wrapper(rb_objspace_t *objspace, struct method_table_wrapper *wrapper)
 {
     struct mark_tbl_arg arg;
-    if (!m_tbl->tbl) return;
+    if (!wrapper || !wrapper->tbl) return;
     if (LIKELY(objspace->mark_func_data == 0)) {
+	/* prevent multiple marking during same GC cycle,
+	 * since m_tbl is shared between several T_ICLASS */
 	size_t serial = rb_gc_count();
-	if (m_tbl->serial == serial) return;
-	m_tbl->serial = serial;
+	if (wrapper->serial == serial) return;
+	wrapper->serial = serial;
     }
     arg.objspace = objspace;
-    st_foreach(m_tbl->tbl, mark_method_entry_i, (st_data_t)&arg);
+    st_foreach(wrapper->tbl, mark_method_entry_i, (st_data_t)&arg);
 }
 
 static int
@@ -3796,7 +3804,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE ptr)
       case T_ICLASS:
       case T_CLASS:
       case T_MODULE:
-	mark_m_tbl(objspace, RCLASS_M_TBL_WRAPPER(obj));
+	mark_m_tbl_wrapper(objspace, RCLASS_M_TBL_WRAPPER(obj));
 	if (!RCLASS_EXT(obj)) break;
 	mark_tbl(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
