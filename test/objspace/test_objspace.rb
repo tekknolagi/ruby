@@ -130,6 +130,7 @@ class TestObjSpace < Test::Unit::TestCase
   end
 
   def test_trace_object_allocations
+    Class.name
     o0 = Object.new
     ObjectSpace.trace_object_allocations{
       o1 = Object.new; line1 = __LINE__; c1 = GC.count
@@ -193,23 +194,10 @@ class TestObjSpace < Test::Unit::TestCase
     assert_equal(nil, ObjectSpace.allocation_sourcefile(obj3))
   end
 
-  def test_after_gc_start_hook_with_GC_stress
-    bug8492 = '[ruby-dev:47400] [Bug #8492]: infinite after_gc_start_hook reentrance'
-    assert_nothing_raised(Timeout::Error, bug8492) do
-      assert_in_out_err(%w[-robjspace], <<-'end;', /\A[1-9]/, timeout: 2)
-        stress, GC.stress = GC.stress, false
-        count = 0
-        ObjectSpace.after_gc_start_hook = proc {count += 1}
-        begin
-          GC.stress = true
-          3.times {Object.new}
-        ensure
-          GC.stress = stress
-          ObjectSpace.after_gc_start_hook = nil
-        end
-        puts count
-      end;
-    end
+  def test_dump_flags
+    info = ObjectSpace.dump("foo".freeze)
+    assert_match /"wb_protected":true, "old":true, "marked":true/, info
+    assert_match /"fstring":true/, info
   end
 
   def test_dump_to_default
@@ -273,6 +261,7 @@ class TestObjSpace < Test::Unit::TestCase
       puts dump_my_heap_please
     end;
       skip if /is not supported/ =~ error
+      skip error unless output
       assert_match(entry, File.readlines(output).grep(/TEST STRING/).join("\n"))
       File.unlink(output)
     end

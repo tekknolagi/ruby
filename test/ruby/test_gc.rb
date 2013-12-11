@@ -48,6 +48,22 @@ class TestGc < Test::Unit::TestCase
     GC.enable
   end
 
+  def test_start_full_mark
+    GC.start(full_mark: false)
+    assert_nil GC.latest_gc_info(:major_by)
+
+    GC.start(full_mark: true)
+    assert_not_nil GC.latest_gc_info(:major_by)
+  end
+
+  def test_start_immediate_sweep
+    GC.start(immediate_sweep: false)
+    assert_equal false, GC.latest_gc_info(:immediate_sweep)
+
+    GC.start(immediate_sweep: true)
+    assert_equal true, GC.latest_gc_info(:immediate_sweep)
+  end
+
   def test_count
     c = GC.count
     GC.start
@@ -79,25 +95,35 @@ class TestGc < Test::Unit::TestCase
     assert_equal(count[:FREE], stat[:heap_free_slot])
   end
 
-  def test_gc_reason
+  def test_stat_single
+    stat = GC.stat
+    assert_equal stat[:count], GC.stat(:count)
+    assert_raise(ArgumentError){ GC.stat(:invalid) }
+  end
+
+  def test_latest_gc_info
     GC.start
     GC.stat[:heap_free_slot].times{ "a" + "b" }
-    assert_equal({:gc_by => :newobj},
-      GC::Profiler.decode_flags(GC.stat[:last_collection_flags]))
-  end
+    assert_equal :newobj, GC.latest_gc_info[:gc_by]
 
-  def test_gc_reason_method
     GC.start
-    assert_equal({:major_by=>:nofree, :gc_by=>:method, :immediate_sweep=>true},
-      GC::Profiler.decode_flags(GC.stat[:last_collection_flags]))
-  end
+    assert_equal :nofree, GC.latest_gc_info[:major_by]
+    assert_equal :method, GC.latest_gc_info[:gc_by]
+    assert_equal true, GC.latest_gc_info[:immediate_sweep]
 
-  def test_gc_reason_stress
     GC.stress = true
-    assert_equal({:major_by=>:stress, :gc_by=>:malloc, :immediate_sweep=>true},
-      GC::Profiler.decode_flags(GC.stat[:last_collection_flags]))
+    assert_equal :stress, GC.latest_gc_info[:major_by]
   ensure
     GC.stress = false
+  end
+
+  def test_latest_gc_info_argument
+    info = {}
+    GC.latest_gc_info(info)
+
+    assert_not_empty info
+    assert_equal info[:gc_by], GC.latest_gc_info(:gc_by)
+    assert_raises(ArgumentError){ GC.latest_gc_info(:invalid) }
   end
 
   def test_singleton_method
@@ -237,5 +263,19 @@ class TestGc < Test::Unit::TestCase
   def test_gc_internals
     assert_not_nil GC::INTERNAL_CONSTANTS[:HEAP_OBJ_LIMIT]
     assert_not_nil GC::INTERNAL_CONSTANTS[:RVALUE_SIZE]
+  end
+
+  def test_sweep_in_finalizer
+    bug9205 = '[ruby-core:58833] [Bug #9205]'
+    2.times do
+      assert_ruby_status([], <<-'end;', bug9205, timeout: 30)
+        raise_proc = proc do |id|
+          GC.start
+        end
+        1000.times do
+          ObjectSpace.define_finalizer(Object.new, raise_proc)
+        end
+      end;
+    end
   end
 end

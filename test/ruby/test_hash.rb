@@ -209,10 +209,11 @@ class TestHash < Test::Unit::TestCase
     assert_equal(256,     h[z])
   end
 
-  def test_ASET_string
+  def test_NEWHASH_fstring_key
     a = {"ABC" => :t}
     b = {"ABC" => :t}
     assert_same a.keys[0], b.keys[0]
+    assert_same "ABC".freeze, a.keys[0]
   end
 
   def test_EQUAL # '=='
@@ -554,6 +555,8 @@ class TestHash < Test::Unit::TestCase
 
     assert_equal(h3, h.reject {|k,v| v })
     assert_equal(base, h)
+
+    assert_predicate(h.taint.reject {true}, :tainted?)
   end
 
   def test_reject!
@@ -587,6 +590,16 @@ class TestHash < Test::Unit::TestCase
     assert_equal(6, h[7])
     assert_nil(h[1])
     assert_nil(h[2])
+  end
+
+  def test_replace_bug9230
+    h = @cls[]
+    h.replace(@cls[])
+    assert_empty h
+
+    h = @cls[]
+    h.replace(@cls[].compare_by_identity)
+    assert_predicate(h, :compare_by_identity?)
   end
 
   def test_shift
@@ -870,6 +883,8 @@ class TestHash < Test::Unit::TestCase
     h = @cls[1=>2]
     h.shift
     assert_equal({}.hash, h.hash, '[ruby-core:38650]')
+    bug9231 = '[ruby-core:58993] [Bug #9231]'
+    assert_not_equal(0, @cls[].hash, bug9231)
   end
 
   def test_update2
@@ -1066,7 +1081,7 @@ class TestHash < Test::Unit::TestCase
     end
   end
 
-  def test_recursive_hash_value
+  def test_recursive_hash_value_struct
     bug9151 = '[ruby-core:58567] [Bug #9151]'
 
     s = Struct.new(:x) {def hash; [x,""].hash; end}
@@ -1074,10 +1089,95 @@ class TestHash < Test::Unit::TestCase
     b = s.new
     a.x = b
     b.x = a
-    ah = assert_nothing_raised(SystemStackError, bug9151) {a.hash}
-    bh = assert_nothing_raised(SystemStackError, bug9151) {b.hash}
-    assert_equal(ah, bh, bug9151)
-    assert_not_equal([a,"hello"].hash, [b,"world"].hash, bug9151)
+    assert_nothing_raised(SystemStackError, bug9151) {a.hash}
+    assert_nothing_raised(SystemStackError, bug9151) {b.hash}
+
+    h = @cls[]
+    h[[a,"hello"]] = 1
+    assert_equal(1, h.size)
+    h[[b,"world"]] = 2
+    assert_equal(2, h.size)
+
+    obj = Object.new
+    h = @cls[a => obj]
+    assert_same(obj, h[b])
+  end
+
+  def test_recursive_hash_value_array
+    h = @cls[]
+    h[[[1]]] = 1
+    assert_equal(1, h.size)
+    h[[[2]]] = 1
+    assert_equal(2, h.size)
+
+    a = []
+    a << a
+
+    h = @cls[]
+    h[[a, 1]] = 1
+    assert_equal(1, h.size)
+    h[[a, 2]] = 2
+    assert_equal(2, h.size)
+    h[[a, a]] = 3
+    assert_equal(3, h.size)
+
+    obj = Object.new
+    h = @cls[a => obj]
+    assert_same(obj, h[[[a]]])
+  end
+
+  def test_recursive_hash_value_array_hash
+    h = @cls[]
+    rec = [h]
+    h[:x] = rec
+
+    obj = Object.new
+    h2 = {rec => obj}
+    [h, {x: rec}].each do |k|
+      k = [k]
+      assert_same(obj, h2[k], ->{k.inspect})
+    end
+  end
+
+  def test_recursive_hash_value_hash_array
+    h = @cls[]
+    rec = [h]
+    h[:x] = rec
+
+    obj = Object.new
+    h2 = {h => obj}
+    [rec, [h]].each do |k|
+      k = {x: k}
+      assert_same(obj, h2[k], ->{k.inspect})
+    end
+  end
+
+  def test_exception_in_rehash
+    bug9187 = '[ruby-core:58728] [Bug #9187]'
+
+    prepare = <<-EOS
+    class Foo
+      def initialize
+        @raise = false
+      end
+
+      def hash
+        raise if @raise
+        @raise = true
+        return 0
+      end
+    end
+    EOS
+
+    code = <<-EOS
+    h = {Foo.new => true}
+    10_0000.times do
+      h.rehash rescue nil
+    end
+    GC.start
+    EOS
+
+    assert_no_memory_leak([], prepare, code, bug9187)
   end
 
   class TestSubHash < TestHash

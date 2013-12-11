@@ -688,9 +688,9 @@ rb_raise_jump(VALUE mesg)
     VALUE self = cfp->self;
     ID mid = cfp->me->called_id;
 
-    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
-
     setup_exception(th, TAG_RAISE, mesg);
+
+    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
 
     EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass, Qnil);
     rb_thread_raised_clear(th);
@@ -1119,7 +1119,8 @@ rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
     c = iclass = rb_include_class_new(module, superclass);
     RCLASS_REFINED_CLASS(c) = klass;
 
-    RCLASS_M_TBL(OBJ_WB_UNPROTECT(c)) = RCLASS_M_TBL(OBJ_WB_UNPROTECT(module));
+    RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(c)) =
+	RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(module));
 
     module = RCLASS_SUPER(module);
     while (module && module != klass) {

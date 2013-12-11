@@ -49,8 +49,21 @@ with all sufficient information, see the ChangeLog file.
       at where raising the new exception.
 
 * GC
-  * added environment variable:
-    * RUBY_HEAP_SLOTS_GROWTH_FACTOR: growth rate of the heap.
+  * improvements:
+    * introduced the generational GC a.k.a RGenGC.
+  * added environment variables:
+    * RUBY_GC_HEAP_INIT_SLOTS
+    * RUBY_GC_HEAP_FREE_SLOTS
+    * RUBY_GC_HEAP_GROWTH_FACTOR
+    * RUBY_GC_HEAP_GROWTH_MAX_SLOTS
+    * RUBY_GC_MALLOC_LIMIT_MAX
+    * RUBY_GC_MALLOC_LIMIT_GROWTH_FACTOR
+    * RUBY_GC_OLDMALLOC_LIMIT
+    * RUBY_GC_OLDMALLOC_LIMIT_MAX
+    * RUBY_GC_OLDMALLOC_LIMIT_GROWTH_FACTOR
+  * obsoleted environment variables:
+    * RUBY_FREE_MIN (Use RUBY_GC_HEAP_FREE_SLOTS instead)
+    * RUBY_HEAP_MIN_SLOTS (Use RUBY_GC_HEAP_INIT_SLOTS instead)
 
 * Integer
   * New methods
@@ -100,17 +113,11 @@ with all sufficient information, see the ChangeLog file.
     * Process.clock_gettime
     * Process.clock_getres
 
-* RbConfig
-  * New constants:
-    * RbConfig::SIZEOF is added to provide the size of C types.
-
 * String
   * New methods:
     * String#scrub and String#scrub! verify and fix invalid byte sequence.
-  * extended methods:
-    * If invalid: :replace is specified for String#encode, replace
-      invalid byte sequence even if the destination encoding equals to
-      the source encoding.
+      If you want to use this function with older Ruby,
+      consider to use string-scrub.gem.
 
 * Symbol
   * All symbols are now frozen.
@@ -158,6 +165,11 @@ with all sufficient information, see the ChangeLog file.
     method where the lambda is created.  Returning from non-lambda proc exits
     from the method, same as the former behavior.
 
+String
+  * If invalid: :replace is specified for String#encode, replace
+    invalid byte sequence even if the destination encoding equals to
+    the source encoding.
+
 === Stdlib updates (outstanding ones only)
 
 * CGI::Util
@@ -185,8 +197,6 @@ with all sufficient information, see the ChangeLog file.
     * ObjectSpace.allocation_method_id
     * ObjectSpace.allocation_generation
     * ObjectSpace.reachable_objects_from_root
-    * ObjectSpace.after_gc_start_hook=
-    * ObjectSpace.after_gc_end_hook=
     * ObjectSpace.dump
     * ObjectSpace.dump_all
 
@@ -212,6 +222,10 @@ with all sufficient information, see the ChangeLog file.
     http://rake.rubyforge.org/doc/release_notes/rake-10_1_0_rdoc.html
 
     http://rake.rubyforge.org/doc/release_notes/rake-10_0_3_rdoc.html
+
+* RbConfig
+  * New constants:
+    * RbConfig::SIZEOF is added to provide the size of C types.
 
 * RDoc
   * Updated to 4.1.0.preview.2.  Major enhancements include a modified default
@@ -244,8 +258,14 @@ with all sufficient information, see the ChangeLog file.
     Rinda::RingFinger for details.
 
 * RubyGems
-  * Updated to 2.2.0.preview.2  For a list of enhancements and bug fixes see:
-    https://github.com/rubygems/rubygems/blob/v2.2.0.preview.1/History.txt
+  * Updated to 2.2.0.  Notable new features include:
+
+    * Gemfile or gem.deps.rb support including Gem.file.lock (experimental)
+    * Improved, iterative resolver (compared to RubyGems 2.1 and earlier)
+    * Support for a sharing a GEM_HOME across ruby platforms and versions
+
+    For a complete list of enhancements and bug fixes see:
+    https://github.com/rubygems/rubygems/tree/master/History.txt
 
 * Set
   * New methods:
@@ -307,6 +327,11 @@ with all sufficient information, see the ChangeLog file.
       It gets encoding argument to convert before percent encode.
       UTF-16 strings aren't converted to UTF-8 before percent encode by default.
 
+* curses
+  * Removed.
+    curses is now available as a gem.
+    See https://rubygems.org/gems/curses for details.
+
 === Built-in global variables compatibility issues
 
 * $SAFE
@@ -319,6 +344,11 @@ with all sufficient information, see the ChangeLog file.
 
 * rb_gc_count() added. This returns the number of times GC occurred.
 
+* rb_gc_stat() added. This allows access to specific GC.stat() values from C
+  without any allocation overhead.
+
+* rb_gc_latest_gc_info() added. This allows access to GC.latest_gc_info().
+
 * rb_postponed_job_register() added. Takes a function callback which is invoked
   when the VM is in a consistent state, i.e. to perform work from a C signal
   handler.
@@ -330,6 +360,7 @@ with all sufficient information, see the ChangeLog file.
   * RUBY_INTERNAL_EVENT_NEWOBJ
   * RUBY_INTERNAL_EVENT_FREEOBJ
   * RUBY_INTERNAL_EVENT_GC_START
-  * RUBY_INTERNAL_EVENT_GC_END
+  * RUBY_INTERNAL_EVENT_GC_END_MARK
+  * RUBY_INTERNAL_EVENT_GC_END_SWEEP
   * Note that you *can not* specify "internal events" with normal events
     (such as RUBY_EVENT_CALL, RUBY_EVENT_RETURN) simultaneously.

@@ -158,7 +158,7 @@ class_alloc(VALUE flags, VALUE klass)
     obj->ptr = ALLOC(rb_classext_t);
     RCLASS_IV_TBL(obj) = 0;
     RCLASS_CONST_TBL(obj) = 0;
-    RCLASS_M_TBL(obj) = 0;
+    RCLASS_M_TBL_WRAPPER(obj) = 0;
     RCLASS_SET_SUPER((VALUE)obj, 0);
     RCLASS_ORIGIN(obj) = (VALUE)obj;
     RCLASS_IV_INDEX_TBL(obj) = 0;
@@ -166,7 +166,7 @@ class_alloc(VALUE flags, VALUE klass)
     RCLASS_EXT(obj)->subclasses = NULL;
     RCLASS_EXT(obj)->parent_subclasses = NULL;
     RCLASS_EXT(obj)->module_subclasses = NULL;
-    RCLASS_EXT(obj)->class_serial = rb_next_class_serial();
+    RCLASS_SERIAL(obj) = rb_next_class_serial();
 
     RCLASS_REFINED_CLASS(obj) = Qnil;
     RCLASS_EXT(obj)->allocator = 0;
@@ -189,7 +189,7 @@ rb_class_boot(VALUE super)
     VALUE klass = class_alloc(T_CLASS, rb_cClass);
 
     RCLASS_SET_SUPER(klass, super);
-    RCLASS_M_TBL(klass) = st_init_numtable();
+    RCLASS_M_TBL_INIT(klass);
 
     OBJ_INFECT(klass, super);
     return (VALUE)klass;
@@ -239,7 +239,7 @@ rewrite_cref_stack(NODE *node, VALUE old_klass, VALUE new_klass, NODE **new_cref
     while (node) {
 	if (node->nd_clss == old_klass) {
 	    new_node = NEW_CREF(new_klass);
-	    new_node->nd_next = node->nd_next;
+	    OBJ_WRITE(new_node, &new_node->nd_next, node->nd_next);
 	    *new_cref_ptr = new_node;
 	    return;
 	}
@@ -353,10 +353,10 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
 	st_foreach(RCLASS_CONST_TBL(orig), clone_const_i, (st_data_t)&arg);
     }
     if (RCLASS_M_TBL(orig)) {
-	if (RCLASS_M_TBL(clone)) {
-	    rb_free_m_table(RCLASS_M_TBL(clone));
+	if (RCLASS_M_TBL_WRAPPER(clone)) {
+	    rb_free_m_tbl_wrapper(RCLASS_M_TBL_WRAPPER(clone));
 	}
-	RCLASS_M_TBL(clone) = st_init_numtable();
+	RCLASS_M_TBL_INIT(clone);
 	st_foreach(RCLASS_M_TBL(orig), clone_method_i, (st_data_t)clone);
     }
 
@@ -402,7 +402,7 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
 	if (attach != Qundef) {
 	    rb_singleton_class_attached(clone, attach);
 	}
-	RCLASS_M_TBL(clone) = st_init_numtable();
+	RCLASS_M_TBL_INIT(clone);
 	st_foreach(RCLASS_M_TBL(klass), clone_method_i, (st_data_t)clone);
 	rb_singleton_class_attached(RBASIC(clone)->klass, clone);
 	FL_SET(clone, FL_SINGLETON);
@@ -723,9 +723,7 @@ VALUE
 rb_module_new(void)
 {
     VALUE mdl = class_alloc(T_MODULE, rb_cModule);
-
-    RCLASS_M_TBL(mdl) = st_init_numtable();
-
+    RCLASS_M_TBL_INIT(mdl);
     return (VALUE)mdl;
 }
 
@@ -803,7 +801,8 @@ rb_include_class_new(VALUE module, VALUE super)
     RCLASS_IV_TBL(klass) = RCLASS_IV_TBL(module);
     RCLASS_CONST_TBL(klass) = RCLASS_CONST_TBL(module);
 
-    RCLASS_M_TBL(OBJ_WB_UNPROTECT(klass)) = RCLASS_M_TBL(OBJ_WB_UNPROTECT(RCLASS_ORIGIN(module)));
+    RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(klass)) =
+	RCLASS_M_TBL_WRAPPER(OBJ_WB_UNPROTECT(RCLASS_ORIGIN(module)));
 
     RCLASS_SET_SUPER(klass, super);
     if (RB_TYPE_P(module, T_ICLASS)) {
@@ -953,8 +952,8 @@ rb_prepend_module(VALUE klass, VALUE module)
 	RCLASS_SET_SUPER(origin, RCLASS_SUPER(klass));
 	RCLASS_SET_SUPER(klass, origin);
 	RCLASS_ORIGIN(klass) = origin;
-	RCLASS_M_TBL(origin) = RCLASS_M_TBL(klass);
-	RCLASS_M_TBL(klass) = st_init_numtable();
+	RCLASS_M_TBL_WRAPPER(origin) = RCLASS_M_TBL_WRAPPER(klass);
+	RCLASS_M_TBL_INIT(klass);
 	st_foreach(RCLASS_M_TBL(origin), move_refined_method,
 		   (st_data_t) RCLASS_M_TBL(klass));
     }
@@ -1852,6 +1851,119 @@ rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
     }
 
     return argc;
+}
+
+NORETURN(static void keyword_error(const char *error, VALUE keys));
+static void
+keyword_error(const char *error, VALUE keys)
+{
+    const char *msg = "";
+    if (RARRAY_LEN(keys) == 1) {
+	keys = RARRAY_AREF(keys, 0);
+    }
+    else {
+	keys = rb_ary_join(keys, rb_usascii_str_new2(", "));
+	msg = "s";
+    }
+    rb_raise(rb_eArgError, "%s keyword%s: %"PRIsVALUE, error, msg, keys);
+}
+
+NORETURN(static void unknown_keyword_error(VALUE hash, const ID *table, int keywords));
+static void
+unknown_keyword_error(VALUE hash, const ID *table, int keywords)
+{
+    VALUE keys;
+    int i;
+    for (i = 0; i < keywords; i++) {
+	rb_hash_delete(hash, ID2SYM(table[i]));
+    }
+    keys = rb_funcall(hash, rb_intern("keys"), 0, 0);
+    if (!RB_TYPE_P(keys, T_ARRAY)) rb_raise(rb_eArgError, "unknown keyword");
+    keyword_error("unknown", keys);
+}
+
+static int
+separate_symbol(st_data_t key, st_data_t value, st_data_t arg)
+{
+    VALUE *kwdhash = (VALUE *)arg;
+
+    if (!SYMBOL_P(key)) kwdhash++;
+    if (!*kwdhash) *kwdhash = rb_hash_new();
+    rb_hash_aset(*kwdhash, (VALUE)key, (VALUE)value);
+    return ST_CONTINUE;
+}
+
+VALUE
+rb_extract_keywords(VALUE *orighash)
+{
+    VALUE parthash[2] = {0, 0};
+    VALUE hash = *orighash;
+
+    if (RHASH_EMPTY_P(hash)) {
+	*orighash = 0;
+	return hash;
+    }
+    st_foreach(rb_hash_tbl_raw(hash), separate_symbol, (st_data_t)&parthash);
+    *orighash = parthash[1];
+    return parthash[0];
+}
+
+int
+rb_get_kwargs(VALUE keyword_hash, const ID *table, int required, int optional, VALUE *values)
+{
+    int i = 0, j;
+    int rest = 0;
+    VALUE missing = Qnil;
+    st_data_t key;
+
+#define extract_kwarg(keyword, val) \
+    (key = (st_data_t)(keyword), values ? \
+     st_delete(rb_hash_tbl_raw(keyword_hash), &key, (val)) : \
+     st_lookup(rb_hash_tbl_raw(keyword_hash), key, (val)))
+
+    if (optional < 0) {
+	rest = 1;
+	optional = -1-optional;
+    }
+    if (values) {
+	for (j = 0; j < required + optional; j++) {
+	    values[j] = Qundef;
+	}
+    }
+    if (required) {
+	for (; i < required; i++) {
+	    VALUE keyword = ID2SYM(table[i]);
+	    if (keyword_hash) {
+		st_data_t val;
+		if (extract_kwarg(keyword, &val)) {
+		    if (values) values[i] = (VALUE)val;
+		    continue;
+		}
+	    }
+	    if (NIL_P(missing)) missing = rb_ary_tmp_new(1);
+	    rb_ary_push(missing, keyword);
+	}
+	if (!NIL_P(missing)) {
+	    keyword_error("missing", missing);
+	}
+    }
+    j = i;
+    if (optional && keyword_hash) {
+	for (i = 0; i < optional; i++) {
+	    st_data_t val;
+	    if (extract_kwarg(ID2SYM(table[required+i]), &val)) {
+		if (values) values[required+i] = (VALUE)val;
+		j++;
+	    }
+	}
+    }
+    if (!rest && keyword_hash) {
+	if (RHASH_SIZE(keyword_hash) > (unsigned int)j) {
+	    unknown_keyword_error(keyword_hash, table, required+optional);
+	}
+    }
+    return j;
+#undef extract_kwarg
 }
 
 /*!

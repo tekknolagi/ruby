@@ -15,6 +15,11 @@
 
 class Gem::Resolver::VendorSet < Gem::Resolver::Set
 
+  ##
+  # The specifications for this set.
+
+  attr_reader :specs # :nodoc:
+
   def initialize # :nodoc:
     @directories = {}
     @specs       = {}
@@ -34,9 +39,7 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
 
     spec.full_gem_path = File.expand_path directory
 
-    key = "#{spec.name}-#{spec.version}-#{spec.platform}"
-
-    @specs[key]        = spec
+    @specs[spec.name]  = spec
     @directories[spec] = directory
   end
 
@@ -54,14 +57,26 @@ class Gem::Resolver::VendorSet < Gem::Resolver::Set
   end
 
   ##
-  # Loads a spec with the given +name+, +version+ and +platform+.  Since the
-  # +source+ is defined when the specification was added to index it is not
-  # used.
+  # Loads a spec with the given +name+. +version+, +platform+ and +source+ are
+  # ignored.
 
   def load_spec name, version, platform, source # :nodoc:
-    key = "#{name}-#{version}-#{platform}"
+    @specs.fetch name
+  end
 
-    @specs.fetch key
+  def pretty_print q # :nodoc:
+    q.group 2, '[VendorSet', ']' do
+      next if @directories.empty?
+      q.breakable
+
+      dirs = @directories.map do |spec, directory|
+        "#{spec.full_name}: #{directory}"
+      end
+
+      q.seplist dirs do |dir|
+        q.text dir
+      end
+    end
   end
 
 end

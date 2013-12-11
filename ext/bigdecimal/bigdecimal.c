@@ -199,14 +199,23 @@ GetVpValueWithPrec(VALUE v, long prec, int must)
     VALUE num, bg;
     char szD[128];
     VALUE orig = Qundef;
+    double d;
 
 again:
     switch(TYPE(v)) {
       case T_FLOAT:
 	if (prec < 0) goto unable_to_coerce_without_prec;
 	if (prec > DBL_DIG+1) goto SomeOneMayDoIt;
-	v = rb_funcall(v, id_to_r, 0);
-	goto again;
+	d = RFLOAT_VALUE(v);
+	if (d != 0.0) {
+	    v = rb_funcall(v, id_to_r, 0);
+	    goto again;
+	}
+	if (1/d < 0.0) {
+	    return VpCreateRbObject(prec, "-0");
+	}
+	return VpCreateRbObject(prec, "0");
+
       case T_RATIONAL:
 	if (prec < 0) goto unable_to_coerce_without_prec;
 
@@ -788,7 +797,8 @@ BigDecimal_coerce(VALUE self, VALUE other)
     Real *b;
 
     if (RB_TYPE_P(other, T_FLOAT)) {
-	obj = rb_assoc_new(other, BigDecimal_to_f(self));
+	GUARD_OBJ(b, GetVpValueWithPrec(other, DBL_DIG+1, 1));
+	obj = rb_assoc_new(ToValue(b), self);
     }
     else {
 	if (RB_TYPE_P(other, T_RATIONAL)) {

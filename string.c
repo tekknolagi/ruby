@@ -132,34 +132,54 @@ static const struct st_hash_type fstring_hash_type = {
     rb_str_hash,
 };
 
+static int
+fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing)
+{
+    VALUE *fstr = (VALUE *)arg;
+    VALUE str = (VALUE)*key;
+
+    if (existing) {
+	/* because of lazy sweep, str may be unmarked already and swept
+	 * at next time */
+	rb_gc_resurrect(*fstr = *key);
+	return ST_STOP;
+    }
+
+    if (STR_SHARED_P(str)) {
+	/* str should not be shared */
+	str = rb_enc_str_new(RSTRING_PTR(str), RSTRING_LEN(str), STR_ENC_GET(str));
+	OBJ_FREEZE(str);
+    }
+    else {
+	str = rb_str_new_frozen(str);
+    }
+    RBASIC(str)->flags |= RSTRING_FSTR;
+
+    *key = *value = *fstr = str;
+    return ST_CONTINUE;
+}
+
 VALUE
 rb_fstring(VALUE str)
 {
-    st_data_t fstr;
+    VALUE fstr = Qnil;
     Check_Type(str, T_STRING);
+
+    if (!frozen_strings)
+	frozen_strings = st_init_table(&fstring_hash_type);
 
     if (FL_TEST(str, RSTRING_FSTR))
 	return str;
 
-    if (st_lookup(frozen_strings, (st_data_t)str, &fstr)) {
-	str = (VALUE)fstr;
-	/* because of lazy sweep, str may be unmaked already and swept
-	 * at next time */
-	rb_gc_resurrect(str);
-    }
-    else {
-	if (STR_SHARED_P(str)) {
-	    /* str should not be shared */
-	    str = rb_enc_str_new(RSTRING_PTR(str), RSTRING_LEN(str), STR_ENC_GET(str));
-	    OBJ_FREEZE(str);
-	}
-	else {
-	    str = rb_str_new_frozen(str);
-	}
-	RBASIC(str)->flags |= RSTRING_FSTR;
-	st_insert(frozen_strings, str, str);
-    }
-    return str;
+    st_update(frozen_strings, (st_data_t)str, fstr_update_callback, (st_data_t)&fstr);
+    return fstr;
+}
+
+static int
+fstring_set_class_i(st_data_t key, st_data_t val, st_data_t arg)
+{
+    RBASIC_SET_CLASS((VALUE)key, (VALUE)arg);
+    return ST_CONTINUE;
 }
 
 static int
@@ -7993,6 +8013,7 @@ str_compat_and_valid(VALUE str, rb_encoding *enc)
 }
 
 /**
+ * @param str the string to be scrubbed
  * @param repl the replacement character
  * @return If given string is invalid, returns a new string. Otherwise, returns Qnil.
  */
@@ -8727,8 +8748,6 @@ Init_String(void)
 #undef rb_intern
 #define rb_intern(str) rb_intern_const(str)
 
-    frozen_strings = st_init_table(&fstring_hash_type);
-
     rb_cString  = rb_define_class("String", rb_cObject);
     rb_include_module(rb_cString, rb_mComparable);
     rb_define_alloc_func(rb_cString, empty_str_alloc);
@@ -8900,4 +8919,7 @@ Init_String(void)
     rb_define_method(rb_cSymbol, "swapcase", sym_swapcase, 0);
 
     rb_define_method(rb_cSymbol, "encoding", sym_encoding, 0);
+
+    if (frozen_strings)
+	st_foreach(frozen_strings, fstring_set_class_i, rb_cString);
 }

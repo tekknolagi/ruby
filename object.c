@@ -335,8 +335,8 @@ rb_obj_clone(VALUE obj)
         rb_raise(rb_eTypeError, "can't clone %s", rb_obj_classname(obj));
     }
     clone = rb_obj_alloc(rb_obj_class(obj));
-    RBASIC(clone)->flags &= FL_TAINT;
-    RBASIC(clone)->flags |= RBASIC(obj)->flags & ~(FL_PROMOTED|FL_FREEZE|FL_FINALIZE);
+    RBASIC(clone)->flags &= (FL_TAINT|FL_PROMOTED|FL_WB_PROTECTED);
+    RBASIC(clone)->flags |= RBASIC(obj)->flags & ~(FL_PROMOTED|FL_FREEZE|FL_FINALIZE|FL_WB_PROTECTED);
 
     singleton = rb_singleton_class_clone_and_attach(obj, clone);
     RBASIC_SET_CLASS(clone, singleton);
@@ -2458,6 +2458,19 @@ rb_mod_cvar_defined(VALUE obj, VALUE iv)
     }
     return rb_cvar_defined(obj, id);
 }
+
+/*
+ *  call-seq:
+ *     mod.singleton_class?    -> true or false
+ *
+ *  Returns <code>true</code> if <i>mod</i> is a singleton class or
+ *  <code>false</code> if it is an ordinary class or module.
+ *
+ *     class C
+ *     end
+ *     C.singleton_class?                  #=> false
+ *     C.singleton_class.singleton_class?  #=> true
+ */
 
 static VALUE
 rb_mod_singleton_p(VALUE klass)

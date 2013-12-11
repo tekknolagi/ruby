@@ -324,11 +324,11 @@ module Test
         line -= 2
         src = <<eom
 # -*- coding: #{src.encoding}; -*-
-  require #{__dir__.dump}'/envutil';include Test::Unit::Assertions;begin
-#{src}
-  ensure
+  require #{__dir__.dump}'/envutil';include Test::Unit::Assertions
+  END {
     puts [Marshal.dump($!)].pack('m'), "assertions=\#{self._assertions}"
-  end
+  }
+#{src}
   class Test::Unit::Runner
     @@stop_auto_run = true
   end
@@ -345,8 +345,10 @@ eom
           ignore_stderr = nil
         end
         if res
-          res.backtrace.each do |l|
-            l.sub!(/\A-:(\d+)/){"#{file}:#{line + $1.to_i}"}
+          if bt = res.backtrace
+            bt.each do |l|
+              l.sub!(/\A-:(\d+)/){"#{file}:#{line + $1.to_i}"}
+            end
           end
           raise res
         end

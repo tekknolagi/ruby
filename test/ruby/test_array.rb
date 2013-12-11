@@ -909,6 +909,8 @@ class TestArray < Test::Unit::TestCase
     a3 = @cls[ 'dog', 'cat' ]
     assert_equal(a1.hash, a2.hash)
     assert_not_equal(a1.hash, a3.hash)
+    bug9231 = '[ruby-core:58993] [Bug #9231]'
+    assert_not_equal(false.hash, @cls[].hash, bug9231)
   end
 
   def test_include?
@@ -1507,6 +1509,13 @@ class TestArray < Test::Unit::TestCase
     assert_equal(d, c)
 
     assert_equal(@cls[1, 2, 3], @cls[1, 2, 3].uniq)
+
+    a = %w(a a)
+    b = a.uniq
+    assert_equal(%w(a a), a)
+    assert(a.none?(&:frozen?))
+    assert_equal(%w(a), b)
+    assert(b.none?(&:frozen?))
   end
 
   def test_uniq_with_block
@@ -1527,6 +1536,13 @@ class TestArray < Test::Unit::TestCase
     assert_equal([1,3], a)
     assert_equal([1], b)
     assert_not_same(a, b)
+
+    a = %w(a a)
+    b = a.uniq {|v| v }
+    assert_equal(%w(a a), a)
+    assert(a.none?(&:frozen?))
+    assert_equal(%w(a), b)
+    assert(b.none?(&:frozen?))
   end
 
   def test_uniq!
@@ -1573,6 +1589,13 @@ class TestArray < Test::Unit::TestCase
       a.sort_by!{|e| e[:c]}
       a.uniq!   {|e| e[:c]}
     end
+
+    a = %w(a a)
+    b = a.uniq
+    assert_equal(%w(a a), a)
+    assert(a.none?(&:frozen?))
+    assert_equal(%w(a), b)
+    assert(b.none?(&:frozen?))
   end
 
   def test_uniq_bang_with_block
@@ -1594,6 +1617,12 @@ class TestArray < Test::Unit::TestCase
     b = a.uniq! {|v| v.even? }
     assert_equal([1,2], a)
     assert_equal(nil, b)
+
+    a = %w(a a)
+    b = a.uniq! {|v| v }
+    assert_equal(%w(a), b)
+    assert_same(a, b)
+    assert b.none?(&:frozen?)
   end
 
   def test_uniq_bang_with_freeze
@@ -1622,6 +1651,29 @@ class TestArray < Test::Unit::TestCase
     assert_equal(@cls[1,2], @cls[1] | @cls[2])
     assert_equal(@cls[1,2], @cls[1, 1] | @cls[2, 2])
     assert_equal(@cls[1,2], @cls[1, 2] | @cls[1, 2])
+
+    a = %w(a b c)
+    b = %w(a b c d e)
+    c = a | b
+    assert_equal(c, b)
+    assert_not_same(c, b)
+    assert_equal(%w(a b c), a)
+    assert_equal(%w(a b c d e), b)
+    assert(a.none?(&:frozen?))
+    assert(b.none?(&:frozen?))
+    assert(c.none?(&:frozen?))
+  end
+
+  def test_OR_in_order
+    obj1, obj2 = Class.new do
+      attr_reader :name
+      def initialize(name) @name = name; end
+      def inspect; "test_OR_in_order(#{@name})"; end
+      def hash; 0; end
+      def eql?(a) true; end
+      break [new("1"), new("2")]
+    end
+    assert_equal([obj1], [obj1]|[obj2])
   end
 
   def test_combination
@@ -2011,13 +2063,6 @@ class TestArray < Test::Unit::TestCase
     assert_equal(A, B)
   end
 
-  def test_hash2
-    assert_not_equal([[1]].hash, [[2]].hash)
-    a = []
-    a << a
-    assert_not_equal([a, a].hash, a.hash) # Implementation dependent
-  end
-
   def test_flatten_error
     a = []
     a << a
@@ -2041,6 +2086,13 @@ class TestArray < Test::Unit::TestCase
     srand(0)
     100.times do
       assert_equal([0, 1, 2].shuffle, [0, 1, 2].shuffle(random: gen))
+    end
+
+    assert_raise_with_message(ArgumentError, /unknown keyword/) do
+      [0, 1, 2].shuffle(xawqij: "a")
+    end
+    assert_raise_with_message(ArgumentError, /unknown keyword/) do
+      [0, 1, 2].shuffle!(xawqij: "a")
     end
   end
 
@@ -2114,6 +2166,10 @@ class TestArray < Test::Unit::TestCase
       100.times do |i|
         assert_equal(a.sample(n), a.sample(n, random: gen), "#{i}/#{n}")
       end
+    end
+
+    assert_raise_with_message(ArgumentError, /unknown keyword/) do
+      [0, 1, 2].sample(xawqij: "a")
     end
   end
 

@@ -143,29 +143,6 @@ argument_error(const rb_iseq_t *iseq, int miss_argc, int min_argc, int max_argc)
     rb_exc_raise(exc);
 }
 
-NORETURN(static void keyword_error(const char *error, VALUE keys));
-static void
-keyword_error(const char *error, VALUE keys)
-{
-    const char *msg = RARRAY_LEN(keys) == 1 ? "" : "s";
-    keys = rb_ary_join(keys, rb_usascii_str_new2(", "));
-    rb_raise(rb_eArgError, "%s keyword%s: %"PRIsVALUE, error, msg, keys);
-}
-
-NORETURN(static void unknown_keyword_error(VALUE hash, const ID *table, int keywords));
-static void
-unknown_keyword_error(VALUE hash, const ID *table, int keywords)
-{
-    VALUE keys;
-    int i;
-    for (i = 0; i < keywords; i++) {
-	rb_hash_delete(hash, ID2SYM(table[i]));
-    }
-    keys = rb_funcall(hash, rb_intern("keys"), 0, 0);
-    if (!RB_TYPE_P(keys, T_ARRAY)) rb_raise(rb_eArgError, "unknown keyword");
-    keyword_error("unknown", keys);
-}
-
 void
 rb_error_arity(int argc, int min, int max)
 {
@@ -308,10 +285,10 @@ vm_cref_push(rb_thread_t *th, VALUE klass, int noex, rb_block_t *blockptr)
     cref->nd_visi = noex;
 
     if (blockptr) {
-	cref->nd_next = vm_get_cref0(blockptr->iseq, blockptr->ep);
+	OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(blockptr->iseq, blockptr->ep));
     }
     else if (cfp) {
-	cref->nd_next = vm_get_cref0(cfp->iseq, cfp->ep);
+	OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(cfp->iseq, cfp->ep));
     }
     /* TODO: why cref->nd_next is 1? */
     if (cref->nd_next && cref->nd_next != (void *) 1 &&
@@ -510,7 +487,7 @@ vm_getivar(VALUE obj, ID id, IC ic, rb_call_info_t *ci, int is_attr)
 	VALUE val = Qundef;
 	VALUE klass = RBASIC(obj)->klass;
 
-	if (LIKELY((!is_attr && ic->ic_serial == RCLASS_EXT(klass)->class_serial) ||
+	if (LIKELY((!is_attr && ic->ic_serial == RCLASS_SERIAL(klass)) ||
 		   (is_attr && ci->aux.index > 0))) {
 	    long index = !is_attr ? (long)ic->ic_value.index : ci->aux.index - 1;
 	    long len = ROBJECT_NUMIV(obj);
@@ -533,7 +510,7 @@ vm_getivar(VALUE obj, ID id, IC ic, rb_call_info_t *ci, int is_attr)
 		    }
 		    if (!is_attr) {
 			ic->ic_value.index = index;
-			ic->ic_serial = RCLASS_EXT(klass)->class_serial;
+			ic->ic_serial = RCLASS_SERIAL(klass);
 		    }
 		    else { /* call_info */
 			ci->aux.index = index + 1;
@@ -565,7 +542,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, rb_call_info_t *ci, int is_attr)
 	st_data_t index;
 
 	if (LIKELY(
-	    (!is_attr && ic->ic_serial == RCLASS_EXT(klass)->class_serial) ||
+	    (!is_attr && ic->ic_serial == RCLASS_SERIAL(klass)) ||
 	    (is_attr && ci->aux.index > 0))) {
 	    long index = !is_attr ? (long)ic->ic_value.index : ci->aux.index-1;
 	    long len = ROBJECT_NUMIV(obj);
@@ -582,7 +559,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, rb_call_info_t *ci, int is_attr)
 	    if (iv_index_tbl && st_lookup(iv_index_tbl, (st_data_t)id, &index)) {
 		if (!is_attr) {
 		    ic->ic_value.index = index;
-		    ic->ic_serial = RCLASS_EXT(klass)->class_serial;
+		    ic->ic_serial = RCLASS_SERIAL(klass);
 		}
 		else {
 		    ci->aux.index = index + 1;
@@ -846,7 +823,7 @@ vm_search_method(rb_call_info_t *ci, VALUE recv)
     VALUE klass = CLASS_OF(recv);
 
 #if OPT_INLINE_METHOD_CACHE
-    if (LIKELY(GET_METHOD_SERIAL() == ci->method_serial && RCLASS_EXT(klass)->class_serial == ci->class_serial)) {
+    if (LIKELY(GET_GLOBAL_METHOD_STATE() == ci->method_state && RCLASS_SERIAL(klass) == ci->class_serial)) {
 	/* cache hit! */
 	return;
     }
@@ -856,8 +833,8 @@ vm_search_method(rb_call_info_t *ci, VALUE recv)
     ci->klass = klass;
     ci->call = vm_call_general;
 #if OPT_INLINE_METHOD_CACHE
-    ci->method_serial = GET_METHOD_SERIAL();
-    ci->class_serial = RCLASS_EXT(klass)->class_serial;
+    ci->method_state = GET_GLOBAL_METHOD_STATE();
+    ci->class_serial = RCLASS_SERIAL(klass);
 #endif
 }
 
@@ -924,7 +901,7 @@ rb_equal_opt(VALUE obj1, VALUE obj2)
     rb_call_info_t ci;
     ci.mid = idEq;
     ci.klass = 0;
-    ci.method_serial = 0;
+    ci.method_state = 0;
     ci.me = NULL;
     ci.defined_class = 0;
     return opt_eq_func(obj1, obj2, &ci);
@@ -1087,64 +1064,11 @@ vm_caller_setup_args(const rb_thread_t *th, rb_control_frame_t *cfp, rb_call_inf
     }
 }
 
-static int
-separate_symbol(st_data_t key, st_data_t value, st_data_t arg)
-{
-    VALUE *kwdhash = (VALUE *)arg;
-
-    if (!SYMBOL_P(key)) kwdhash++;
-    if (!*kwdhash) *kwdhash = rb_hash_new();
-    rb_hash_aset(*kwdhash, (VALUE)key, (VALUE)value);
-    return ST_CONTINUE;
-}
-
-VALUE
-rb_extract_keywords(VALUE *orighash)
-{
-    VALUE parthash[2] = {0, 0};
-    VALUE hash = *orighash;
-
-    if (RHASH_EMPTY_P(hash)) {
-	*orighash = 0;
-	return hash;
-    }
-    st_foreach(rb_hash_tbl_raw(hash), separate_symbol, (st_data_t)&parthash);
-    *orighash = parthash[1];
-    return parthash[0];
-}
-
-void
-rb_check_keyword_opthash(VALUE keyword_hash, const ID *table, int required, int optional)
-{
-    int i = 0, j;
-    VALUE missing = Qnil;
-
-    if (required) {
-	for (; i < required; i++) {
-	    VALUE keyword = ID2SYM(table[i]);
-	    if (keyword_hash && st_lookup(rb_hash_tbl_raw(keyword_hash), (st_data_t)keyword, 0))
-		continue;
-	    if (NIL_P(missing)) missing = rb_ary_tmp_new(1);
-	    rb_ary_push(missing, keyword);
-	}
-	if (!NIL_P(missing)) {
-	    keyword_error("missing", missing);
-	}
-    }
-    if (optional && keyword_hash) {
-	for (j = i, i = 0; i < optional; i++) {
-	    if (st_lookup(rb_hash_tbl_raw(keyword_hash), ID2SYM(table[required+i]), 0)) j++;
-	}
-	if (RHASH_SIZE(keyword_hash) > (unsigned int)j) {
-	    unknown_keyword_error(keyword_hash, table, required+optional);
-	}
-    }
-}
-
 static inline int
 vm_callee_setup_keyword_arg(const rb_iseq_t *iseq, int argc, int m, VALUE *orig_argv, VALUE *kwd)
 {
-    VALUE keyword_hash, orig_hash;
+    VALUE keyword_hash = 0, orig_hash;
+    int optional = iseq->arg_keywords - iseq->arg_keyword_required;
 
     if (argc > m &&
 	!NIL_P(orig_hash = rb_check_hash_type(orig_argv[argc-1])) &&
@@ -1155,13 +1079,11 @@ vm_callee_setup_keyword_arg(const rb_iseq_t *iseq, int argc, int m, VALUE *orig_
 	else {
 	    orig_argv[argc-1] = orig_hash;
 	}
-	rb_check_keyword_opthash(keyword_hash, iseq->arg_keyword_table, iseq->arg_keyword_required,
-				 iseq->arg_keyword_check ? iseq->arg_keywords - iseq->arg_keyword_required : 0);
     }
-    else if (iseq->arg_keyword_required) {
-	rb_check_keyword_opthash(0, iseq->arg_keyword_table, iseq->arg_keyword_required, 0);
-    }
-    else {
+    rb_get_kwargs(keyword_hash, iseq->arg_keyword_table, iseq->arg_keyword_required,
+		  (iseq->arg_keyword_check ? optional : -1-optional),
+		  NULL);
+    if (!keyword_hash) {
 	keyword_hash = rb_hash_new();
     }
 

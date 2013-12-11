@@ -4912,6 +4912,10 @@ assocs		: assoc
 assoc		: arg_value tASSOC arg_value
 		    {
 		    /*%%%*/
+			if (nd_type($1) == NODE_STR) {
+			    nd_set_type($1, NODE_LIT);
+			    $1->nd_lit = rb_fstring($1->nd_lit);
+			}
 			$$ = list_append(NEW_LIST($1), $3);
 		    /*%
 			$$ = dispatch2(assoc_new, $1, $3);
@@ -10334,6 +10338,7 @@ static ID
 register_symid_str(ID id, VALUE str)
 {
     OBJ_FREEZE(str);
+    str = rb_fstring(str);
 
     if (RUBY_DTRACE_SYMBOL_CREATE_ENABLED()) {
 	RUBY_DTRACE_SYMBOL_CREATE(RSTRING_PTR(str), rb_sourcefile(), rb_sourceline());
@@ -10544,6 +10549,7 @@ rb_id2str(ID id)
 		name[1] = 0;
 		str = rb_usascii_str_new(name, 1);
 		OBJ_FREEZE(str);
+		str = rb_fstring(str);
 		global_symbols.op_sym[i] = str;
 		global_symbols.minor_marked = 0;
 	    }
@@ -10555,6 +10561,7 @@ rb_id2str(ID id)
 		if (!str) {
 		    str = rb_usascii_str_new2(op_tbl[i].name);
 		    OBJ_FREEZE(str);
+		    str = rb_fstring(str);
 		    global_symbols.op_sym[i] = str;
 		    global_symbols.minor_marked = 0;
 		}

@@ -86,7 +86,7 @@ hash_recursive(VALUE obj, VALUE arg, int recurse)
 VALUE
 rb_hash(VALUE obj)
 {
-    VALUE hval = rb_exec_recursive(hash_recursive, obj, 0);
+    VALUE hval = rb_exec_recursive_outer(hash_recursive, obj, 0);
   retry:
     switch (TYPE(hval)) {
       case T_FIXNUM:
@@ -118,7 +118,9 @@ rb_any_hash(VALUE a)
 
     if (SPECIAL_CONST_P(a)) {
 	if (a == Qundef) return 0;
-	hnum = rb_hash_end(rb_hash_start((st_index_t)a));
+	hnum = rb_hash_start((st_index_t)a);
+	hnum = rb_hash_uint(hnum, (st_index_t)rb_any_hash);
+	hnum = rb_hash_end(hnum);
     }
     else if (BUILTIN_TYPE(a) == T_STRING) {
 	hnum = rb_str_hash(a);
@@ -576,6 +578,11 @@ rb_hash_s_try_convert(VALUE dummy, VALUE hash)
     return rb_check_hash_type(hash);
 }
 
+struct rehash_arg {
+    VALUE hash;
+    st_table *tbl;
+};
+
 static int
 rb_hash_rehash_i(VALUE key, VALUE value, VALUE arg)
 {
@@ -608,6 +615,7 @@ rb_hash_rehash_i(VALUE key, VALUE value, VALUE arg)
 static VALUE
 rb_hash_rehash(VALUE hash)
 {
+    VALUE tmp;
     st_table *tbl;
 
     if (RHASH_ITER_LEV(hash) > 0) {
@@ -616,10 +624,14 @@ rb_hash_rehash(VALUE hash)
     rb_hash_modify_check(hash);
     if (!RHASH(hash)->ntbl)
         return hash;
+    tmp = hash_alloc(0);
     tbl = st_init_table_with_size(RHASH(hash)->ntbl->type, RHASH(hash)->ntbl->num_entries);
+    RHASH(tmp)->ntbl = tbl;
+
     rb_hash_foreach(hash, rb_hash_rehash_i, (VALUE)tbl);
     st_free_table(RHASH(hash)->ntbl);
     RHASH(hash)->ntbl = tbl;
+    RHASH(tmp)->ntbl = 0;
 
     return hash;
 }
@@ -1082,6 +1094,15 @@ rb_hash_reject_bang(VALUE hash)
     return hash;
 }
 
+static int
+reject_i(VALUE key, VALUE value, VALUE hash)
+{
+    if (!RTEST(rb_yield_values(2, key, value))) {
+	rb_hash_aset(hash, key, value);
+    }
+    return ST_CONTINUE;
+}
+
 /*
  *  call-seq:
  *     hsh.reject {| key, value | block }  -> a_hash
@@ -1096,7 +1117,15 @@ rb_hash_reject_bang(VALUE hash)
 static VALUE
 rb_hash_reject(VALUE hash)
 {
-    return rb_hash_delete_if(rb_obj_dup(hash));
+    VALUE ret;
+
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
+    ret = hash_alloc(rb_obj_class(hash));
+    OBJ_INFECT(ret, hash);
+    if (!RHASH_EMPTY_P(hash)) {
+	rb_hash_foreach(hash, reject_i, ret);
+    }
+    return ret;
 }
 
 /*
@@ -1262,9 +1291,7 @@ static int
 hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
 {
     if (!existing) {
-	VALUE str = (VALUE)*key;
-	if (!OBJ_FROZEN(str))
-	    *key = rb_fstring(str);
+	*key = rb_str_new_frozen(*key);
     }
     return hash_aset(key, val, arg, existing);
 }
@@ -1388,22 +1415,9 @@ rb_hash_replace(VALUE hash, VALUE hash2)
 
     table2 = RHASH(hash2)->ntbl;
 
-    if (RHASH_EMPTY_P(hash2)) {
-	rb_hash_clear(hash);
-	if (table2) hash_tbl(hash)->type = table2->type;
-	return hash;
-    }
-
-    if (RHASH_ITER_LEV(hash) > 0) {
-	rb_hash_clear(hash);
-	hash_tbl(hash)->type = table2->type;
-	rb_hash_foreach(hash2, replace_i, hash);
-    }
-    else {
-	st_table *old_table = RHASH(hash)->ntbl;
-	if (old_table) st_free_table(old_table);
-	RHASH(hash)->ntbl = st_copy(table2);
-    }
+    rb_hash_clear(hash);
+    if (table2) hash_tbl(hash)->type = table2->type;
+    rb_hash_foreach(hash2, replace_i, hash);
 
     return hash;
 }
@@ -1581,7 +1595,7 @@ rb_hash_to_a(VALUE hash)
 {
     VALUE ary;
 
-    ary = rb_ary_new();
+    ary = rb_ary_new_capa(RHASH_SIZE(hash));
     rb_hash_foreach(hash, to_a_i, ary);
     OBJ_INFECT(ary, hash);
 
@@ -1949,20 +1963,6 @@ hash_i(VALUE key, VALUE val, VALUE arg)
     return ST_CONTINUE;
 }
 
-static VALUE
-recursive_hash(VALUE hash, VALUE dummy, int recur)
-{
-    st_index_t hval = RHASH_SIZE(hash);
-
-    if (!hval) return INT2FIX(0);
-    if (recur)
-	hval = rb_hash_uint(rb_hash_start(rb_hash(rb_cHash)), hval);
-    else
-	rb_hash_foreach(hash, hash_i, (VALUE)&hval);
-    hval = rb_hash_end(hval);
-    return INT2FIX(hval);
-}
-
 /*
  *  call-seq:
  *     hsh.hash   -> fixnum
@@ -1974,7 +1974,14 @@ recursive_hash(VALUE hash, VALUE dummy, int recur)
 static VALUE
 rb_hash_hash(VALUE hash)
 {
-    return rb_exec_recursive_paired(recursive_hash, hash, hash, 0);
+    st_index_t size = RHASH_SIZE(hash);
+    st_index_t hval = rb_hash_start(size);
+    hval = rb_hash_uint(hval, (st_index_t)rb_hash_hash);
+    if (size) {
+	rb_hash_foreach(hash, hash_i, (VALUE)&hval);
+    }
+    hval = rb_hash_end(hval);
+    return INT2FIX(hval);
 }
 
 static int
@@ -2398,7 +2405,18 @@ static char **my_environ;
 #undef environ
 #define environ my_environ
 #undef getenv
-#define getenv(n) rb_w32_ugetenv(n)
+static inline char *
+w32_getenv(const char *name)
+{
+    static int binary = -1;
+    static int locale = -1;
+    if (binary < 0) {
+	binary = rb_ascii8bit_encindex();
+	locale = rb_locale_encindex();
+    }
+    return locale == binary ? rb_w32_getenv(name) : rb_w32_ugetenv(name);
+}
+#define getenv(n) w32_getenv(n)
 #elif defined(__APPLE__)
 #undef environ
 #define environ (*_NSGetEnviron())

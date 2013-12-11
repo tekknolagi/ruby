@@ -1546,7 +1546,7 @@ rb_yield_refine_block(VALUE refinement, VALUE refinements)
     }
     cref = vm_cref_push(th, refinement, NOEX_PUBLIC, blockptr);
     cref->flags |= NODE_FL_CREF_PUSHED_BY_EVAL;
-    cref->nd_refinements = refinements;
+    OBJ_WRITE(cref, &cref->nd_refinements, refinements);
 
     return vm_yield_with_cref(th, 0, NULL, cref);
 }
@@ -1834,6 +1834,16 @@ VALUE
 rb_catch_obj(VALUE t, VALUE (*func)(), VALUE data)
 {
     int state;
+    VALUE val = rb_catch_protect(t, (rb_block_call_func *)func, data, &state);
+    if (state)
+	JUMP_TAG(state);
+    return val;
+}
+
+VALUE
+rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, int *stateptr)
+{
+    int state;
     volatile VALUE val = Qnil;		/* OK */
     rb_thread_t *th = GET_THREAD();
     rb_control_frame_t *saved_cfp = th->cfp;
@@ -1845,7 +1855,7 @@ rb_catch_obj(VALUE t, VALUE (*func)(), VALUE data)
 
     if ((state = TH_EXEC_TAG()) == 0) {
 	/* call with argc=1, argv = [tag], block = Qnil to insure compatibility */
-	val = (*func)(tag, data, 1, &tag, Qnil);
+	val = (*func)(tag, data, 1, (const VALUE *)&tag, Qnil);
     }
     else if (state == TAG_THROW && RNODE(th->errinfo)->u1.value == tag) {
 	th->cfp = saved_cfp;
@@ -1854,8 +1864,8 @@ rb_catch_obj(VALUE t, VALUE (*func)(), VALUE data)
 	state = 0;
     }
     TH_POP_TAG();
-    if (state)
-	JUMP_TAG(state);
+    if (stateptr)
+	*stateptr = state;
 
     return val;
 }

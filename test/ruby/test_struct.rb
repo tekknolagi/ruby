@@ -284,6 +284,20 @@ module TestStruct
     assert_equal({a:1, b:2, c:3, d:4, e:5, f:6}, o.to_h)
   end
 
+  def test_question_mark_in_member
+    klass = @Struct.new(:a, :b?)
+    x = Object.new
+    o = klass.new("test", x)
+    assert_same(x, o.b?)
+  end
+
+  def test_bang_mark_in_member
+    klass = @Struct.new(:a, :b!)
+    x = Object.new
+    o = klass.new("test", x)
+    assert_same(x, o.b!)
+  end
+
   class TopStruct < Test::Unit::TestCase
     include TestStruct
 

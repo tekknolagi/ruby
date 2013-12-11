@@ -67,6 +67,7 @@ class Gem::RequestSet
     @dependency_names = {}
     @development      = false
     @git_set          = nil
+    @install_dir      = Gem.dir
     @requests         = []
     @sets             = []
     @soft_missing     = false
@@ -143,7 +144,11 @@ class Gem::RequestSet
   # dependencies file are not used.  See Gem::Installer for other +options+.
 
   def install_from_gemdeps options, &block
-    load_gemdeps options[:gemdeps], options[:without_groups]
+    gemdeps = options[:gemdeps]
+
+    @install_dir = options[:install_dir] || Gem.dir
+
+    load_gemdeps gemdeps, options[:without_groups]
 
     resolve
 
@@ -153,12 +158,23 @@ class Gem::RequestSet
       specs.map { |s| s.full_name }.sort.each do |s|
         puts "  #{s}"
       end
+
+      if Gem.configuration.really_verbose
+        @resolver.stats.display
+      end
     else
-      install options, &block
+      installed = install options, &block
+
+      lockfile = Gem::RequestSet::Lockfile.new self, gemdeps
+      lockfile.write
+
+      installed
     end
   end
 
   def install_into dir, force = true, options = {}
+    gem_home, ENV['GEM_HOME'] = ENV['GEM_HOME'], dir
+
     existing = force ? [] : specs_in(dir)
     existing.delete_if { |s| @always_install.include? s }
 
@@ -185,6 +201,8 @@ class Gem::RequestSet
     end
 
     installed
+  ensure
+    ENV['GEM_HOME'] = gem_home
   end
 
   ##
@@ -193,6 +211,11 @@ class Gem::RequestSet
   def load_gemdeps path, without_groups = []
     @git_set    = Gem::Resolver::GitSet.new
     @vendor_set = Gem::Resolver::VendorSet.new
+
+    @git_set.root_dir = @install_dir
+
+    lockfile = Gem::RequestSet::Lockfile.new self, path
+    lockfile.parse
 
     gf = Gem::RequestSet::GemDependencyAPI.new self, path
     gf.without_groups = without_groups if without_groups
@@ -213,6 +236,8 @@ class Gem::RequestSet
     resolver = Gem::Resolver.new @dependencies, set
     resolver.development  = @development
     resolver.soft_missing = @soft_missing
+
+    @resolver = resolver
 
     @requests = resolver.resolve
   end
@@ -264,3 +289,4 @@ class Gem::RequestSet
 end
 
 require 'rubygems/request_set/gem_dependency_api'
+require 'rubygems/request_set/lockfile'

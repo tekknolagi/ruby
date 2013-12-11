@@ -49,7 +49,7 @@ fc_path(struct fc_result *fc, ID name)
 {
     VALUE path, tmp;
 
-    path = rb_str_dup(rb_id2str(name));
+    path = rb_id2str(name);
     while (fc) {
 	st_data_t n;
 	if (fc->track == rb_cObject) break;
@@ -176,8 +176,7 @@ classname(VALUE klass, int *permanent)
 		    return Qnil;
 		}
 		if (!st_lookup(RCLASS_IV_TBL(klass), (st_data_t)tmp_classpath, &n)) {
-		    path = rb_str_dup(rb_id2str(cid));
-		    OBJ_FREEZE(path);
+		    path = rb_id2str(cid);
 		    return path;
 		}
 		*permanent = 0;
@@ -276,6 +275,18 @@ rb_class_path_no_cache(VALUE klass)
     VALUE path = rb_tmp_class_path(klass, &permanent, null_cache);
     if (!NIL_P(path)) path = rb_str_dup(path);
     return path;
+}
+
+VALUE
+rb_class_path_cached(VALUE klass)
+{
+    st_table *ivtbl = RCLASS_IV_TBL(klass);
+    st_data_t n;
+
+    if (!ivtbl) return Qnil;
+    if (st_lookup(ivtbl, (st_data_t)classpath, &n)) return (VALUE)n;
+    if (st_lookup(ivtbl, (st_data_t)tmp_classpath, &n)) return (VALUE)n;
+    return Qnil;
 }
 
 void
@@ -1969,6 +1980,26 @@ sv_i(st_data_t k, st_data_t v, st_data_t a)
     return ST_CONTINUE;
 }
 
+static int
+rb_local_constants_i(st_data_t const_name, st_data_t const_value, st_data_t ary)
+{
+    rb_ary_push((VALUE)ary, ID2SYM((ID)const_name));
+    return ST_CONTINUE;
+}
+
+static VALUE
+rb_local_constants(VALUE mod)
+{
+    st_table *tbl = RCLASS_CONST_TBL(mod);
+    VALUE ary;
+
+    if (!tbl) return rb_ary_new2(0);
+
+    ary = rb_ary_new2(tbl->num_entries);
+    st_foreach(tbl, rb_local_constants_i, ary);
+    return ary;
+}
+
 void*
 rb_mod_const_at(VALUE mod, void *data)
 {
@@ -2037,7 +2068,6 @@ VALUE
 rb_mod_constants(int argc, VALUE *argv, VALUE mod)
 {
     VALUE inherit;
-    st_table *tbl;
 
     if (argc == 0) {
 	inherit = Qtrue;
@@ -2045,13 +2075,13 @@ rb_mod_constants(int argc, VALUE *argv, VALUE mod)
     else {
 	rb_scan_args(argc, argv, "01", &inherit);
     }
+
     if (RTEST(inherit)) {
-	tbl = rb_mod_const_of(mod, 0);
+	return rb_const_list(rb_mod_const_of(mod, 0));
     }
     else {
-	tbl = rb_mod_const_at(mod, 0);
+	return rb_local_constants(mod);
     }
-    return rb_const_list(tbl);
 }
 
 static int

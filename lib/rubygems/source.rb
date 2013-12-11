@@ -49,6 +49,7 @@ class Gem::Source
     case other
     when Gem::Source::Installed,
          Gem::Source::Local,
+         Gem::Source::Lock,
          Gem::Source::SpecificFile,
          Gem::Source::Git,
          Gem::Source::Vendor then
@@ -201,7 +202,10 @@ class Gem::Source
     q.group 2, '[Remote:', ']' do
       q.breakable
       q.text @uri.to_s
+
       if api = api_uri
+        q.breakable
+        q.text 'API URI: '
         q.text api.to_s
       end
     end
@@ -213,5 +217,6 @@ require 'rubygems/source/git'
 require 'rubygems/source/installed'
 require 'rubygems/source/specific_file'
 require 'rubygems/source/local'
+require 'rubygems/source/lock'
 require 'rubygems/source/vendor'
 

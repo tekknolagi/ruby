@@ -252,10 +252,13 @@ struct rb_subclass_entry {
 
 #if defined(HAVE_LONG_LONG)
 typedef unsigned LONG_LONG rb_serial_t;
+#define SERIALT2NUM ULL2NUM
 #elif defined(HAVE_UINT64_T)
 typedef uint64_t rb_serial_t;
+#define SERIALT2NUM SIZET2NUM
 #else
 typedef unsigned long rb_serial_t;
+#define SERIALT2NUM ULONG2NUM
 #endif
 
 struct rb_classext_struct {
@@ -276,6 +279,11 @@ struct rb_classext_struct {
     rb_alloc_func_t allocator;
 };
 
+struct method_table_wrapper {
+    st_table *tbl;
+    size_t serial;
+};
+
 /* class.c */
 void rb_class_subclass_add(VALUE super, VALUE klass);
 void rb_class_remove_from_super_subclasses(VALUE);
@@ -283,10 +291,22 @@ void rb_class_remove_from_super_subclasses(VALUE);
 #define RCLASS_EXT(c) (RCLASS(c)->ptr)
 #define RCLASS_IV_TBL(c) (RCLASS_EXT(c)->iv_tbl)
 #define RCLASS_CONST_TBL(c) (RCLASS_EXT(c)->const_tbl)
-#define RCLASS_M_TBL(c) (RCLASS(c)->m_tbl)
+#define RCLASS_M_TBL_WRAPPER(c) (RCLASS(c)->m_tbl_wrapper)
+#define RCLASS_M_TBL(c) (RCLASS_M_TBL_WRAPPER(c) ? RCLASS_M_TBL_WRAPPER(c)->tbl : 0)
 #define RCLASS_IV_INDEX_TBL(c) (RCLASS(c)->iv_index_tbl)
 #define RCLASS_ORIGIN(c) (RCLASS_EXT(c)->origin)
 #define RCLASS_REFINED_CLASS(c) (RCLASS_EXT(c)->refined_class)
+#define RCLASS_SERIAL(c) (RCLASS_EXT(c)->class_serial)
+
+static inline void
+RCLASS_M_TBL_INIT(VALUE c)
+{
+    struct method_table_wrapper *wrapper;
+    wrapper = ALLOC(struct method_table_wrapper);
+    wrapper->tbl = st_init_numtable();
+    wrapper->serial = 0;
+    RCLASS_M_TBL_WRAPPER(c) = wrapper;
+}
 
 #undef RCLASS_SUPER
 static inline VALUE
@@ -437,14 +457,16 @@ void *ruby_mimmalloc(size_t size);
 void ruby_mimfree(void *ptr);
 void rb_objspace_set_event_hook(const rb_event_flag_t event);
 void rb_gc_writebarrier_remember_promoted(VALUE obj);
-void ruby_gc_set_params(void);
+void ruby_gc_set_params(int safe_level);
 
-#if HAVE_MALLOC_USABLE_SIZE || defined(_WIN32)
+#if defined(HAVE_MALLOC_USABLE_SIZE) || defined(HAVE_MALLOC_SIZE) || defined(_WIN32)
 #define ruby_sized_xrealloc(ptr, new_size, old_size) ruby_xrealloc(ptr, new_size)
+#define ruby_sized_xrealloc2(ptr, new_count, element_size, old_count) ruby_xrealloc(ptr, new_count, element_size)
 #define ruby_sized_xfree(ptr, size) ruby_xfree(ptr)
 #define SIZED_REALLOC_N(var,type,n,old_n) REALLOC_N(var, type, n)
 #else
 void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR_ALLOC_SIZE((2));
+void *ruby_sized_xrealloc(void *ptr, size_t new_count, size_t element_size, size_t old_count) RUBY_ATTR_ALLOC_SIZE((2, 3));
 void ruby_sized_xfree(void *x, size_t size);
 #define SIZED_REALLOC_N(var,type,n,old_n) ((var)=(type*)ruby_sized_xrealloc((char*)(var), (n) * sizeof(type), (old_n) * sizeof(type)))
 #endif
@@ -757,10 +779,11 @@ VALUE rb_check_block_call(VALUE, ID, int, const VALUE *, rb_block_call_func_t, V
 typedef void rb_check_funcall_hook(int, VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 				 rb_check_funcall_hook *hook, VALUE arg);
+VALUE rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, int *stateptr);
 
 /* vm_insnhelper.c */
 VALUE rb_equal_opt(VALUE obj1, VALUE obj2);
-void rb_check_keyword_opthash(VALUE keyword_hash, const ID *table, int required, int optional);
+int rb_get_kwargs(VALUE keyword_hash, const ID *table, int required, int optional, VALUE *);
 VALUE rb_extract_keywords(VALUE *orighash);
 
 /* vm_method.c */
@@ -852,6 +875,8 @@ st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
 
 /* gc.c */
 size_t rb_obj_memsize_of(VALUE);
+#define RB_OBJ_GC_FLAGS_MAX 5
+size_t rb_obj_gc_flags(VALUE, ID[], size_t);
 
 RUBY_SYMBOL_EXPORT_END
 
