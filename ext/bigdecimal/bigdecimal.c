@@ -126,6 +126,10 @@ static void  VpInternalRound(Real *c, size_t ixDigit, BDIGIT vPrev, BDIGIT v);
 static int   VpLimitRound(Real *c, size_t ixDigit);
 static Real *VpCopy(Real *pv, Real const* const x);
 
+#ifdef BIGDECIMAL_ENABLE_VPRINT
+static int VPrint(FILE *fp,const char *cntl_chr,Real *a);
+#endif
+
 /*
  *  **** BigDecimal part ****
  */
@@ -4185,6 +4189,7 @@ VpAddAbs(Real *a, Real *b, Real *c)
     a_pos = ap;
     b_pos = bp;
     c_pos = cp;
+
     if (word_shift == (size_t)-1L) return 0; /* Overflow */
     if (b_pos == (size_t)-1L) goto Assign_a;
 
@@ -4192,14 +4197,14 @@ VpAddAbs(Real *a, Real *b, Real *c)
 
     /* Just assign the last few digits of b to c because a has no  */
     /* corresponding digits to be added. */
-    while (b_pos + word_shift > a_pos) {
-	--c_pos;
-	if (b_pos > 0) {
-	    c->frac[c_pos] = b->frac[--b_pos];
+    if (b_pos > 0) {
+	while (b_pos > 0 && b_pos + word_shift > a_pos) {
+	    c->frac[--c_pos] = b->frac[--b_pos];
 	}
-	else {
-	    --word_shift;
-	    c->frac[c_pos] = 0;
+    }
+    if (b_pos == 0 && word_shift > a_pos) {
+	while (word_shift-- > a_pos) {
+	    c->frac[--c_pos] = 0;
 	}
     }
 
@@ -4295,16 +4300,16 @@ VpSubAbs(Real *a, Real *b, Real *c)
     /* each of the last few digits of the b because the a has no */
     /* corresponding digits to be subtracted. */
     if (b_pos + word_shift > a_pos) {
-	while (b_pos + word_shift > a_pos) {
-	    --c_pos;
-	    if (b_pos > 0) {
-		c->frac[c_pos] = BASE - b->frac[--b_pos] - borrow;
-	    }
-	    else {
-		--word_shift;
-		c->frac[c_pos] = BASE - borrow;
-	    }
+	while (b_pos > 0 && b_pos + word_shift > a_pos) {
+	    c->frac[--c_pos] = BASE - b->frac[--b_pos] - borrow;
 	    borrow = 1;
+	}
+	if (b_pos == 0) {
+	    while (word_shift > a_pos) {
+		--word_shift;
+		c->frac[--c_pos] = BASE - borrow;
+		borrow = 1;
+	    }
 	}
     }
     /* Just assign the last few digits of a to c because b has no */
@@ -4376,12 +4381,19 @@ static size_t
 VpSetPTR(Real *a, Real *b, Real *c, size_t *a_pos, size_t *b_pos, size_t *c_pos, BDIGIT *av, BDIGIT *bv)
 {
     size_t left_word, right_word, word_shift;
+
+    size_t const round_limit = (VpGetPrecLimit() + BASE_FIG - 1) / BASE_FIG;
+
+    assert(a->exponent >= b->expoennt);
+
     c->frac[0] = 0;
     *av = *bv = 0;
+
     word_shift = (a->exponent - b->exponent);
     left_word = b->Prec + word_shift;
     right_word = Max(a->Prec, left_word);
     left_word = c->MaxPrec - 1;    /* -1 ... prepare for round up */
+
     /*
      * check if 'round' is needed.
      */
@@ -4404,7 +4416,9 @@ VpSetPTR(Real *a, Real *b, Real *c, size_t *a_pos, size_t *b_pos, size_t *c_pos,
 	     *   a_pos =    |
 	     */
 	    *a_pos = left_word;
-	    *av = a->frac[*a_pos];    /* av is 'A' shown in above. */
+	    if (*a_pos <= round_limit) {
+		*av = a->frac[*a_pos];    /* av is 'A' shown in above. */
+	    }
 	}
 	else {
 	    /*
@@ -4423,7 +4437,9 @@ VpSetPTR(Real *a, Real *b, Real *c, size_t *a_pos, size_t *b_pos, size_t *c_pos,
 	     */
 	    if (c->MaxPrec >= word_shift + 1) {
 		*b_pos = c->MaxPrec - word_shift - 1;
-		*bv = b->frac[*b_pos];
+		if (*b_pos + word_shift <= round_limit) {
+		    *bv = b->frac[*b_pos];
+		}
 	    }
 	    else {
 		*b_pos = -1L;
@@ -4940,7 +4956,6 @@ Exit:
     return (int)val;
 }
 
-#ifdef BIGDECIMAL_ENABLE_VPRINT
 /*
  *    cntl_chr ... ASCIIZ Character, print control characters
  *     Available control codes:
@@ -4951,10 +4966,11 @@ Exit:
  *     Note: % must must not appear more than once
  *    a  ... VP variable to be printed
  */
-    VP_EXPORT int
+#ifdef BIGDECIMAL_ENABLE_VPRINT
+static int
 VPrint(FILE *fp, const char *cntl_chr, Real *a)
 {
-    size_t i, j, nc, nd, ZeroSup;
+    size_t i, j, nc, nd, ZeroSup, sep = 10;
     BDIGIT m, e, nn;
 
     /* Check if NaN & Inf. */
@@ -4989,6 +5005,16 @@ VPrint(FILE *fp, const char *cntl_chr, Real *a)
 		    ++nc;
 		}
 		nc += fprintf(fp, "0.");
+		switch (*(cntl_chr + j + 1)) {
+		default:
+		    break;
+
+		case '0': case 'z':
+		    ZeroSup = 0;
+		    ++j;
+		    sep = cntl_chr[j] == 'z' ? RMPD_COMPONENT_FIGURES : 10;
+		    break;
+		}
 		for (i = 0; i < a->Prec; ++i) {
 		    m = BASE1;
 		    e = a->frac[i];
@@ -5001,7 +5027,7 @@ VPrint(FILE *fp, const char *cntl_chr, Real *a)
 			    ++nd;
 			    ZeroSup = 0;    /* Set to print succeeding zeros */
 			}
-			if (nd >= 10) {    /* print ' ' after every 10 digits */
+			if (nd >= sep) {    /* print ' ' after every 10 digits */
 			    nd = 0;
 			    nc += fprintf(fp, " ");
 			}
@@ -5010,6 +5036,7 @@ VPrint(FILE *fp, const char *cntl_chr, Real *a)
 		    }
 		}
 		nc += fprintf(fp, "E%"PRIdSIZE, VpExponent10(a));
+		nc += fprintf(fp, " (%"PRIdVALUE", %lu, %lu)", a->exponent, a->Prec, a->MaxPrec);
 	    }
 	    else {
 		nc += fprintf(fp, "0.0");
@@ -5043,9 +5070,10 @@ VPrint(FILE *fp, const char *cntl_chr, Real *a)
 	}
 	j++;
     }
+
     return (int)nc;
 }
-#endif /* BIGDECIMAL_ENABLE_VPRINT */
+#endif
 
 static void
 VpFormatSt(char *psz, size_t fFmt)

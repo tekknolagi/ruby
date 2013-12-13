@@ -493,10 +493,12 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg)
 		if (OBJ_FROZEN(mesg)) {
 		    mesg = rb_obj_dup(mesg);
 		}
+		rb_iv_set(mesg, "bt_locations", at);
 		set_backtrace(mesg, at);
 	    }
 	}
     }
+
     if (!NIL_P(mesg)) {
 	th->errinfo = mesg;
     }
@@ -688,11 +690,11 @@ rb_raise_jump(VALUE mesg)
     VALUE self = cfp->self;
     ID mid = cfp->me->called_id;
 
+    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
+    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass, Qnil);
+
     setup_exception(th, TAG_RAISE, mesg);
 
-    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
-
-    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass, Qnil);
     rb_thread_raised_clear(th);
     JUMP_TAG(TAG_RAISE);
 }
@@ -739,7 +741,7 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
     int state;
     rb_thread_t *th = GET_THREAD();
     rb_control_frame_t *cfp = th->cfp;
-    volatile VALUE result;
+    volatile VALUE result = Qfalse;
     volatile VALUE e_info = th->errinfo;
     va_list args;
 
@@ -747,6 +749,15 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
     if ((state = TH_EXEC_TAG()) == 0) {
       retry_entry:
 	result = (*b_proc) (data1);
+    }
+    else if (result) {
+	/* escape from r_proc */
+	if (state == TAG_RETRY) {
+	    state = 0;
+	    th->errinfo = Qnil;
+	    result = Qfalse;
+	    goto retry_entry;
+	}
     }
     else {
 	th->cfp = cfp; /* restore */
@@ -765,25 +776,12 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
 	    va_end(args);
 
 	    if (handle) {
+		result = Qnil;
+		state = 0;
 		if (r_proc) {
-		    PUSH_TAG();
-		    if ((state = EXEC_TAG()) == 0) {
-			result = (*r_proc) (data2, th->errinfo);
-		    }
-		    POP_TAG();
-		    if (state == TAG_RETRY) {
-			state = 0;
-			th->errinfo = Qnil;
-			goto retry_entry;
-		    }
+		    result = (*r_proc) (data2, th->errinfo);
 		}
-		else {
-		    result = Qnil;
-		    state = 0;
-		}
-		if (state == 0) {
-		    th->errinfo = e_info;
-		}
+		th->errinfo = e_info;
 	    }
 	}
     }
@@ -1152,15 +1150,15 @@ using_module_recursive(NODE *cref, VALUE klass)
 	using_module_recursive(cref, super);
     }
     switch (BUILTIN_TYPE(klass)) {
-    case T_MODULE:
+      case T_MODULE:
 	module = klass;
 	break;
 
-    case T_ICLASS:
+      case T_ICLASS:
 	module = RBASIC(klass)->klass;
 	break;
 
-    default:
+      default:
 	rb_raise(rb_eTypeError, "wrong argument type %s (expected Module)",
 		 rb_obj_classname(klass));
 	break;
@@ -1176,6 +1174,7 @@ rb_using_module(NODE *cref, VALUE module)
 {
     Check_Type(module, T_MODULE);
     using_module_recursive(cref, module);
+    rb_clear_method_cache_by_class(rb_cObject);
 }
 
 VALUE
@@ -1295,9 +1294,7 @@ mod_using(VALUE self, VALUE module)
     if (prev_cfp && prev_cfp->self != self) {
 	rb_raise(rb_eRuntimeError, "Module#using is not called on self");
     }
-    Check_Type(module, T_MODULE);
     rb_using_module(cref, module);
-    rb_clear_method_cache_by_class(rb_cObject);
     return self;
 }
 
@@ -1431,9 +1428,7 @@ top_using(VALUE self, VALUE module)
 	rb_raise(rb_eRuntimeError,
 		 "main.using is permitted only at toplevel");
     }
-    Check_Type(module, T_MODULE);
     rb_using_module(cref, module);
-    rb_clear_method_cache_by_class(rb_cObject);
     return self;
 }
 

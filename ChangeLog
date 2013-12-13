@@ -1,3 +1,153 @@
+Sat Dec 14 01:31:52 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* eval.c (rb_rescue2): reuse tags pushed for body proc to protect
+	  rescue proc too.
+
+Sat Dec 14 01:15:51 2013  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* gc.c (wmap_final_func): Bugfix. Should update *value to new pointer.
+
+Sat Dec 14 01:05:46 2013  Tanaka Akira  <akr@fsij.org>
+
+	* ext/socket/lib/socket.rb: Don't test $! in "ensure" clause because
+	  it may be set before the body.
+	  Reported by ko1 and mrkn.  [ruby-core:59088] [Bug #9247]
+
+	* lib/cgi/core.rb: Ditto.
+
+	* lib/drb/ssl.rb: Ditto.
+
+Sat Dec 14 00:34:31 2013  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* internal.h (ruby_sized_xrealloc2): fix typo introduced in r44117,
+	  which cause compile error on Solaris.
+
+Sat Dec 14 00:22:16 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* thread.c: (exec_recursive): use rb_catch_protect() instead of
+	  rb_catch_obj() and PUSH_TAG(), and reduce pushing tags and
+	  machine stack usage.
+
+Sat Dec 14 00:18:08 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* proc.c (mnew_from_me): achieve the original defined_class from
+	  prepended iclass, to fix inherited owner.
+
+	* proc.c (method_owner): return the defined class, but not the
+	  class which the method object is created from.
+
+Fri Dec 13 22:29:21 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* proc.c (method_owner): return the class where alias is defined, not
+	  the class original method is defined.
+
+	* vm_method.c (rb_method_entry_make, rb_alias): store the originally
+	  defined class in me.  [Bug #7993] [Bug #7842] [Bug #9236]
+
+	* vm_method.c (rb_method_entry_get_without_cache): cache included
+	  module but not iclass.
+
+Fri Dec 13 16:27:17 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c (gc_info_decode): Use :major_by=>:nofree as fallback reason
+	  when other trigger conditions are present.
+
+Fri Dec 13 13:25:30 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* error.c: add Exception#backtrace_locations.
+	  Now, there are no setter and independent from Exception#backtrace.
+	  [Feature #8960]
+
+	* eval.c (setup_exception): set backtrace locations for `bt_location'
+	  special attribute.
+
+	* vm_backtrace.c (rb_backtrace_to_location_ary): added.
+
+	* internal.h: ditto.
+
+	* test/ruby/test_backtrace.rb: add a test for
+	  Exception#backtrace_locations.
+
+Fri Dec 13 12:01:07 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (garbage_collect_body): use rb_bug() and explicit error message
+	  instead of using assert().
+	  [Bug #9222]
+
+Fri Dec 13 11:52:41 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* array.c: fix comment to remove the word "shady".
+
+	* variable.c: ditto.
+
+Fri Dec 13 11:33:55 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: rename *shady* func/macros.
+	  * RVALUE_RAW_SHADY()   -> RVALUE_WB_PROTECTED_RAW()
+	  * RVALUE_SHADY()       -> RVALUE_RAW_SHADY()
+	  * rgengc_check_shady() -> rgengc_check_relation().
+	  And fix some messages using "shady" to "non-WB-protected".
+
+Fri Dec 13 10:04:23 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/request_set/lockfile.rb:  Import RubyGems master a8d0669
+	  with a 1.8.7 compatibility fix.
+	* test/rubygems/test_gem_request_set_lockfile.rb:  ditto.
+
+Fri Dec 13 09:50:49 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master ddac51f.  Changes:
+
+	  * Allow override for the shared gem installation directory for
+	    rubygems packagers.
+
+	  * Lock gem cache files for read and write to improve thread safety.
+
+	  * Use io/console when available.
+
+	  * Minor cleanup.
+
+	* test/rubygems:  ditto.
+
+Fri Dec 13 08:15:31 2013  Aman Gupta <ruby@tmm1.net>
+
+	* class.c (include_modules_at): use RCLASS_M_TBL_WRAPPER for
+	  equality checks. this avoids an unnecessary deference inside a tight
+	  loop, fixing a performance regression from r43973.
+	* object.c (rb_obj_is_kind_of): ditto.
+	* object.c (rb_class_inherited_p): ditto.
+
+Wed Dec 13 02:00:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (VpSetPTR): fix for limitation of the resulting
+	  precision.
+	  [ruby-core:50269] [Bug #7458]
+
+	* test/bigdecimal/test_bigdecimal.rb (test_limit): add tests for the above
+	  change.
+
+Wed Dec 13 01:56:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (VpAddAbs): put out a conditional branch from
+	  the inside of while-loop.
+
+	* ext/bigdecimal/bigdecimal.c (VpSubAbs): ditto.
+
+Wed Dec 13 01:53:00 2013  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (VPrint): be a static function, support another
+	  dump formats, and add more information of the given bigdecimal.
+
+	* ext/bigdecimal/bigdecimal.h: ditto.
+
+Wed Dec 11 16:45:58 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* eval.c (rb_raise_jump): call c_return hook immediately after
+	  popping `raise' frame.
+	  Patches by deivid (David Rodriguez). [Bug #8886]
+
+	* test/ruby/test_settracefunc.rb: catch up this fix.
+
 Wed Dec 11 16:01:26 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* hash.c (rb_hash_reject): return a plain hash, without copying
@@ -10,17 +160,6 @@ Wed Dec 11 15:36:15 2013  Aman Gupta <ruby@tmm1.net>
 	* compile.c (iseq_specialized_instruction): emit opt_aset instruction
 	  to optimize Hash#[]= and Array#[]= when called with Fixnum argument.
 	  [Bug #9227] [ruby-core:58956]
-
-Wed Dec 11 12:38:17 2013  Koichi Sasada  <ko1@atdot.net>
-
-	* eval.c (rb_raise_jump): pop frame after setup exception.
-	  Patches by deivid (David Rodriguez). [Bug #8886]
-
-	* test/minitest/test_minitest_unit.rb: catch up this change.
-
-	* test/ruby/test_backtrace.rb: ditto.
-
-	* test/ruby/test_settracefunc.rb: ditto.
 
 Wed Dec 11 04:54:03 2013  Eric Hodel  <drbrain@segment7.net>
 

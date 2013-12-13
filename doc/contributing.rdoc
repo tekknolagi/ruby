@@ -207,13 +207,13 @@ Slides should be:
 * Include a corresponding ticket number
 * MUST include a figure and/or short example code
 * SHOULD have less sentence in natural language (try to write less than 140 characters)
-* It is RECOMMENDED to itemize: motivation/use case, propoasl, pros/cons, corner case
+* It is RECOMMENDED to itemize: motivation/use case, proposal, pros/cons, corner case
 * PDF or Image (Web browsers can show it)
 
 Please note:
 
 * Even if the proposal is generally acceptable, it won't be accepted without writing corner cases in the ticket
-* Slide's exapmle: DevelopersMeeting20130727Japan
+* Slide's example: DevelopersMeeting20130727Japan
 
 == Backport Requests
 
