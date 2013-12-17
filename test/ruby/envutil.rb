@@ -166,8 +166,8 @@ module EnvUtil
       timeformat = DIAGNOSTIC_REPORTS_TIMEFORMAT
       pat = "#{path}/#{cmd}_#{now.strftime(timeformat)}[-_]*.crash"
       first = true
-      3.times do
-        first ? (first = false) : sleep(1)
+      30.times do
+        first ? (first = false) : sleep(0.1)
         Dir.glob(pat) do |name|
           log = File.read(name) rescue next
           if /\AProcess:\s+#{cmd} \[#{pid}\]$/ =~ log
@@ -415,8 +415,8 @@ eom
           result = File.__send__(predicate, *args)
           result = !result if neg
           mesg = "Expected file " << args.shift.inspect
-          mesg << mu_pp(args) unless args.empty?
           mesg << "#{neg} to be #{predicate}"
+          mesg << mu_pp(args).sub(/\A\[(.*)\]\z/m, '(\1)') unless args.empty?
           mesg << " #{failure_message}" if failure_message
           assert(result, mesg)
         end

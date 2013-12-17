@@ -133,6 +133,12 @@ with all sufficient information, see the ChangeLog file.
 
 === Core classes compatibility issues (excluding feature bug fixes)
 
+* Hash
+  * incompatible changes:
+    * Hash#reject now returns plain Hash object, that is the original object's
+      subclass, instance variables, default value, and taintedness are no longer
+      copied.
+
 * IO
   * incompatible changes:
     * open ignore internal encoding if external encoding is ASCII-8BIT.
@@ -228,8 +234,8 @@ String
     * RbConfig::SIZEOF is added to provide the size of C types.
 
 * RDoc
-  * Updated to 4.1.0.preview.2.  Major enhancements include a modified default
-    template and accessibility enhancements.
+  * Updated to 4.1.0.  Major enhancements include a modified default template
+  * and accessibility enhancements.
 
     For a list of minor enhancements and bug fixes see:
     https://github.com/rdoc/rdoc/blob/v4.1.0.preview.1/History.rdoc

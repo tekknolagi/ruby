@@ -1,3 +1,135 @@
+Tue Dec 17 05:18:17 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master 1c5f4b3.  Allows rubygems
+	  repackagers to disable backward-compatible shared gem directory
+	  behavior.
+	* test/rubygems:  ditto.
+
+Tue Dec 17 05:14:35 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* NEWS (RDoc):  Update version number so I don't have to change it
+	  for the final release.
+
+Mon Dec 16 19:19:19 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_objspace_markable_object_p): should check special_const_p
+	  first (by is_markable_object()).
+
+Mon Dec 16 19:12:54 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* ext/objspace/objspace.c (reachable_object_from_root_i): use
+	  compare_by_identity hash to avoid hash modify problem
+	  during iteration.
+	  [Bug #9252]
+
+	* ext/objspace/objspace.c (reachable_objects_from_root): ditto.
+
+Mon Dec 16 18:16:28 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_verify_internal_consistency): should not use
+	  rb_objspace_each_objects() because it call rest_sweep().
+
+Mon Dec 16 18:07:30 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_objspace_markable_object_p): fix last commit (build error).
+
+Mon Dec 16 18:04:28 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_objspace_markable_object_p): it should be live objects.
+
+Mon Dec 16 18:00:51 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (rb_objspace_each_objects): should not clear dont_lazy_sweep
+	  flag in nested case.
+
+Mon Dec 16 16:40:35 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_method.c (rb_method_entry_make): fix WB miss.
+	  Note that rb_method_entry_t::klass is not constified.
+	  We may  constify this field.
+
+	* test/ruby/test_alias.rb: add a test.
+
+Mon Dec 16 14:14:22 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: use gc_verify_internal_consistency() instead of
+	  gc_check_before_marks_i() for check consistency
+	  on RGENGC_CHECK_MODE >= 2.
+
+Mon Dec 16 14:01:48 2013  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* process.c (make_clock_result): add :second as a unit for
+	  Process.clock_gettime.
+
+Mon Dec 16 13:10:54 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c: introduce GC.verify_internal_consistency method to verify GC
+	  internal data structure.
+
+	  Now this method only checks generation (old/young) consistency.
+
+Mon Dec 16 11:49:26 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c (gc_info_decode): Fix build errors when compiled with
+	  RGENGC_ESTIMATE_OLDMALLOC=0
+	* gc.c (objspace_malloc_increase): ditto
+
+Sun Dec 15 13:38:29 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* ext/objspace/objspace.c (reachable_object_from_root_i):
+	  reachable objects should not include categories and
+	  category_objects because it is noisy information.
+
+	  In fact, objects created after calling
+	  ObjectSpace.reachable_objects_from_root should not be included
+	  as a returning hash objects. Currently, mswin64 platform has a
+	  problem because of this behavior. Should we trace new objects?
+
+Sun Dec 15 07:09:28 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc:  Update to RDoc master 263a9e5.  This improves the
+	  accessibility of the search box.
+
+Sat Dec 14 17:39:00 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* vm_insnhelper.c (vm_callee_setup_arg_complex): count post
+	  arguments as mandatory arguments.  [ruby-core:57706] [Bug #8993]
+
+	* vm_insnhelper.c (vm_yield_setup_block_args): ditto.
+
+Sat Dec 14 16:26:46 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* configure.in (rubylibprefix): replace exec_prefix as well as
+	  bindir and libdir.  a patch by kimuraw (Wataru Kimura) at
+	  [ruby-dev:47852].  [Bug #9160]
+
+Sat Dec 14 14:42:53 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/logger.rb (lock_shift_log): no need to rotate the log file
+	  if it has been rotated by another process.  based on the patch
+	  by no6v (Nobuhiro IMAI) in [ruby-core:58620].  [Bug #9133]
+
+Sat Dec 14 13:01:45 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* proc.c (mnew_from_me): method by respond_to_missing? should be
+	  owned by the original class.
+
+Sat Dec 14 11:55:31 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/scanf.rb (IO#scanf): fix mistaken use of rescue modifier.
+	  a patch by Mon_Ouie at [ruby-core:52813].  [Bug #7940]
+
+Sat Dec 14 11:44:52 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* util.c (ruby_qsort): fix potential stack overflow on a large
+	  machine.  based on the patch by Conrad Irwin <conrad.irwin AT
+	  gmail.com> at [ruby-core:51816].  [Bug #7772]
+
+Sat Dec 14 11:25:56 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* object.c (rb_mod_const_defined): support nested class path as
+	  well as const_get.  [Feature #7414]
+
 Sat Dec 14 01:31:52 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* eval.c (rb_rescue2): reuse tags pushed for body proc to protect
@@ -585,7 +717,7 @@ Thu Dec  5 22:18:01 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 Thu Dec  5 21:53:29 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
-	* array.c (rb_ary_or): lhs elements are prefered, so should not
+	* array.c (rb_ary_or): lhs elements are preferred, so should not
 	  replace with rhs elements.
 
 	* test/ruby/test_array.rb (test_OR_in_order): import the test failed
@@ -758,7 +890,7 @@ Tue Dec  3 20:18:46 2013  Narihiro Nakamura  <authornari@gmail.com>
 Tue Dec  3 20:16:38 2013  Masaki Matsushita  <glass.saga@gmail.com>
 
 	* array.c (rb_hash_rehash): use hash_alloc() instead of rb_hash_new(),
-	  to hide temprary object from ObjectSpace.  [Bug #9187]
+	  to hide temporary object from ObjectSpace.  [Bug #9187]
 
 Tue Dec  3 17:11:47 2013  Aman Gupta <ruby@tmm1.net>
 
@@ -779,7 +911,7 @@ Tue Dec  3 17:01:45 2013  Aman Gupta <ruby@tmm1.net>
 	* internal.h (RCLASS_M_TBL_INIT): New macro for initializing method
 	  table wrapper and st_table.
 	* method.h (void rb_sweep_method_entry): Rename rb_free_m_table to
-	  rb_free_m_tbl for consistentcy
+	  rb_free_m_tbl for consistency
 	* .gdbinit (define rb_method_entry): Update rb_method_entry gdb helper
 	  for new method table structure.
 	* class.c: Use RCLASS_M_TBL_WRAPPER and
@@ -954,13 +1086,13 @@ Sat Nov 30 18:05:38 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 Sat Nov 30 17:46:35 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* eval.c (ruby_cleanup): determine exit status and signal to terminate
-	  before finalization, to get rid of access destroyed T_DATA execption
+	  before finalization, to get rid of access destroyed T_DATA exception
 	  object.  [ruby-core:58643] [Bug #9167]
 
 Sat Nov 30 16:25:14 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* enumerator.c (enumerator_with_index): should not store local variable
-	  address to memoise the arguments.  it is invalidated after the return.
+	  address to memoize the arguments.  it is invalidated after the return.
 	  [ruby-core:58692] [Bug #9178]
 
 Sat Nov 30 13:28:13 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>

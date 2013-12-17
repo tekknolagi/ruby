@@ -1748,13 +1748,20 @@ rb_objspace_each_objects(each_obj_callback *callback, void *data)
 {
     struct each_obj_args args;
     rb_objspace_t *objspace = &rb_objspace;
+    int prev_dont_lazy_sweep = objspace->flags.dont_lazy_sweep;
 
     gc_rest_sweep(objspace);
     objspace->flags.dont_lazy_sweep = TRUE;
 
     args.callback = callback;
     args.data = data;
-    rb_ensure(objspace_each_objects, (VALUE)&args, lazy_sweep_enable, Qnil);
+
+    if (prev_dont_lazy_sweep) {
+	objspace_each_objects((VALUE)&args);
+    }
+    else {
+	rb_ensure(objspace_each_objects, (VALUE)&args, lazy_sweep_enable, Qnil);
+    }
 }
 
 struct os_each_struct {
@@ -2259,7 +2266,8 @@ is_markable_object(rb_objspace_t *objspace, VALUE obj)
 int
 rb_objspace_markable_object_p(VALUE obj)
 {
-    return is_markable_object(&rb_objspace, obj);
+    rb_objspace_t *objspace = &rb_objspace;
+    return is_markable_object(objspace, obj) && is_live_object(objspace, obj);
 }
 
 /*
@@ -4135,7 +4143,83 @@ gc_marks_body(rb_objspace_t *objspace, int full_mark)
     rgengc_report(1, objspace, "gc_marks_body: end (%s)\n", full_mark ? "full" : "minor");
 }
 
-#if RGENGC_CHECK_MODE >= 2
+struct verify_internal_consistency_struct {
+    rb_objspace_t *objspace;
+    int err_count;
+    VALUE parent;
+};
+
+#if USE_RGENGC
+static void
+verify_internal_consistency_reachable_i(VALUE child, void *ptr)
+{
+    struct verify_internal_consistency_struct *data = (struct verify_internal_consistency_struct *)ptr;
+
+    assert(RVALUE_OLD_P(data->parent));
+
+    if (!RVALUE_OLD_P(child)) {
+	if (!MARKED_IN_BITMAP(GET_HEAP_PAGE(data->parent)->rememberset_bits, data->parent) &&
+	    !MARKED_IN_BITMAP(GET_HEAP_PAGE(child)->rememberset_bits, child)) {
+	    fprintf(stderr, "verify_internal_consistency_reachable_i: WB miss %p (%s) -> %p (%s)\n",
+		    (void *)data->parent, obj_type_name(data->parent),
+		    (void *)child, obj_type_name(child));
+	    data->err_count++;
+	}
+    }
+}
+
+static int
+verify_internal_consistency_i(void *page_start, void *page_end, size_t stride, void *ptr)
+{
+    struct verify_internal_consistency_struct *data = (struct verify_internal_consistency_struct *)ptr;
+    VALUE v;
+
+    for (v = (VALUE)page_start; v != (VALUE)page_end; v += stride) {
+	if (is_live_object(data->objspace, v)) {
+	    if (RVALUE_OLD_P(v)) {
+		data->parent = v;
+		/* reachable objects from an oldgen object should be old or (young with remember) */
+		rb_objspace_reachable_objects_from(v, verify_internal_consistency_reachable_i, (void *)data);
+	    }
+	}
+    }
+
+    return 0;
+}
+#endif /* USE_RGENGC */
+
+/*
+ *  call-seq:
+ *     GC.verify_internal_consistency                  -> nil
+ *
+ *  Verify internal consistency.
+ *
+ *  This method is implementation specific.
+ *  Now this method checks generatioanl consistency
+ *  if RGenGC is supported.
+ */
+static VALUE
+gc_verify_internal_consistency(VALUE self)
+{
+    struct verify_internal_consistency_struct data;
+    data.objspace = &rb_objspace;
+    data.err_count = 0;
+
+#if USE_RGENGC
+    {
+	struct each_obj_args eo_args;
+	eo_args.callback = verify_internal_consistency_i;
+	eo_args.data = (void *)&data;
+	objspace_each_objects((VALUE)&eo_args);
+    }
+#endif
+    if (data.err_count != 0) {
+	rb_bug("gc_verify_internal_consistency: found internal consistency.\n");
+    }
+    return Qnil;
+}
+
+#if RGENGC_CHECK_MODE >= 3
 
 #define MAKE_ROOTSIG(obj) (((VALUE)(obj) << 1) | 0x01)
 #define IS_ROOTSIG(obj)   ((VALUE)(obj) & 0x01)
@@ -4323,35 +4407,6 @@ allrefs_dump(rb_objspace_t *objspace)
 }
 #endif
 
-static int
-gc_check_before_marks_i(st_data_t k, st_data_t v, void *ptr)
-{
-    VALUE obj = k;
-    struct reflist *refs = (struct reflist *)v;
-    rb_objspace_t *objspace = (rb_objspace_t *)ptr;
-
-    /* check WB sanity */
-    if (!RVALUE_OLD_P(obj)) {
-	int i;
-	for (i=0; i<refs->pos; i++) {
-	    VALUE parent = refs->list[i];
-	    if (!IS_ROOTSIG(parent) && RVALUE_OLD_P(parent)) {
-		/* parent is old */
-		if (!MARKED_IN_BITMAP(GET_HEAP_PAGE(parent)->rememberset_bits, parent) &&
-		    !MARKED_IN_BITMAP(GET_HEAP_PAGE(obj)->rememberset_bits, obj)) {
-		    fprintf(stderr, "gc_marks_check_i: WB miss %p (%s) -> %p (%s) ",
-			    (void *)parent, obj_type_name(parent),
-			    (void *)obj, obj_type_name(obj));
-		    reflist_dump(refs);
-		    fprintf(stderr, "\n");
-		    objspace->rgengc.error_count++;
-		}
-	    }
-	}
-    }
-    return ST_CONTINUE;
-}
-
 #if RGENGC_CHECK_MODE >= 3
 static int
 gc_check_after_marks_i(st_data_t k, st_data_t v, void *ptr)
@@ -4425,7 +4480,7 @@ gc_marks(rb_objspace_t *objspace, int full_mark)
 #if USE_RGENGC
 
 #if RGENGC_CHECK_MODE >= 2
-	gc_marks_check(objspace, gc_check_before_marks_i, "before_marks");
+	gc_verify_internal_consistency(Qnil);
 #endif
 	if (full_mark == TRUE) { /* major/full GC */
 	    objspace->rgengc.remembered_shady_object_count = 0;
@@ -5175,7 +5230,10 @@ static VALUE
 gc_info_decode(int flags, VALUE hash_or_key)
 {
     static VALUE sym_major_by = Qnil, sym_gc_by, sym_immediate_sweep, sym_have_finalizer;
-    static VALUE sym_nofree, sym_oldgen, sym_shady, sym_rescan, sym_stress, sym_oldmalloc;
+    static VALUE sym_nofree, sym_oldgen, sym_shady, sym_rescan, sym_stress;
+#if RGENGC_ESTIMATE_OLDMALLOC
+    static VALUE sym_oldmalloc;
+#endif
     static VALUE sym_newobj, sym_malloc, sym_method, sym_capi;
     VALUE hash = Qnil, key = Qnil;
     VALUE major_by;
@@ -5198,7 +5256,9 @@ gc_info_decode(int flags, VALUE hash_or_key)
 	S(shady);
 	S(rescan);
 	S(stress);
+#if RGENGC_ESTIMATE_OLDMALLOC
 	S(oldmalloc);
+#endif
 	S(newobj);
 	S(malloc);
 	S(method);
@@ -5898,11 +5958,15 @@ objspace_malloc_increase(rb_objspace_t *objspace, void *mem, size_t new_size, si
 {
     if (new_size > old_size) {
 	ATOMIC_SIZE_ADD(malloc_increase, new_size - old_size);
+#if RGENGC_ESTIMATE_OLDMALLOC
 	ATOMIC_SIZE_ADD(objspace->rgengc.oldmalloc_increase, new_size - old_size);
+#endif
     }
     else {
 	atomic_sub_nounderflow(&malloc_increase, old_size - new_size);
+#if RGENGC_ESTIMATE_OLDMALLOC
 	atomic_sub_nounderflow(&objspace->rgengc.oldmalloc_increase, old_size - new_size);
+#endif
     }
 
     if (type == MEMOP_TYPE_MALLOC) {
@@ -7450,6 +7514,8 @@ Init_GC(void)
 	rb_include_module(rb_cWeakMap, rb_mEnumerable);
     }
 
+    /* internal methods */
+    rb_define_singleton_method(rb_mGC, "verify_internal_consistency", gc_verify_internal_consistency, 0);
 #if MALLOC_ALLOCATED_SIZE
     rb_define_singleton_method(rb_mGC, "malloc_allocated_size", gc_malloc_allocated_size, 0);
     rb_define_singleton_method(rb_mGC, "malloc_allocations", gc_malloc_allocations, 0);
