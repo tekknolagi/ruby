@@ -86,7 +86,7 @@
 
 <%= transcode_generated_code %>
 
-extern rb_encoding_compat;
+extern int rb_encoding_compat;
 
 TRANS_INIT(single_byte)
 {
