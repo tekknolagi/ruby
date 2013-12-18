@@ -1,3 +1,67 @@
+Wed Dec 18 17:03:00 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_profile_record_get): should return an empty array
+	  when profiling is active.
+
+Wed Dec 18 16:49:40 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_profile_clear, gc_profile_enable): remove rest_sweep().
+
+	* gc.c: check objspace->profile.current_record before inserting
+	  profiling record by new macro gc_prof_enabled().
+
+Wed Dec 18 14:32:06 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_exec.h (VM_DEBUG_STACKOVERFLOW): added.
+	  disable stack overflow check for every stack pushing as default.
+
+	* vm_exec.c (vm_stack_overflow_for_insn): ditto.
+
+Wed Dec 18 10:00:22 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master d8f12e2.  This increases the
+	  speed of `gem install --ignore-dependencies` which helps bundler
+	  tests.
+	* test/rubygems:  ditto.
+
+Wed Dec 18 09:00:17 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* test/ruby/test_gc.rb (test_expand_heap): allow +/-1 diff.
+
+Tue Dec 17 23:44:15 2013  Kazuki Tsujimoto  <kazuki@callcc.net>
+
+	* test/ruby/test_io.rb: fix duplicated test name.
+
+Tue Dec 17 20:15:00 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* hash.c (rb_hash_reject): revert to deprecated behavior, with
+	  warnings, due to compatibility for HashWithDifferentAccess.
+	  [ruby-core:59154] [Bug #9223]
+
+Tue Dec 17 17:30:56 2013  Akinori MUSHA  <knu@iDaemons.org>
+
+	* misc/ruby-electric.el: Import version 2.1.1 from
+	  https://github.com/knu/ruby-electric.el.
+
+	  * ruby-electric-delete-backward-char: Enable support for number
+	    prefix.
+
+	  * ruby-electric-curlies: Fix electric operation after an open
+	    curly.
+
+Tue Dec 17 16:19:09 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* vm_trace.c (rb_postponed_job_flush): isolate exceptions in
+	  postponed jobs and restore outer ones.  based on a patch by
+	  tarui.  [ruby-core:58652] [Bug #9168]
+
+Tue Dec 17 10:48:04 2013  Aman Gupta <ruby@tmm1.net>
+
+	* configure.in (RUBY_DTRACE_POSTPROCESS): Fix compatibility with
+	  systemtap on linux. stap requires `dtrace -G` post-processing, but
+	  the dtrace compatibility wrapper is very strict about probes.d
+	  syntax.
+
 Tue Dec 17 05:18:17 2013  Eric Hodel  <drbrain@segment7.net>
 
 	* lib/rubygems:  Update to RubyGems master 1c5f4b3.  Allows rubygems

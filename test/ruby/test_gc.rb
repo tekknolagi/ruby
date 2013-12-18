@@ -251,12 +251,13 @@ class TestGc < Test::Unit::TestCase
     base_length = GC.stat[:heap_eden_page_length]
     (base_length * 500).times{ 'a' }
     GC.start
-    assert_equal base_length, GC.stat[:heap_eden_page_length], "invalid heap expanding"
+    assert_in_delta base_length, (v = GC.stat[:heap_eden_page_length]), 1,
+           "invalid heap expanding (base_length: #{base_length}, GC.stat[:heap_eden_page_length]: #{v})"
 
     a = []
     (base_length * 500).times{ a << 'a'; nil }
     GC.start
-    assert_operator base_length, :<, GC.stat[:heap_eden_page_length]
+    assert_operator base_length, :<, GC.stat[:heap_eden_page_length] + 1
     eom
   end
 
@@ -277,6 +278,19 @@ class TestGc < Test::Unit::TestCase
         end
       end;
     end
+  end
+
+  def test_exception_in_finalizer
+    bug9168 = '[ruby-core:58652] [Bug #9168]'
+    assert_normal_exit(<<-'end;', bug9168)
+      raise_proc = proc {raise}
+      10000.times do
+        ObjectSpace.define_finalizer(Object.new, raise_proc)
+        Thread.handle_interrupt(RuntimeError => :immediate) {break}
+        Thread.handle_interrupt(RuntimeError => :on_blocking) {break}
+        Thread.handle_interrupt(RuntimeError => :never) {break}
+      end
+    end;
   end
 
   def test_verify_internal_consistency

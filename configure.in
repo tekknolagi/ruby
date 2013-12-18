@@ -584,13 +584,17 @@ AC_DEFUN([RUBY_DTRACE_POSTPROCESS],
 [AC_CACHE_CHECK(whether $DTRACE needs post processing, rb_cv_prog_dtrace_g,
 [
   if {
-    echo "provider conftest{ probe fire(); };" > conftest_provider.d &&
-    dtrace -h -o conftest_provider.h -s conftest_provider.d >/dev/null 2>/dev/null &&
+    cat >conftest_provider.d <<_PROBES &&
+    provider conftest {
+      probe fire();
+    };
+_PROBES
+    $DTRACE -h -o conftest_provider.h -s conftest_provider.d >/dev/null 2>/dev/null &&
     cat >conftest.c <<_CONF &&
     @%:@include "conftest_provider.h"
     int main(void){ CONFTEST_FIRE(); return 0; }
 _CONF
-    $CC $CFLAGS -c -o conftest.o conftest.c &&
+    $CC $CFLAGS $CPPFLAGS -c -o conftest.o conftest.c &&
     $DTRACE -G -s conftest_provider.d conftest.o 2>/dev/null
   }; then
     rb_cv_prog_dtrace_g=yes
@@ -851,6 +855,25 @@ if test "$GCC" = yes; then
 	RUBY_TRY_CFLAGS($oflag, [RUBY_APPEND_OPTION(optflags, $oflag)])
     done
 fi
+
+AC_ARG_WITH(opt-dir,
+	AS_HELP_STRING([--with-opt-dir=DIR-LIST],
+		       [add optional headers and libraries directories separated by $PATH_SEPARATOR]),
+	[
+		withval="$1"
+		val=`echo "$PATH_SEPARATOR$withval" | sed "s|$PATH_SEPARATOR\([[^$PATH_SEPARATOR]*]\)| -I\1/include|g;s/^ //"`
+		CPPFLAGS="$CPPFLAGS $val"
+		val=`IFS="$PATH_SEPARATOR"
+		    for dir in $withval; do
+			echo x ${LIBPATHFLAG} ${RPATHFLAG} |
+			sed "s/^x *//;s${IFS}"'%1\\$-s'"${IFS}${dir}/lib${IFS}g;s${IFS}%s${IFS}${dir}/lib${IFS}g"
+		    done | tr '\012' ' '`
+		LDFLAGS_OPTDIR="$val"
+		test x"${LDFLAGS}" = x || LDFLAGS="$LDFLAGS "
+		LDFLAGS="$LDFLAGS$val"
+		test x"${DLDFLAGS}" = x || DLDFLAGS="$DLDFLAGS "
+		DLDFLAGS="$DLDFLAGS$val"
+	])
 
 test -z "${ac_env_CFLAGS_set}" -a -n "${cflags+set}" && eval CFLAGS="\"$cflags $ARCH_FLAG\""
 test -z "${ac_env_CXXFLAGS_set}" -a -n "${cxxflags+set}" && eval CXXFLAGS="\"$cxxflags $ARCH_FLAG\""
@@ -2732,24 +2755,6 @@ AC_SUBST(RPATHFLAG)
 AC_SUBST(LIBPATHENV, "${LIBPATHENV-LD_LIBRARY_PATH}")
 AC_SUBST(TRY_LINK)
 
-AC_ARG_WITH(opt-dir,
-	AS_HELP_STRING([--with-opt-dir=DIR-LIST],
-		       [add optional headers and libraries directories separated by $PATH_SEPARATOR]),
-	[
-		val=`echo "$PATH_SEPARATOR$withval" | sed "s|$PATH_SEPARATOR\([[^$PATH_SEPARATOR]*]\)| -I\1/include|g;s/^ //"`
-		CPPFLAGS="$CPPFLAGS $val"
-		val=`IFS="$PATH_SEPARATOR"
-		    for dir in $withval; do
-			echo x ${LIBPATHFLAG} ${RPATHFLAG} |
-			sed "s/^x *//;s${IFS}"'%1\\$-s'"${IFS}${dir}/lib${IFS}g;s${IFS}%s${IFS}${dir}/lib${IFS}g"
-		    done | tr '\012' ' '`
-		LDFLAGS_OPTDIR="$val"
-		test x"${LDFLAGS}" = x || LDFLAGS="$LDFLAGS "
-		LDFLAGS="$LDFLAGS$val"
-		test x"${DLDFLAGS}" = x || DLDFLAGS="$DLDFLAGS "
-		DLDFLAGS="$DLDFLAGS$val"
-	])
-
 AS_CASE(["$target_cpu-$target_os"],
 [*-darwin*], [
     AC_CHECK_HEADERS([execinfo.h])
@@ -3551,7 +3556,7 @@ if test "${ARCH_FLAG}"; then
     LDFLAGS=`echo "$LDFLAGS" | sed "s| *$archflagpat"'||'`
 fi
 warnflags="$rb_cv_warnflags"
-AC_SUBST(cppflags, [])dnl
+AC_SUBST(cppflags)dnl
 AC_SUBST(cflags, ["$orig_cflags "'${optflags} ${debugflags} ${warnflags}'])dnl
 AC_SUBST(cxxflags, ["$orig_cxxflags "'${optflags} ${debugflags} ${warnflags}'])dnl
 AC_SUBST(optflags)dnl
