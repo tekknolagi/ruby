@@ -1,3 +1,82 @@
+Fri Dec 20 14:00:01 2013  Aman Gupta <ruby@tmm1.net>
+
+	* include/ruby/ruby.h (struct RClass): add super, remove iv_index_tbl.
+	  since RCLASS_SUPER() is commonly used inside while loops, we move it
+	  back inside struct RClass to improve cache hits. this provides a
+	  small improvement (1%) in hotspots like rb_obj_is_kind_of()
+	* internal.h (struct rb_classext_struct): remove super, add
+	  iv_index_table
+	* internal.h (RCLASS_SUPER): update for new location
+	* internal.h (RCLASS_SET_SUPER): ditto
+	* internal.h (RCLASS_IV_INDEX_TBL): ditto
+	* object.c (rb_class_get_superclass): ditto
+	* include/ruby/backward/classext.h (RCLASS_SUPER): ditto
+
+Fri Dec 20 07:07:35 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master 03d6ae7.  Changes include:
+
+	  * Fixed typos.
+
+	  * Relaxed Gem.ruby test for ruby packagers that do not use `ruby`.
+
+	* test/rubygems:  ditto.
+
+Thu Dec 19 14:03:04 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (heap_get_freeobj): improve hot path performance.
+
+	* gc.c (heap_get_freeobj_from_next_freepage): replace with
+	  heap_get_freepage(). It returns freeobj instead of freepage.
+	  This is not on hot path.
+
+Thu Dec 19 12:05:17 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems:  Update to RubyGems master af60443.  Changes include:
+
+	  * Improved speed of `gem install --ignore-dependencies`.
+
+	  * Open read-write for exclusive flock.  [ruby-trunk - Bug #9257]
+
+	  * Remove specification before install to prevent infinite loop.
+
+Thu Dec 19 11:23:49 2013  Aman Gupta <ruby@tmm1.net>
+
+	* vm_insnhelper.c (vm_call_iseq_setup_normal): simple for loop
+	  condition optimization. this area shows up as a hotspot in VM
+	  profiles.
+
+Thu Dec 19 10:50:13 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (newobj_of): don't need to RBASIC_SET_CLASS() which includes WB
+	  here because created obj is always YOUNG/INFANT.
+
+Thu Dec 19 10:48:37 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* benchmark/gc/gcbench.rb: check GC::OPTS availability
+	  for not MRI 2.1.0.
+
+Thu Dec 19 03:10:30 2013  Aman Gupta <ruby@tmm1.net>
+
+	* gc.c (heap_get_freeobj): remove redundant assignment. heap->freelist
+	  is set after the while() loop already.
+
+Thu Dec 19 01:54:30 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* test/runner.rb: fix commit miss on r44278.
+
+Thu Dec 19 00:26:11 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (garbage_collect_body): lazy_sweep setting should work
+	  without USE_RGENGC.
+
+Wed Dec 18 23:31:04 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_profile_dump_major_reason): fix this function because major_reason
+	  can be OR of multiple reasons.
+
+	* gc.c (gc_profile_dump_on): ditto.
+
 Wed Dec 18 17:03:00 2013  Koichi Sasada  <ko1@atdot.net>
 
 	* gc.c (gc_profile_record_get): should return an empty array
