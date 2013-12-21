@@ -264,8 +264,10 @@ found:
 void
 sa_clear(sa_table *table)
 {
-    sa_entry_dealloc(table->entries);
-    memset(table, 0, sizeof(sa_table));
+    if (table->entries) {
+	sa_entry_dealloc(table->entries);
+	memset(table, 0, sizeof(sa_table));
+    }
 }
 
 void
@@ -279,7 +281,8 @@ sa_clear_no_free(sa_table *table)
 void
 sa_free_table(sa_table *table)
 {
-    sa_entry_dealloc(table->entries);
+    if (table->entries)
+	sa_entry_dealloc(table->entries);
     sa_table_dealloc(table);
 }
 
