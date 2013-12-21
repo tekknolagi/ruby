@@ -357,7 +357,7 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
 	    rb_free_m_tbl_wrapper(RCLASS_M_TBL_WRAPPER(clone));
 	}
 	RCLASS_M_TBL_INIT(clone);
-	st_foreach(RCLASS_M_TBL(orig), clone_method_i, (st_data_t)clone);
+	sa_foreach(RCLASS_M_TBL(orig), clone_method_i, (st_data_t)clone);
     }
 
     return clone;
@@ -403,7 +403,7 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
 	    rb_singleton_class_attached(clone, attach);
 	}
 	RCLASS_M_TBL_INIT(clone);
-	st_foreach(RCLASS_M_TBL(klass), clone_method_i, (st_data_t)clone);
+	sa_foreach(RCLASS_M_TBL(klass), clone_method_i, (st_data_t)clone);
 	rb_singleton_class_attached(RBASIC(clone)->klass, clone);
 	FL_SET(clone, FL_SINGLETON);
 
@@ -849,7 +849,7 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module)
 {
     VALUE p, iclass;
     int method_changed = 0, constant_changed = 0;
-    const st_table *const klass_m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(klass));
+    const sa_table *const klass_m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(klass));
 
     while (module) {
 	int superclass_seen = FALSE;
@@ -887,7 +887,7 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module)
 	    VALUE refined_class =
 		rb_refinement_module_get_refined_class(klass);
 
-	    st_foreach(RMODULE_M_TBL(module), add_refined_method_entry_i,
+	    sa_foreach(RMODULE_M_TBL(module), add_refined_method_entry_i,
 		       (st_data_t) refined_class);
 	    FL_SET(c, RMODULE_INCLUDED_INTO_REFINEMENT);
 	}
@@ -909,7 +909,7 @@ static int
 move_refined_method(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_method_entry_t *me = (rb_method_entry_t *) value;
-    st_table *tbl = (st_table *) data;
+    sa_table *tbl = (sa_table *) data;
 
     if (me->def->type == VM_METHOD_TYPE_REFINED) {
 	if (me->def->body.orig_me) {
@@ -917,14 +917,14 @@ move_refined_method(st_data_t key, st_data_t value, st_data_t data)
 	    me->def->body.orig_me = NULL;
 	    new_me = ALLOC(rb_method_entry_t);
 	    *new_me = *me;
-	    st_add_direct(tbl, key, (st_data_t) new_me);
+	    sa_insert(tbl, (sa_index_t)key, (st_data_t) new_me); /* TODO fix this (insert during iteration) */
 	    *me = *orig_me;
 	    xfree(orig_me);
 	    return ST_CONTINUE;
 	}
 	else {
-	    st_add_direct(tbl, key, (st_data_t) me);
-	    return ST_DELETE;
+	    sa_insert(tbl, (sa_index_t)key, (st_data_t) me); /* TODO fix insert during iteration */
+	    return ST_DELETE; /* TODO implement SA_DELETE */
 	}
     }
     else {
@@ -954,7 +954,7 @@ rb_prepend_module(VALUE klass, VALUE module)
 	RCLASS_ORIGIN(klass) = origin;
 	RCLASS_M_TBL_WRAPPER(origin) = RCLASS_M_TBL_WRAPPER(klass);
 	RCLASS_M_TBL_INIT(klass);
-	st_foreach(RCLASS_M_TBL(origin), move_refined_method,
+	sa_foreach(RCLASS_M_TBL(origin), move_refined_method,
 		   (st_data_t) RCLASS_M_TBL(klass));
     }
     changed = include_modules_at(klass, klass, module);
@@ -1158,7 +1158,7 @@ class_instance_method_list(int argc, VALUE *argv, VALUE mod, int obj, int (*func
 
     list = st_init_numtable();
     for (; mod; mod = RCLASS_SUPER(mod)) {
-	if (RCLASS_M_TBL(mod)) st_foreach(RCLASS_M_TBL(mod), method_entry_i, (st_data_t)list);
+	if (RCLASS_M_TBL(mod)) sa_foreach(RCLASS_M_TBL(mod), method_entry_i, (st_data_t)list);
 	if (BUILTIN_TYPE(mod) == T_ICLASS && !prepended) continue;
 	if (obj && FL_TEST(mod, FL_SINGLETON)) continue;
 	if (!recur) break;
@@ -1387,7 +1387,8 @@ VALUE
 rb_obj_singleton_methods(int argc, VALUE *argv, VALUE obj)
 {
     VALUE recur, ary, klass, origin;
-    st_table *list, *mtbl;
+    st_table *list;
+    sa_table *mtbl;
 
     if (argc == 0) {
 	recur = Qtrue;
@@ -1400,13 +1401,13 @@ rb_obj_singleton_methods(int argc, VALUE *argv, VALUE obj)
     list = st_init_numtable();
     if (klass && FL_TEST(klass, FL_SINGLETON)) {
 	if ((mtbl = RCLASS_M_TBL(origin)) != 0)
-	    st_foreach(mtbl, method_entry_i, (st_data_t)list);
+	    sa_foreach(mtbl, method_entry_i, (st_data_t)list);
 	klass = RCLASS_SUPER(klass);
     }
     if (RTEST(recur)) {
 	while (klass && (FL_TEST(klass, FL_SINGLETON) || RB_TYPE_P(klass, T_ICLASS))) {
 	    if (klass != origin && (mtbl = RCLASS_M_TBL(klass)) != 0)
-		st_foreach(mtbl, method_entry_i, (st_data_t)list);
+		sa_foreach(mtbl, method_entry_i, (st_data_t)list);
 	    klass = RCLASS_SUPER(klass);
 	}
     }

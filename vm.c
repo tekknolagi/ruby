@@ -1109,7 +1109,7 @@ void
 rb_vm_check_redefinition_by_prepend(VALUE klass)
 {
     if (!vm_redefinition_check_flag(klass)) return;
-    st_foreach(RCLASS_M_TBL(RCLASS_ORIGIN(klass)), check_redefined_method,
+    sa_foreach(RCLASS_M_TBL(RCLASS_ORIGIN(klass)), check_redefined_method,
 	       (st_data_t)klass);
 }
 
@@ -1117,7 +1117,7 @@ static void
 add_opt_method(VALUE klass, ID mid, VALUE bop)
 {
     rb_method_entry_t *me;
-    if (st_lookup(RCLASS_M_TBL(klass), mid, (void *)&me) && me->def &&
+    if (sa_lookup(RCLASS_M_TBL(klass), (sa_index_t)mid, (void *)&me) && me->def &&
 	me->def->type == VM_METHOD_TYPE_CFUNC) {
 	st_insert(vm_opt_method_table, (st_data_t)me, (st_data_t)bop);
     }

@@ -147,6 +147,7 @@ RUBY_SYMBOL_EXPORT_END
 typedef unsigned int sa_index_t;
 #define SA_STOP     ST_STOP
 #define SA_CONTINUE ST_CONTINUE
+#define SA_DELETE   ST_DELETE
 
 #define SA_EMPTY   0
 

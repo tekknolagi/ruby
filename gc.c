@@ -1432,18 +1432,16 @@ free_method_entry_i(ID key, rb_method_entry_t *me, st_data_t data)
 }
 
 void
-rb_free_m_tbl(st_table *tbl)
+rb_free_m_tbl(sa_table *tbl)
 {
-    st_foreach(tbl, free_method_entry_i, 0);
-    st_free_table(tbl);
+    sa_foreach(tbl, free_method_entry_i, 0);
+    sa_clear(tbl);
 }
 
 void
 rb_free_m_tbl_wrapper(struct method_table_wrapper *wrapper)
 {
-    if (wrapper->tbl) {
-	rb_free_m_tbl(wrapper->tbl);
-    }
+    rb_free_m_tbl(&wrapper->tbl);
     xfree(wrapper);
 }
 
@@ -2440,7 +2438,7 @@ obj_memsize_of(VALUE obj, int use_tdata)
 	    size += sizeof(struct method_table_wrapper);
 	}
 	if (RCLASS_M_TBL(obj)) {
-	    size += st_memsize(RCLASS_M_TBL(obj));
+	    size += sa_memsize(RCLASS_M_TBL(obj));
 	}
 	if (RCLASS_EXT(obj)) {
 	    if (RCLASS_IV_TBL(obj)) {
@@ -3419,7 +3417,7 @@ static void
 mark_m_tbl_wrapper(rb_objspace_t *objspace, struct method_table_wrapper *wrapper)
 {
     struct mark_tbl_arg arg;
-    if (!wrapper || !wrapper->tbl) return;
+    if (!wrapper) return;
     if (LIKELY(objspace->mark_func_data == 0)) {
 	/* prevent multiple marking during same GC cycle,
 	 * since m_tbl is shared between several T_ICLASS */
@@ -3428,7 +3426,7 @@ mark_m_tbl_wrapper(rb_objspace_t *objspace, struct method_table_wrapper *wrapper
 	wrapper->serial = serial;
     }
     arg.objspace = objspace;
-    st_foreach(wrapper->tbl, mark_method_entry_i, (st_data_t)&arg);
+    sa_foreach(&wrapper->tbl, mark_method_entry_i, (st_data_t)&arg);
 }
 
 static int

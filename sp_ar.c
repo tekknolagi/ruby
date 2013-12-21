@@ -334,6 +334,7 @@ int
 sa_foreach(register sa_table *table, int (*func)(), st_data_t arg)
 {
     sa_index_t i;
+    int ret;
     if (table->num_bins == 0) {
         return 0;
     }
@@ -341,7 +342,9 @@ sa_foreach(register sa_table *table, int (*func)(), st_data_t arg)
 	if (table->entries[i].next != SA_EMPTY) {
 	    sa_index_t key = table->entries[i].key;
 	    st_data_t val = table->entries[i].value;
-	    if ((*func)(key, val, arg) == SA_STOP) break;
+	    ret = (*func)(key, val, arg);
+	    if (ret == SA_STOP) break;
+	    /* else if (ret == SA_DELETE) TODO: implement */
 	}
     }
     return 0;

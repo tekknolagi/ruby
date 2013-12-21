@@ -192,8 +192,8 @@ static inline rb_method_entry_t *
 lookup_method_table(VALUE klass, ID id)
 {
     st_data_t body;
-    st_table *m_tbl = RCLASS_M_TBL(klass);
-    if (st_lookup(m_tbl, id, &body)) {
+    sa_table *m_tbl = RCLASS_M_TBL(klass);
+    if (sa_lookup(m_tbl, (sa_index_t)id, &body)) {
 	return (rb_method_entry_t *) body;
     }
     else {
@@ -244,7 +244,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 #if NOEX_NOREDEF
     VALUE rklass;
 #endif
-    st_table *mtbl;
+    sa_table *mtbl;
     st_data_t data;
     int make_refined = 0;
 
@@ -281,7 +281,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
     mtbl = RCLASS_M_TBL(klass);
 
     /* check re-definition */
-    if (st_lookup(mtbl, mid, &data)) {
+    if (sa_lookup(mtbl, (sa_index_t)mid, &data)) {
 	rb_method_entry_t *old_me = (rb_method_entry_t *)data;
 	rb_method_definition_t *old_def = old_me->def;
 
@@ -368,7 +368,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 	make_method_entry_refined(me);
     }
 
-    st_insert(mtbl, mid, (st_data_t) me);
+    sa_insert(mtbl, (sa_index_t)mid, (st_data_t) me);
 
     return me;
 }
@@ -716,7 +716,7 @@ rb_method_entry_without_refinements(VALUE klass, ID id,
 static void
 remove_method(VALUE klass, ID mid)
 {
-    st_data_t key, data;
+    st_data_t data;
     rb_method_entry_t *me = 0;
     VALUE self = klass;
 
@@ -726,14 +726,13 @@ remove_method(VALUE klass, ID mid)
 	rb_warn("removing `%s' may cause serious problems", rb_id2name(mid));
     }
 
-    if (!st_lookup(RCLASS_M_TBL(klass), mid, &data) ||
+    if (!sa_lookup(RCLASS_M_TBL(klass), (sa_index_t)mid, &data) ||
 	!(me = (rb_method_entry_t *)data) ||
 	(!me->def || me->def->type == VM_METHOD_TYPE_UNDEF)) {
 	rb_name_error(mid, "method `%s' not defined in %s",
 		      rb_id2name(mid), rb_class2name(klass));
     }
-    key = (st_data_t)mid;
-    st_delete(RCLASS_M_TBL(klass), &key, &data);
+    sa_delete(RCLASS_M_TBL(klass), (sa_index_t)mid, &data);
 
     rb_vm_check_redefinition_opt_method(me, klass);
     rb_clear_method_cache_by_class(klass);
