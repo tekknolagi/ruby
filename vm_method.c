@@ -2,8 +2,18 @@
  * This file is included by vm.c
  */
 
+#ifndef GLOBAL_METHOD_CACHE_SIZE
 #define GLOBAL_METHOD_CACHE_SIZE 0x800
-#define GLOBAL_METHOD_CACHE_MASK 0x7ff
+#endif
+#define LSB_ONLY(x) ((x) & ~((x) - 1))
+#define POWER_OF_2_P(x) ((x) == LSB_ONLY(x))
+#if !POWER_OF_2_P(GLOBAL_METHOD_CACHE_SIZE)
+# error GLOBAL_METHOD_CACHE_SIZE must be power of 2
+#endif
+#ifndef GLOBAL_METHOD_CACHE_MASK
+#define GLOBAL_METHOD_CACHE_MASK (GLOBAL_METHOD_CACHE_SIZE-1)
+#endif
+
 #define GLOBAL_METHOD_CACHE_KEY(c,m) ((((c)>>3)^(m))&GLOBAL_METHOD_CACHE_MASK)
 #define GLOBAL_METHOD_CACHE(c,m) (global_method_cache + GLOBAL_METHOD_CACHE_KEY(c,m))
 #include "method.h"
@@ -322,7 +332,7 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
     me->flag = NOEX_WITH_SAFE(noex);
     me->mark = 0;
     me->called_id = mid;
-    OBJ_WRITE(klass, &me->klass, defined_class);
+    RB_OBJ_WRITE(klass, &me->klass, defined_class);
     me->def = def;
 
     if (def) {
@@ -330,13 +340,13 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 
 	switch(def->type) {
 	  case VM_METHOD_TYPE_ISEQ:
-	    OBJ_WRITTEN(klass, Qundef, def->body.iseq->self);
+	    RB_OBJ_WRITTEN(klass, Qundef, def->body.iseq->self);
 	    break;
 	  case VM_METHOD_TYPE_IVAR:
-	    OBJ_WRITTEN(klass, Qundef, def->body.attr.location);
+	    RB_OBJ_WRITTEN(klass, Qundef, def->body.attr.location);
 	    break;
 	  case VM_METHOD_TYPE_BMETHOD:
-	    OBJ_WRITTEN(klass, Qundef, def->body.proc);
+	    RB_OBJ_WRITTEN(klass, Qundef, def->body.proc);
 	    break;
 	  default:;
 	    /* ignore */
@@ -438,7 +448,7 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
       case VM_METHOD_TYPE_ISEQ: {
 	  rb_iseq_t *iseq = (rb_iseq_t *)opts;
 	  *(rb_iseq_t **)&def->body.iseq = iseq;
-	  OBJ_WRITTEN(klass, Qundef, iseq->self);
+	  RB_OBJ_WRITTEN(klass, Qundef, iseq->self);
 	  break;
       }
       case VM_METHOD_TYPE_CFUNC:
@@ -450,16 +460,16 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
       case VM_METHOD_TYPE_ATTRSET:
       case VM_METHOD_TYPE_IVAR:
 	def->body.attr.id = (ID)opts;
-	OBJ_WRITE(klass, &def->body.attr.location, Qfalse);
+	RB_OBJ_WRITE(klass, &def->body.attr.location, Qfalse);
 	th = GET_THREAD();
 	cfp = rb_vm_get_ruby_level_next_cfp(th, th->cfp);
 	if (cfp && (line = rb_vm_get_sourceline(cfp))) {
 	    VALUE location = rb_ary_new3(2, cfp->iseq->location.path, INT2FIX(line));
-	    OBJ_WRITE(klass, &def->body.attr.location, rb_ary_freeze(location));
+	    RB_OBJ_WRITE(klass, &def->body.attr.location, rb_ary_freeze(location));
 	}
 	break;
       case VM_METHOD_TYPE_BMETHOD:
-	OBJ_WRITE(klass, &def->body.proc, (VALUE)opts);
+	RB_OBJ_WRITE(klass, &def->body.proc, (VALUE)opts);
 	break;
       case VM_METHOD_TYPE_NOTIMPLEMENTED:
 	setup_method_cfunc_struct(&def->body.cfunc, rb_f_notimplement, -1);
@@ -566,7 +576,7 @@ rb_method_entry_get_without_cache(VALUE klass, ID id,
     if (ruby_running) {
 	struct cache_entry *ent;
 	ent = GLOBAL_METHOD_CACHE(klass, id);
-	ent->class_serial = RCLASS_EXT(klass)->class_serial;
+	ent->class_serial = RCLASS_SERIAL(klass);
 	ent->method_state = GET_GLOBAL_METHOD_STATE();
 	ent->defined_class = defined_class;
 	ent->mid = id;
@@ -606,7 +616,7 @@ rb_method_entry(VALUE klass, ID id, VALUE *defined_class_ptr)
     struct cache_entry *ent;
     ent = GLOBAL_METHOD_CACHE(klass, id);
     if (ent->method_state == GET_GLOBAL_METHOD_STATE() &&
-	ent->class_serial == RCLASS_EXT(klass)->class_serial &&
+	ent->class_serial == RCLASS_SERIAL(klass) &&
 	ent->mid == id) {
 	if (defined_class_ptr)
 	    *defined_class_ptr = ent->defined_class;
