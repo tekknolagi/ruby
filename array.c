@@ -60,7 +60,7 @@ ary_memfill(VALUE ary, long beg, long size, VALUE val)
 {
     RARRAY_PTR_USE(ary, ptr, {
 	memfill(ptr + beg, size, val);
-	OBJ_WRITTEN(ary, Qundef, val);
+	RB_OBJ_WRITTEN(ary, Qundef, val);
     });
 }
 
@@ -79,7 +79,7 @@ ary_memcpy(VALUE ary, long beg, long argc, const VALUE *argv)
 	    int i;
 	    RARRAY_PTR_USE(ary, ptr, {
 		for (i=0; i<argc; i++) {
-		    OBJ_WRITE(ary, &ptr[i+beg], argv[i]);
+		    RB_OBJ_WRITE(ary, &ptr[i+beg], argv[i]);
 		}
 	    });
 	}
@@ -179,7 +179,7 @@ ary_memcpy(VALUE ary, long beg, long argc, const VALUE *argv)
     assert(!ARY_EMBED_P(_ary_)); \
     assert(ARY_SHARED_P(_ary_)); \
     assert(ARY_SHARED_ROOT_P(_value_)); \
-    OBJ_WRITE(_ary_, &RARRAY(_ary_)->as.heap.aux.shared, _value_); \
+    RB_OBJ_WRITE(_ary_, &RARRAY(_ary_)->as.heap.aux.shared, _value_); \
 } while (0)
 #define RARRAY_SHARED_ROOT_FLAG FL_USER5
 #define ARY_SHARED_ROOT_P(ary) (FL_TEST((ary), RARRAY_SHARED_ROOT_FLAG))
@@ -2130,8 +2130,7 @@ rb_ary_to_a(VALUE ary)
  *     ary.to_h     -> hash
  *
  *  Returns the result of interpreting <i>ary</i> as an array of
- *  <tt>[key, value]</tt> pairs. Elements other than pairs of
- *  values are ignored.
+ *  <tt>[key, value]</tt> pairs.
  *
  *     [[:foo, :bar], [1, 2]].to_h
  *       # => {:foo => :bar, 1 => 2}
@@ -2144,9 +2143,15 @@ rb_ary_to_h(VALUE ary)
     VALUE hash = rb_hash_new();
     for (i=0; i<RARRAY_LEN(ary); i++) {
 	VALUE key_value_pair = rb_check_array_type(rb_ary_elt(ary, i));
-	if (!NIL_P(key_value_pair) && (RARRAY_LEN(key_value_pair) == 2)) {
-	    rb_hash_aset(hash, RARRAY_AREF(key_value_pair, 0), RARRAY_AREF(key_value_pair, 1));
+	if (NIL_P(key_value_pair)) {
+	    rb_raise(rb_eTypeError, "wrong element type %s at %ld (expected array)",
+		rb_builtin_class_name(rb_ary_elt(ary, i)), i);
 	}
+	if (RARRAY_LEN(key_value_pair) != 2) {
+	    rb_raise(rb_eArgError, "wrong array length at %ld (expected 2, was %ld)",
+		i, RARRAY_LEN(key_value_pair));
+	}
+	rb_hash_aset(hash, RARRAY_AREF(key_value_pair, 0), RARRAY_AREF(key_value_pair, 1));
     }
     return hash;
 }
@@ -4063,7 +4068,7 @@ rb_ary_or(VALUE ary1, VALUE ary2)
     for (i=0; i<RARRAY_LEN(ary2); i++) {
 	VALUE elt = RARRAY_AREF(ary2, i);
 	if (!st_update(RHASH_TBL_RAW(hash), (st_data_t)elt, ary_hash_orset, (st_data_t)elt)) {
-	    OBJ_WRITTEN(hash, Qundef, elt);
+	    RB_OBJ_WRITTEN(hash, Qundef, elt);
 	}
     }
     ary3 = rb_hash_values(hash);

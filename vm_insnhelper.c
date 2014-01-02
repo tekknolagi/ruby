@@ -126,20 +126,22 @@ NORETURN(static void argument_error(const rb_iseq_t *iseq, int miss_argc, int mi
 static void
 argument_error(const rb_iseq_t *iseq, int miss_argc, int min_argc, int max_argc)
 {
+    rb_thread_t *th = GET_THREAD();
     VALUE exc = rb_arg_error_new(miss_argc, min_argc, max_argc);
-    VALUE bt = rb_make_backtrace();
-    VALUE err_line = 0;
+    VALUE at;
 
     if (iseq) {
-	int line_no = FIX2INT(rb_iseq_first_lineno(iseq->self));
-
-	err_line = rb_sprintf("%s:%d:in `%s'",
-			      RSTRING_PTR(iseq->location.path),
-			      line_no, RSTRING_PTR(iseq->location.label));
-	rb_funcall(bt, rb_intern("unshift"), 1, err_line);
+	vm_push_frame(th, iseq, VM_FRAME_MAGIC_METHOD, Qnil /* self */, Qnil /* klass */, Qnil /* specval*/,
+		      iseq->iseq_encoded, th->cfp->sp, 0 /* local_size */, 0 /* me */, 0 /* stack_max */);
+	at = rb_vm_backtrace_object();
+	vm_pop_frame(th);
+    }
+    else {
+	at = rb_vm_backtrace_object();
     }
 
-    rb_funcall(exc, rb_intern("set_backtrace"), 1, bt);
+    rb_iv_set(exc, "bt_locations", at);
+    rb_funcall(exc, rb_intern("set_backtrace"), 1, at);
     rb_exc_raise(exc);
 }
 
@@ -285,10 +287,10 @@ vm_cref_push(rb_thread_t *th, VALUE klass, int noex, rb_block_t *blockptr)
     cref->nd_visi = noex;
 
     if (blockptr) {
-	OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(blockptr->iseq, blockptr->ep));
+	RB_OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(blockptr->iseq, blockptr->ep));
     }
     else if (cfp) {
-	OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(cfp->iseq, cfp->ep));
+	RB_OBJ_WRITE(cref, &cref->nd_next, vm_get_cref0(cfp->iseq, cfp->ep));
     }
     /* TODO: why cref->nd_next is 1? */
     if (cref->nd_next && cref->nd_next != (void *) 1 &&
@@ -549,7 +551,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, rb_call_info_t *ci, int is_attr)
 	    VALUE *ptr = ROBJECT_IVPTR(obj);
 
 	    if (index < len) {
-		OBJ_WRITE(obj, &ptr[index], val);
+		RB_OBJ_WRITE(obj, &ptr[index], val);
 		return val; /* inline cache hit */
 	    }
 	}

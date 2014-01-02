@@ -2328,8 +2328,8 @@ rb_execarg_fixup(VALUE execarg_obj)
                 }
                 else {
 		    st_insert(stenv, (st_data_t)key, (st_data_t)val);
-		    OBJ_WRITTEN(envtbl, Qundef, key);
-		    OBJ_WRITTEN(envtbl, Qundef, val);
+		    RB_OBJ_WRITTEN(envtbl, Qundef, key);
+		    RB_OBJ_WRITTEN(envtbl, Qundef, val);
                 }
             }
         }
@@ -3258,9 +3258,7 @@ retry_fork(int *status, int *ep, int chfunc_is_async_signal_safe)
         prefork();
         if (!chfunc_is_async_signal_safe)
             before_fork();
-        preserving_errno(rb_disable_interrupt());
         pid = fork();
-        preserving_errno(rb_enable_interrupt());
         if (pid == 0) /* fork succeed, child process */
             return pid;
         if (!chfunc_is_async_signal_safe)

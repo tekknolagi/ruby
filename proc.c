@@ -14,6 +14,8 @@
 #include "gc.h"
 #include "iseq.h"
 
+NODE *rb_vm_cref_in_context(VALUE self);
+
 struct METHOD {
     VALUE recv;
     VALUE rclass;
@@ -1619,7 +1621,12 @@ rb_mod_define_method(int argc, VALUE *argv, VALUE mod)
 {
     ID id;
     VALUE body;
-    int noex = (int)rb_vm_cref()->nd_visi;
+    int noex = NOEX_PUBLIC;
+    const NODE *cref = rb_vm_cref_in_context(mod);
+
+    if (cref && cref->nd_clss == mod) {
+	noex = (int)cref->nd_visi;
+    }
 
     if (argc == 1) {
 	id = rb_to_id(argv[0]);
@@ -1662,7 +1669,7 @@ rb_mod_define_method(int argc, VALUE *argv, VALUE mod)
 	GetProcPtr(body, proc);
 	if (BUILTIN_TYPE(proc->block.iseq) != T_NODE) {
 	    proc->block.iseq->defined_method_id = id;
-	    OBJ_WRITE(proc->block.iseq->self, &proc->block.iseq->klass, mod);
+	    RB_OBJ_WRITE(proc->block.iseq->self, &proc->block.iseq->klass, mod);
 	    proc->is_lambda = TRUE;
 	    proc->is_from_method = TRUE;
 	    proc->block.klass = mod;

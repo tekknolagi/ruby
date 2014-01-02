@@ -266,24 +266,26 @@ AS_IF([test -z "$target_alias" -a -n "$os_version_style_transform"],
 	])
 
 AC_DEFUN([RUBY_APPEND_OPTION],
-	[# RUBY_APPEND_OPTION($1, $2)
+	[# RUBY_APPEND_OPTION($1)
 	AS_CASE([" [$]{$1-} "],
 	[*' $2 '*], [], ['  '], [ $1="$2"], [ $1="[$]$1 $2"])])
 AC_DEFUN([RUBY_APPEND_OPTIONS],
-	[{ for rb_opt in $2; do # RUBY_APPEND_OPTIONS($1, $2)
+	[# RUBY_APPEND_OPTIONS($1)
+	for rb_opt in $2; do
 	AS_CASE([" [$]{$1-} "],
 	[*" [$]{rb_opt} "*], [], ['  '], [ $1="[$]{rb_opt}"], [ $1="[$]$1 [$]{rb_opt}"])
-	done; }])
+	done])
 AC_DEFUN([RUBY_PREPEND_OPTION],
-	[# RUBY_PREPEND_OPTION($1, $2)
+	[# RUBY_PREPEND_OPTION($1)
 	AS_CASE([" [$]{$1-} "],
 	[*' $2 '*], [], ['  '], [ $1="$2"], [ $1="$2 [$]$1"])])
 AC_DEFUN([RUBY_PREPEND_OPTIONS],
-	[{ unset rb_opts; for rb_opt in $2; do # RUBY_PREPEND_OPTIONS($1, $2)
+	[# RUBY_PREPEND_OPTIONS($1)
+	unset rb_opts; for rb_opt in $2; do
 	AS_CASE([" [$]{rb_opts} [$]{$1-} "],
 	[*" [$]{rb_opt} "*], [], ['  '], [ $1="[$]{rb_opt}"], [ rb_opts="[$]{rb_opts}[$]{rb_opt} "])
 	done
-	$1="[$]{rb_opts}[$]$1"; }])
+	$1="[$]{rb_opts}[$]$1"])
 
 AC_ARG_WITH(arch,
 	AS_HELP_STRING([--with-arch=ARCHS],
@@ -860,7 +862,6 @@ AC_ARG_WITH(opt-dir,
 	AS_HELP_STRING([--with-opt-dir=DIR-LIST],
 		       [add optional headers and libraries directories separated by $PATH_SEPARATOR]),
 	[
-		withval="$1"
 		val=`echo "$PATH_SEPARATOR$withval" | sed "s|$PATH_SEPARATOR\([[^$PATH_SEPARATOR]*]\)| -I\1/include|g;s/^ //"`
 		CPPFLAGS="$CPPFLAGS $val"
 		val=`IFS="$PATH_SEPARATOR"
@@ -2666,7 +2667,10 @@ if test "$with_dln_a_out" != yes; then
 			fi
 			rb_cv_dlopen=yes],
 	[darwin*], [	: ${LDSHARED='$(CC) -dynamic -bundle'}
-			: ${DLDFLAGS="${linker_flag}-undefined${linker_flag:+,}dynamic_lookup ${linker_flag}-multiply_defined${linker_flag:+,}suppress"}
+			RUBY_APPEND_OPTIONS(DLDFLAGS, [ \
+			    "${linker_flag}-undefined${linker_flag:+,}dynamic_lookup" \
+			    "${linker_flag}-multiply_defined${linker_flag:+,}suppress" \
+			    ])
 			: ${LDFLAGS=""}
 			: ${LIBPATHENV=DYLD_LIBRARY_PATH}
 			# /usr/local/include is always searched for

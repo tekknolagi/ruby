@@ -588,7 +588,7 @@ rb_signal_buff_size(void)
 #include <pthread.h>
 #endif
 
-void
+static void
 rb_disable_interrupt(void)
 {
 #ifdef HAVE_PTHREAD_SIGMASK
@@ -598,7 +598,7 @@ rb_disable_interrupt(void)
 #endif
 }
 
-void
+static void
 rb_enable_interrupt(void)
 {
 #ifdef HAVE_PTHREAD_SIGMASK
