@@ -1,22 +1,74 @@
-Sat Dec 21 13:00:20 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+Thu Dec 26 03:28:11 2013  Koichi Sasada  <ko1@atdot.net>
 
-	* file.c: remove unnecessary the source path from EEXIST error
-	  messages and show the destination path only.  [ruby-core:59202]
-	  [Feature #9263]
+	* vm_insnhelper.c (argument_error): insert dummy frame to make
+	  a backtrace object intead of modify backtrace string array.
+	  [Bug #9295]
 
-Sat Dec 21 12:37:19 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+	* test/ruby/test_backtrace.rb: add a test for this patch.
+	  fix test to compare a result of Exception#backtrace with
+	  a result of Exception#backtrace_locations.
 
-	* lib/resolv.rb (Resolv::Hosts#lazy_initialize): should not
-	  consider encodings in hosts file.  [ruby-core:59239] [Bug #9273]
+Wed Dec 25 16:58:31 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
-	* lib/resolv.rb (Resolv::Config.parse_resolv_conf): ditto.
+	* proc.c (rb_mod_define_method): consider visibility only if self
+	  in the caller is same as the receiver, otherwise make public as
+	  well as old behavior.  [ruby-core:57747] [Bug #9005]
+	  [ruby-core:58497] [Bug #9141]
 
-Sat Dec 21 05:43:27 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
+	* vm.c (rb_vm_cref_in_context): return ruby level cref if self is
+	  same.
 
-	* tool/make-snapshot: replace RUBY_PATCHLEVEL_STR in version.h to
-	  show users that this ruby is a preview/rc version.
+Wed Dec 25 16:35:34 2013  Yusuke Endoh  <mame@tsg.ne.jp>
 
-Sat Dec 21 05:03:49 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
+	* sample/trick2013/: added the award-winning entries of TRICK 2013.
+	  See https://github.com/tric/trick2013 for the contest outline.
+	  (Matz has approved the attachment.)
+
+Tue Dec 24 23:47:50 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* README.EXT: add a refer to URL.
+
+Tue Dec 24 23:47:50 2013  Koichi Sasada  <ko1@atdot.net>
+
+	* README.EXT: add a document about RGenGC.
+	  Reviewed by havenwood.
+	  [misc #8962]
+
+	* README.EXT.ja: ditto.
+
+Mon Dec 23 19:00:00 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rubygems/test_gem_ext_builder.rb:  Fix warning due to ambiguous
+	  expression.
+
+Mon Dec 23 16:13:10 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/commands/install_command.rb:  Restore gem install
+	  --ignore-dependencies for remote gems
+	* test/rubygems/test_gem_commands_install_command.rb:  Test for the
+	  above.
+
+Mon Dec 23 16:12:24 2013  Marc-Andre Lafortune  <ruby-core@marc-andre.ca>
+
+	* array.c: Have to_h raise on elements that are not key-value pairs
+	  [#9239]
+
+	* enum.c: ditto
+
+Sun Dec 22 19:22:52 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc.rb:  Set RDoc to release version.
+
+Sun Dec 22 19:22:31 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems.rb:  Set RubyGems to release version.
+
+Sun Dec 22 19:22:01 2013  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems.rb (module Gem):  Fix comment for
+	  Gem::load_path_insert_index.
+
+Sun Dec 22 18:08:42 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
 
 	* win32/Makefile.sub (fake.rb): fixed wrong RUBY_PLATFORM, to correctly
 	  install win32.h.
