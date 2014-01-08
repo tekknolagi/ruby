@@ -447,7 +447,6 @@ strscan_set_pos(VALUE self, VALUE v)
 static VALUE
 strscan_do_scan(VALUE self, VALUE regex, int succptr, int getstr, int headonly)
 {
-    regex_t *rb_reg_prepare_re(VALUE re, VALUE str);
     struct strscanner *p;
     regex_t *re;
     long ret;
@@ -463,8 +462,6 @@ strscan_do_scan(VALUE self, VALUE regex, int succptr, int getstr, int headonly)
 
     p->regex = regex;
     re = rb_reg_prepare_re(regex, p->str);
-    tmpreg = re != RREGEXP(regex)->ptr;
-    if (!tmpreg) RREGEXP(regex)->usecnt++;
 
     if (headonly) {
         ret = onig_match(re, (UChar* )CURPTR(p),
@@ -477,16 +474,8 @@ strscan_do_scan(VALUE self, VALUE regex, int succptr, int getstr, int headonly)
                           (UChar* )CURPTR(p), (UChar* )(CURPTR(p) + S_RESTLEN(p)),
                           &(p->regs), ONIG_OPTION_NONE);
     }
-    if (!tmpreg) RREGEXP(regex)->usecnt--;
-    if (tmpreg) {
-        if (RREGEXP(regex)->usecnt) {
-            onig_free(re);
-        }
-        else {
-            onig_free(RREGEXP(regex)->ptr);
-            RREGEXP(regex)->ptr = re;
-        }
-    }
+
+    rb_reg_release_re(re, regex, p->str);
 
     if (ret == -2) rb_raise(ScanError, "regexp buffer overflow");
     if (ret < 0) {
@@ -981,7 +970,7 @@ name_to_backref_number(struct re_registers *regs, VALUE regexp, const char* name
 {
     int num;
 
-    num = onig_name_to_backref_number(RREGEXP(regexp)->ptr,
+    num = onig_name_to_backref_number(RREGEXP_PTR(regexp),
 	(const unsigned char* )name, (const unsigned char* )name_end, regs);
     if (num >= 1) {
 	return num;

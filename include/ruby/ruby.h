@@ -906,13 +906,18 @@ struct RArray {
 
 #define RARRAY_PTR(a) ((VALUE *)RARRAY_CONST_PTR(RGENGC_WB_PROTECTED_ARRAY ? OBJ_WB_UNPROTECT((VALUE)a) : ((VALUE)a)))
 
+#define RREGEXP_CACHE_SIZE 3
+typedef struct rb_regexpext_struct rb_regexpext_t;
+
 struct RRegexp {
     struct RBasic basic;
     struct re_pattern_buffer *ptr;
     const VALUE src;
-    unsigned long usecnt;
+    rb_regexpext_t *ext;
 };
-#define RREGEXP_SRC(r) RREGEXP(r)->src
+
+#define RREGEXP_PTR(r) (RREGEXP(r)->ptr)
+#define RREGEXP_SRC(r) (RREGEXP(r)->src)
 #define RREGEXP_SRC_PTR(r) RSTRING_PTR(RREGEXP(r)->src)
 #define RREGEXP_SRC_LEN(r) RSTRING_LEN(RREGEXP(r)->src)
 #define RREGEXP_SRC_END(r) RSTRING_END(RREGEXP(r)->src)

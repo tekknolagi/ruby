@@ -1519,6 +1519,7 @@ make_io_deferred(rb_objspace_t *objspace,RVALUE *p)
 static int
 obj_free(rb_objspace_t *objspace, VALUE obj)
 {
+    int i;
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_FREEOBJ, obj);
 
     switch (BUILTIN_TYPE(obj)) {
@@ -1589,9 +1590,17 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	}
 	break;
       case T_REGEXP:
-	if (RANY(obj)->as.regexp.ptr) {
-	    onig_free(RANY(obj)->as.regexp.ptr);
+	if (RREGEXP_PTR(obj)) {
+	    onig_free(RREGEXP_PTR(obj));
 	}
+	for (i = 0; i < RREGEXP_CACHE_SIZE; ++i) {
+	    if (RREGEXP_EXT(obj)->cache[i]) {
+		onig_free(RREGEXP_EXT(obj)->cache[i]);
+	    }
+	}
+	if (RREGEXP_EXT(obj))
+	    xfree(RREGEXP_EXT(obj));
+
 	break;
       case T_DATA:
 	if (DATA_PTR(obj)) {
@@ -2458,6 +2467,7 @@ static size_t
 obj_memsize_of(VALUE obj, int use_tdata)
 {
     size_t size = 0;
+    int i;
 
     if (SPECIAL_CONST_P(obj)) {
 	return 0;
@@ -2510,9 +2520,14 @@ obj_memsize_of(VALUE obj, int use_tdata)
 	}
 	break;
       case T_REGEXP:
-	if (RREGEXP(obj)->ptr) {
-	    size += onig_memsize(RREGEXP(obj)->ptr);
+	if (RREGEXP_PTR(obj)) {
+	    size += onig_memsize(RREGEXP_PTR(obj));
 	}
+	for (i = 0; i < RREGEXP_CACHE_SIZE; ++i) {
+	    size += onig_memsize(RREGEXP_EXT(obj)->cache[i]);
+	}
+	size += sizeof(rb_regexpext_t);
+
 	break;
       case T_DATA:
 	if (use_tdata) size += rb_objspace_data_type_memsize(obj);

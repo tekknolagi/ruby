@@ -326,7 +326,7 @@ rb_char_to_option_kcode(int c, int *option, int *kcode)
 static void
 rb_reg_check(VALUE re)
 {
-    if (!RREGEXP(re)->ptr || !RREGEXP_SRC(re) || !RREGEXP_SRC_PTR(re)) {
+    if (!RREGEXP_PTR(re) || !RREGEXP_SRC(re) || !RREGEXP_SRC_PTR(re)) {
 	rb_raise(rb_eTypeError, "uninitialized Regexp");
     }
 }
@@ -440,7 +440,7 @@ rb_reg_desc(const char *s, long len, VALUE re)
     if (re) {
 	char opts[4];
 	rb_reg_check(re);
-	if (*option_to_str(opts, RREGEXP(re)->ptr->options))
+	if (*option_to_str(opts, RREGEXP_PTR(re)->options))
 	    rb_str_buf_cat2(str, opts);
 	if (RBASIC(re)->flags & REG_ENCODING_NONE)
 	    rb_str_buf_cat2(str, "n");
@@ -490,7 +490,7 @@ rb_reg_source(VALUE re)
 static VALUE
 rb_reg_inspect(VALUE re)
 {
-    if (!RREGEXP(re)->ptr || !RREGEXP_SRC(re) || !RREGEXP_SRC_PTR(re)) {
+    if (!RREGEXP_PTR(re) || !RREGEXP_SRC(re) || !RREGEXP_SRC_PTR(re)) {
         return rb_any_to_s(re);
     }
     return rb_reg_desc(RREGEXP_SRC_PTR(re), RREGEXP_SRC_LEN(re), re);
@@ -531,7 +531,7 @@ rb_reg_to_s(VALUE re)
     rb_reg_check(re);
 
     rb_enc_copy(str, re);
-    options = RREGEXP(re)->ptr->options;
+    options = RREGEXP_PTR(re)->options;
     ptr = (UChar*)RREGEXP_SRC_PTR(re);
     len = RREGEXP_SRC_LEN(re);
   again:
@@ -582,7 +582,7 @@ rb_reg_to_s(VALUE re)
 	    ruby_verbose = verbose;
 	}
 	if (err) {
-	    options = RREGEXP(re)->ptr->options;
+	    options = RREGEXP_PTR(re)->options;
 	    ptr = (UChar*)RREGEXP_SRC_PTR(re);
 	    len = RREGEXP_SRC_LEN(re);
 	}
@@ -687,7 +687,7 @@ static VALUE
 rb_reg_casefold_p(VALUE re)
 {
     rb_reg_check(re);
-    if (RREGEXP(re)->ptr->options & ONIG_OPTION_IGNORECASE) return Qtrue;
+    if (RREGEXP_PTR(re)->options & ONIG_OPTION_IGNORECASE) return Qtrue;
     return Qfalse;
 }
 
@@ -752,7 +752,7 @@ rb_reg_names(VALUE re)
 {
     VALUE ary = rb_ary_new();
     rb_reg_check(re);
-    onig_foreach_name(RREGEXP(re)->ptr, reg_names_iter, (void*)ary);
+    onig_foreach_name(RREGEXP_PTR(re), reg_names_iter, (void*)ary);
     return ary;
 }
 
@@ -799,7 +799,7 @@ rb_reg_named_captures(VALUE re)
 {
     VALUE hash = rb_hash_new();
     rb_reg_check(re);
-    onig_foreach_name(RREGEXP(re)->ptr, reg_named_captures_iter, (void*)hash);
+    onig_foreach_name(RREGEXP_PTR(re), reg_named_captures_iter, (void*)hash);
     return hash;
 }
 
@@ -1084,7 +1084,7 @@ match_backref_number(VALUE match, VALUE backref)
         break;
     }
 
-    num = onig_name_to_backref_number(RREGEXP(regexp)->ptr,
+    num = onig_name_to_backref_number(RREGEXP_PTR(regexp),
               (const unsigned char*)name,
               (const unsigned char*)name + strlen(name),
               regs);
@@ -1283,13 +1283,13 @@ rb_reg_prepare_enc(VALUE re, VALUE str, int warn)
 
     rb_reg_check(re);
     if (!rb_enc_str_asciicompat_p(str)) {
-        if (RREGEXP(re)->ptr->enc != enc) {
+        if (RREGEXP_PTR(re)->enc != enc) {
 	    reg_enc_error(re, str);
 	}
     }
     else if (rb_reg_fixed_encoding_p(re)) {
-        if (RREGEXP(re)->ptr->enc != enc &&
-	    (!rb_enc_asciicompat(RREGEXP(re)->ptr->enc) ||
+        if (RREGEXP_PTR(re)->enc != enc &&
+	    (!rb_enc_asciicompat(RREGEXP_PTR(re)->enc) ||
 	     rb_enc_str_coderange(str) != ENC_CODERANGE_7BIT)) {
             if (rb_encoding_compat &&
                 ((RREGEXP(re)->ptr->enc == rb_ascii8bit_encoding() && enc == rb_utf8_encoding()) ||
@@ -1298,7 +1298,7 @@ rb_reg_prepare_enc(VALUE re, VALUE str, int warn)
             }
 	    reg_enc_error(re, str);
 	}
-	enc = RREGEXP(re)->ptr->enc;
+	enc = RREGEXP_PTR(re)->enc;
     }
     if (warn && (RBASIC(re)->flags & REG_ENCODING_NONE) &&
 	enc != rb_ascii8bit_encoding() &&
@@ -1313,7 +1313,7 @@ rb_reg_prepare_enc(VALUE re, VALUE str, int warn)
 regex_t *
 rb_reg_prepare_re(VALUE re, VALUE str)
 {
-    regex_t *reg = RREGEXP(re)->ptr;
+    regex_t *reg = RREGEXP_PTR(re);
     onig_errmsg_buffer err = "";
     int r;
     OnigErrorInfo einfo;
@@ -1321,11 +1321,24 @@ rb_reg_prepare_re(VALUE re, VALUE str)
     VALUE unescaped;
     rb_encoding *fixed_enc = 0;
     rb_encoding *enc = rb_reg_prepare_enc(re, str, 1);
+    int cache_index;
 
-    if (reg->enc == enc) return reg;
+    if (reg->enc == enc) {
+	RREGEXP_EXT(re)->usecnt++;
+	return reg;
+    }
+
+    cache_index = enc->ruby_encoding_index;
+    if (cache_index < RREGEXP_CACHE_SIZE) {
+	reg = RREGEXP_EXT(re)->cache[cache_index];
+	if (reg && reg->enc == enc) {
+	    RREGEXP_EXT(re)->usecnt++;
+	    return reg;
+	}
+    }
 
     rb_reg_check(re);
-    reg = RREGEXP(re)->ptr;
+    reg = RREGEXP_PTR(re);
     pattern = RREGEXP_SRC_PTR(re);
 
     unescaped = rb_reg_preprocess(
@@ -1345,8 +1358,36 @@ rb_reg_prepare_re(VALUE re, VALUE str)
 	rb_reg_raise(pattern, RREGEXP_SRC_LEN(re), err, re);
     }
 
+    if (cache_index < RREGEXP_CACHE_SIZE) {
+	RREGEXP_EXT(re)->cache[cache_index] = reg;
+    }
+
     RB_GC_GUARD(unescaped);
     return reg;
+}
+
+void rb_reg_release_re(regex_t *reg, VALUE re, VALUE str) {
+    int i;
+
+    if (reg == RREGEXP_PTR(re)) {
+	RREGEXP_EXT(re)->usecnt--;
+	return;
+    }
+
+    for (i = 0; i < RREGEXP_CACHE_SIZE; ++i) {
+	if (reg == RREGEXP_EXT(re)->cache[i]) {
+	    RREGEXP_EXT(re)->usecnt--;
+	    return;
+	}
+    }
+
+    if (RREGEXP_EXT(re)->usecnt) {
+	onig_free(reg);
+    }
+    else {
+	onig_free(RREGEXP_PTR(re));
+	RREGEXP_PTR(re) = reg;
+    }
 }
 
 long
@@ -1389,7 +1430,6 @@ rb_reg_search(VALUE re, VALUE str, long pos, int reverse)
     struct re_registers regi, *regs = &regi;
     char *range = RSTRING_PTR(str);
     regex_t *reg;
-    int tmpreg;
 
     if (pos > RSTRING_LEN(str) || pos < 0) {
 	rb_backref_set(Qnil);
@@ -1397,8 +1437,6 @@ rb_reg_search(VALUE re, VALUE str, long pos, int reverse)
     }
 
     reg = rb_reg_prepare_re(re, str);
-    tmpreg = reg != RREGEXP(re)->ptr;
-    if (!tmpreg) RREGEXP(re)->usecnt++;
 
     match = rb_backref_get();
     if (!NIL_P(match)) {
@@ -1421,16 +1459,9 @@ rb_reg_search(VALUE re, VALUE str, long pos, int reverse)
 			 ((UChar*)(RSTRING_PTR(str)) + pos),
 			 ((UChar*)range),
 			 regs, ONIG_OPTION_NONE);
-    if (!tmpreg) RREGEXP(re)->usecnt--;
-    if (tmpreg) {
-	if (RREGEXP(re)->usecnt) {
-	    onig_free(reg);
-	}
-	else {
-	    onig_free(RREGEXP(re)->ptr);
-	    RREGEXP(re)->ptr = reg;
-	}
-    }
+
+    rb_reg_release_re(reg, re, str);
+
     if (result < 0) {
 	if (regs == &regi)
 	    onig_region_free(regs, 0);
@@ -1700,7 +1731,7 @@ name_to_backref_number(struct re_registers *regs, VALUE regexp, const char* name
 {
     int num;
 
-    num = onig_name_to_backref_number(RREGEXP(regexp)->ptr,
+    num = onig_name_to_backref_number(RREGEXP_PTR(regexp),
 	(const unsigned char* )name, (const unsigned char* )name_end, regs);
     if (num >= 1) {
 	return num;
@@ -1911,7 +1942,7 @@ match_inspect(VALUE match)
     names = ALLOCA_N(struct backref_name_tag, num_regs);
     MEMZERO(names, struct backref_name_tag, num_regs);
 
-    onig_foreach_name(RREGEXP(regexp)->ptr,
+    onig_foreach_name(RREGEXP_PTR(regexp),
             match_inspect_name_iter, names);
 
     str = rb_str_buf_new2("#<");
@@ -2498,11 +2529,18 @@ rb_reg_initialize_str(VALUE obj, VALUE str, int options, onig_errmsg_buffer err,
 static VALUE
 rb_reg_s_alloc(VALUE klass)
 {
+    int i;
     NEWOBJ_OF(re, struct RRegexp, klass, T_REGEXP | (RGENGC_WB_PROTECTED_REGEXP ? FL_WB_PROTECTED : 0));
 
-    re->ptr = 0;
+    RREGEXP_PTR(re) = 0;
     RB_OBJ_WRITE(re, &re->src, 0);
-    re->usecnt = 0;
+
+    re->ext = ALLOC(rb_regexpext_t);
+
+    for (i = 0; i < RREGEXP_CACHE_SIZE; ++i) {
+	RREGEXP_EXT(re)->cache[i] = 0;
+    }
+    RREGEXP_EXT(re)->usecnt = 0;
 
     return (VALUE)re;
 }
@@ -2606,7 +2644,7 @@ reg_hash(VALUE re)
     st_index_t hashval;
 
     rb_reg_check(re);
-    hashval = RREGEXP(re)->ptr->options;
+    hashval = RREGEXP_PTR(re)->options;
     hashval = rb_hash_uint(hashval, rb_memhash(RREGEXP_SRC_PTR(re), RREGEXP_SRC_LEN(re)));
     return rb_hash_end(hashval);
 }
@@ -2634,7 +2672,7 @@ rb_reg_equal(VALUE re1, VALUE re2)
     if (!RB_TYPE_P(re2, T_REGEXP)) return Qfalse;
     rb_reg_check(re1); rb_reg_check(re2);
     if (FL_TEST(re1, KCODE_FIXED) != FL_TEST(re2, KCODE_FIXED)) return Qfalse;
-    if (RREGEXP(re1)->ptr->options != RREGEXP(re2)->ptr->options) return Qfalse;
+    if (RREGEXP_PTR(re1)->options != RREGEXP_PTR(re2)->options) return Qfalse;
     if (RREGEXP_SRC_LEN(re1) != RREGEXP_SRC_LEN(re2)) return Qfalse;
     if (ENCODING_GET(re1) != ENCODING_GET(re2)) return Qfalse;
     if (memcmp(RREGEXP_SRC_PTR(re1), RREGEXP_SRC_PTR(re2), RREGEXP_SRC_LEN(re1)) == 0) {
@@ -3116,7 +3154,7 @@ rb_reg_options(VALUE re)
     int options;
 
     rb_reg_check(re);
-    options = RREGEXP(re)->ptr->options & ARG_REG_OPTION_MASK;
+    options = RREGEXP_PTR(re)->options & ARG_REG_OPTION_MASK;
     if (RBASIC(re)->flags & KCODE_FIXED) options |= ARG_ENCODING_FIXED;
     if (RBASIC(re)->flags & REG_ENCODING_NONE) options |= ARG_ENCODING_NONE;
     return options;
@@ -3361,7 +3399,7 @@ rb_reg_regsub(VALUE str, VALUE src, struct re_registers *regs, VALUE regexp)
 	switch (c) {
 	  case '1': case '2': case '3': case '4':
 	  case '5': case '6': case '7': case '8': case '9':
-            if (onig_noname_group_capture_is_active(RREGEXP(regexp)->ptr)) {
+            if (onig_noname_group_capture_is_active(RREGEXP_PTR(regexp))) {
                 no = c - '0';
             }
             else {
