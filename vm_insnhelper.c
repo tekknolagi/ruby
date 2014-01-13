@@ -822,16 +822,27 @@ static VALUE vm_call_general(rb_thread_t *th, rb_control_frame_t *reg_cfp, rb_ca
 static void
 vm_search_method(rb_call_info_t *ci, VALUE recv)
 {
+    rb_method_entry_t *me;
     VALUE klass = CLASS_OF(recv);
 
 #if OPT_INLINE_METHOD_CACHE
     if (LIKELY(GET_GLOBAL_METHOD_STATE() == ci->method_state && RCLASS_SERIAL(klass) == ci->class_serial)) {
 	/* cache hit! */
+	ci->hit_count++;
 	return;
     }
 #endif
 
-    ci->me = rb_method_entry(klass, ci->mid, &ci->defined_class);
+    me = rb_method_entry(klass, ci->mid, &ci->defined_class);
+
+    if (me == ci->me && klass == ci->klass) {
+	ci->soft_invalidation_count++;
+    } else {
+	ci->soft_invalidation_count = 0;
+	ci->hit_count = 0;
+    }
+
+    ci->me = me;
     ci->klass = klass;
     ci->call = vm_call_general;
 #if OPT_INLINE_METHOD_CACHE

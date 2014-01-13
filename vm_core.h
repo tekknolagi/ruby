@@ -164,6 +164,10 @@ typedef struct rb_call_info_struct {
     rb_serial_t class_serial;
     VALUE klass;
 
+    /* inline cache: stats */
+    uint64_t hit_count;
+    uint64_t soft_invalidation_count; /* cases where the cache was invalidated but ended up returning the same method anyway */
+
     /* inline cache: values */
     const rb_method_entry_t *me;
     VALUE defined_class;

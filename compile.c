@@ -1547,6 +1547,8 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *anchor)
 			    rb_call_info_t *base_ci = (rb_call_info_t *)operands[j];
 			    rb_call_info_t *ci = &iseq->callinfo_entries[base_ci->aux.index];
 			    *ci = *base_ci;
+			    ci->hit_count = 0;
+			    ci->soft_invalidation_count = 0;
 
 			    if (UNLIKELY(base_ci->aux.index >= iseq->callinfo_size)) {
 				rb_bug("iseq_set_sequence: ci_index overflow: index: %d, size: %d", base_ci->argc, iseq->callinfo_size);

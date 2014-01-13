@@ -789,6 +789,28 @@ iseq_check(VALUE val)
     return iseq;
 }
 
+static VALUE
+iseq_method_cache_stats(VALUE self)
+{
+    rb_iseq_t *iseq = iseq_check(self);
+    VALUE retn = rb_ary_new();
+    int i;
+    for (i = 0; i < iseq->callinfo_size; i++) {
+	rb_call_info_t *ci = &iseq->callinfo_entries[i];
+	if (ci->mid) {
+	    VALUE ci_val = rb_hash_new();
+	    #define S(k,v) rb_hash_aset(ci_val, ID2SYM(rb_intern(#k)), v)
+	    S(mid, ID2SYM(ci->mid));
+	    S(argc, INT2NUM(ci->orig_argc));
+	    S(hit_count, ULL2NUM(ci->hit_count));
+	    S(soft_invalidation_count, ULL2NUM(ci->soft_invalidation_count));
+	    #undef S
+	    rb_ary_push(retn, ci_val);
+	}
+    }
+    return retn;
+}
+
 /*
  *  call-seq:
  *     iseq.eval -> obj
@@ -2276,6 +2298,8 @@ Init_ISeq(void)
     rb_define_method(rb_cISeq, "disassemble", rb_iseq_disasm, 0);
     rb_define_method(rb_cISeq, "to_a", iseq_to_a, 0);
     rb_define_method(rb_cISeq, "eval", iseq_eval, 0);
+
+    rb_define_method(rb_cISeq, "method_cache_stats", iseq_method_cache_stats, 0);
 
     /* location APIs */
     rb_define_method(rb_cISeq, "path", rb_iseq_path, 0);
