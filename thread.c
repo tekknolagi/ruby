@@ -5225,15 +5225,16 @@ rb_check_deadlock(rb_vm_t *vm)
     st_foreach(vm->living_threads, check_deadlock_i, (st_data_t)&found);
 
     if (!found) {
-	VALUE argv[2];
-	argv[0] = rb_eFatal;
-	argv[1] = rb_str_new2("No live threads left. Deadlock?");
+	void rb_exc_set_backtrace(VALUE, VALUE);
+	VALUE exc = rb_exc_new_cstr(rb_eFatal, "No live threads left. Deadlock?");
 #ifdef DEBUG_DEADLOCK_CHECK
 	printf("%d %d %p %p\n", vm->living_threads->num_entries, vm->sleeper, GET_THREAD(), vm->main_thread);
 	st_foreach(vm->living_threads, debug_i, (st_data_t)0);
 #endif
 	vm->sleeper--;
-	rb_threadptr_raise(vm->main_thread, 2, argv);
+	rb_exc_set_backtrace(exc, rb_vm_backtrace_object());
+	rb_threadptr_pending_interrupt_enque(vm->main_thread, exc);
+	rb_threadptr_interrupt(vm->main_thread);
     }
 }
 
