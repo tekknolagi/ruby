@@ -676,6 +676,7 @@ static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr);
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
 
 static size_t obj_memsize_of(VALUE obj, int use_tdata);
+static size_t objspace_free_slot(rb_objspace_t *objspace);
 
 static double getrusage_time(void);
 static inline void gc_prof_setup_new_record(rb_objspace_t *objspace, int reason);
@@ -1004,10 +1005,11 @@ heap_pages_free_unused_pages(rb_objspace_t *objspace)
 	    struct heap_page *page = heap_pages_sorted[i];
 
 	    if (page->heap == heap_tomb && page->final_slots == 0) {
-		if (heap_pages_swept_slots - page->limit > heap_pages_max_free_slots) {
+		if (objspace_free_slot(objspace) - page->limit > heap_pages_max_free_slots) {
 		    if (0) fprintf(stderr, "heap_pages_free_unused_pages: %d free page %p, heap_pages_swept_slots: %d, heap_pages_max_free_slots: %d\n",
 				   (int)i, page, (int)heap_pages_swept_slots, (int)heap_pages_max_free_slots);
 		    heap_pages_swept_slots -= page->limit;
+                    objspace->profile.total_freed_object_num += page->limit;
 		    heap_unlink_page(objspace, heap_tomb, page);
 		    heap_page_free(objspace, page);
 		    continue;
@@ -2964,8 +2966,8 @@ gc_after_sweep(rb_objspace_t *objspace)
     rgengc_report(1, objspace, "after_gc_sweep: heap->total_slots: %d, heap->swept_slots: %d, min_free_slots: %d\n",
 		  (int)heap->total_slots, (int)heap_pages_swept_slots, (int)heap_pages_min_free_slots);
 
-    if (heap_pages_swept_slots < heap_pages_min_free_slots) {
-	heap_set_increment(objspace, (heap_pages_min_free_slots - heap_pages_swept_slots) / HEAP_OBJ_LIMIT);
+    if (objspace_free_slot(objspace) < heap_pages_min_free_slots) {
+	heap_set_increment(objspace, (heap_pages_min_free_slots - objspace_free_slot(objspace)) / HEAP_OBJ_LIMIT);
 	heap_increment(objspace, heap);
 
 #if USE_RGENGC
