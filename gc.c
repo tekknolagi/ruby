@@ -122,6 +122,9 @@ rb_gc_guarded_ptr(volatile VALUE *ptr)
 #ifndef GC_MALLOC_LIMIT_GROWTH_FACTOR
 #define GC_MALLOC_LIMIT_GROWTH_FACTOR 1.4
 #endif
+#ifndef GC_MALLOC_CREEPER_FACTOR
+#define GC_MALLOC_CREEPER_FACTOR 1.05
+#endif
 
 #ifndef GC_OLDMALLOC_LIMIT_MIN
 #define GC_OLDMALLOC_LIMIT_MIN (16 * 1024 * 1024 /* 16MB */)
@@ -142,6 +145,7 @@ typedef struct {
     unsigned int malloc_limit_min;
     unsigned int malloc_limit_max;
     double malloc_limit_growth_factor;
+    double malloc_creeper_factor;
     unsigned int oldmalloc_limit_min;
     unsigned int oldmalloc_limit_max;
     double oldmalloc_limit_growth_factor;
@@ -159,6 +163,7 @@ static ruby_gc_params_t gc_params = {
     GC_MALLOC_LIMIT_MIN,
     GC_MALLOC_LIMIT_MAX,
     GC_MALLOC_LIMIT_GROWTH_FACTOR,
+    GC_MALLOC_CREEPER_FACTOR,
     GC_OLDMALLOC_LIMIT_MIN,
     GC_OLDMALLOC_LIMIT_MAX,
     GC_OLDMALLOC_LIMIT_GROWTH_FACTOR,
@@ -2923,10 +2928,17 @@ gc_before_sweep(rb_objspace_t *objspace)
 	size_t old_limit = malloc_limit;
 
 	if (inc > malloc_limit) {
-	    malloc_limit = (size_t)(inc * gc_params.malloc_limit_growth_factor);
-	    if (gc_params.malloc_limit_max > 0 && /* ignore max-check if 0 */
-		malloc_limit > gc_params.malloc_limit_max) {
-		malloc_limit = inc;
+	    /* We don't want the limit to creep up, so we leave the
+	     * limit alone if it's only a little bigger than the increase.
+	     * This is actually the common case because this code path
+	     * is trigger by checking inc against limit!
+	     */
+	    if(malloc_limit * gc_params.malloc_creeper_factor < inc) {
+		malloc_limit = (size_t)(inc * gc_params.malloc_limit_growth_factor);
+		if (gc_params.malloc_limit_max > 0 && /* ignore max-check if 0 */
+		    malloc_limit > gc_params.malloc_limit_max) {
+		    malloc_limit = inc;
+		}
 	    }
 	}
 	else {
