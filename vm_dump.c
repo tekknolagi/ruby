@@ -678,6 +678,8 @@ dump_thread(void *arg)
 }
 #endif
 
+extern void * ruby_signal_ctx;
+
 void
 rb_print_backtrace(void)
 {
@@ -685,23 +687,23 @@ rb_print_backtrace(void)
 #define MAX_NATIVE_TRACE 1024
     static void *trace[MAX_NATIVE_TRACE];
     int n = backtrace(trace, MAX_NATIVE_TRACE);
-# if defined(USE_BACKTRACE_SYMBOLS_FD)
-    backtrace_symbols_fd(trace, n, STDERR_FILENO);
-# else
-    char **syms = backtrace_symbols(trace, n);
+    if (ruby_signal_ctx) {
+	backtrace_symbols_fd(trace, n, STDERR_FILENO);
+    } else {
+	char **syms = backtrace_symbols(trace, n);
 
-    if (syms) {
-#  ifdef USE_ELF
-	rb_dump_backtrace_with_lines(n, trace, syms);
-#  else
-	int i;
-	for (i=0; i<n; i++) {
-	    fprintf(stderr, "%s\n", syms[i]);
-	}
-#  endif
-	free(syms);
-    }
+	if (syms) {
+# ifdef USE_ELF
+	    rb_dump_backtrace_with_lines(n, trace, syms);
+# else
+	    int i;
+	    for (i=0; i<n; i++) {
+		fprintf(stderr, "%s\n", syms[i]);
+	    }
 # endif
+	    free(syms);
+	}
+    }
 #elif defined(_WIN32)
     DWORD tid = GetCurrentThreadId();
     HANDLE th = (HANDLE)_beginthread(dump_thread, 0, &tid);
@@ -738,8 +740,6 @@ print_machine_register(mcontext_t *ctx, greg_t reg, const char *reg_name, int *c
     fputs(buf, stderr);
 }
 #endif
-
-extern void * ruby_signal_ctx;
 
 void
 rb_vm_bugreport(void)
