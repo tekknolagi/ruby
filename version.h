@@ -1,6 +1,6 @@
 #define RUBY_VERSION "2.1.1"
 #define RUBY_RELEASE_DATE "2014-02-24"
-#define RUBY_PATCHLEVEL -1
+#define RUBY_PATCHLEVEL 76
 
 #define RUBY_RELEASE_YEAR 2014
 #define RUBY_RELEASE_MONTH 2
@@ -42,7 +42,7 @@
 # define RUBY_DESCRIPTION	    \
     "ruby "RUBY_VERSION		    \
     RUBY_PATCHLEVEL_STR		    \
-    "-shopify"			    \
+    "-github"			    \
     " (development) "		    \
     "["RUBY_PLATFORM"]"
 # define RUBY_COPYRIGHT		    \
