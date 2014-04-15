@@ -45,8 +45,8 @@
 # define RUBY_DESCRIPTION	    \
     "ruby "RUBY_VERSION		    \
     RUBY_PATCHLEVEL_STR		    \
-    " ("RUBY_RELEASE_DATE	    \
-    RUBY_REVISION_STR") "	    \
+    "-shopify"                \
+    " (development) "          \
     "["RUBY_PLATFORM"]"
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \
