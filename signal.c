@@ -652,8 +652,6 @@ check_stack_overflow(const void *addr)
 #define MESSAGE_FAULT_ADDRESS
 #endif
 
-void * ruby_signal_ctx = NULL;
-
 #ifdef SIGBUS
 static RETSIGTYPE
 sigbus(int sig SIGINFO_ARG)
@@ -666,7 +664,6 @@ sigbus(int sig SIGINFO_ARG)
 #if defined __APPLE__
     CHECK_STACK_OVERFLOW();
 #endif
-    ruby_signal_ctx = ctx;
     rb_bug("Bus Error" MESSAGE_FAULT_ADDRESS);
 }
 #endif
@@ -704,7 +701,6 @@ sigsegv(int sig SIGINFO_ARG)
 
     segv_received = 1;
     ruby_disable_gc_stress = 1;
-    ruby_signal_ctx = ctx;
     rb_bug("Segmentation fault" MESSAGE_FAULT_ADDRESS);
 }
 #endif
