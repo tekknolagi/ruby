@@ -33,8 +33,6 @@ void rb_encdb_set_unicode(int index);
 #pragma GCC visibility pop
 #endif
 
-int rb_encoding_compat;
-
 static ID id_encoding;
 VALUE rb_cEncoding;
 static VALUE rb_encoding_list;
@@ -907,14 +905,6 @@ rb_enc_compatible(VALUE str1, VALUE str2)
 	    if (cr2 == ENC_CODERANGE_7BIT) {
 		return enc1;
 	    }
-            if (rb_encoding_compat) {
-	        if (idx1 == ENCINDEX_UTF_8 && idx2 == ENCINDEX_ASCII) {
-	            return enc2;
-	        }
-	        else if (idx1 == ENCINDEX_ASCII && idx2 == ENCINDEX_UTF_8) {
-	            return enc1;
-	        }
-	    }
 	}
 	if (cr1 == ENC_CODERANGE_7BIT)
 	    return enc2;
@@ -1007,10 +997,7 @@ rb_enc_codepoint_len(const char *p, const char *e, int *len_p, rb_encoding *enc)
         rb_raise(rb_eArgError, "empty string");
     r = rb_enc_precise_mbclen(p, e, enc);
     if (!MBCLEN_CHARFOUND_P(r)) {
-        if (rb_encoding_compat && enc == rb_utf8_encoding() && MBCLEN_CHARFOUND_P(r = rb_enc_precise_mbclen(p, e, rb_ascii8bit_encoding())))
-          enc = rb_ascii8bit_encoding();
-        else
-	  rb_raise(rb_eArgError, "invalid byte sequence in %s", rb_enc_name(enc));
+	rb_raise(rb_eArgError, "invalid byte sequence in %s", rb_enc_name(enc));
     }
     if (len_p) *len_p = MBCLEN_CHARFOUND_LEN(r);
     return rb_enc_mbc_to_codepoint(p, e, enc);
@@ -1499,12 +1486,6 @@ get_default_internal(VALUE klass)
     return rb_enc_default_internal();
 }
 
-static VALUE
-rb_enc_compat_mode_enabled_p(VALUE klass)
-{
-    return rb_encoding_compat ? Qtrue : Qfalse;
-}
-
 void
 rb_enc_set_default_internal(VALUE encoding)
 {
@@ -1932,9 +1913,6 @@ Init_Encoding(void)
     for (i = 0; i < enc_table.count; ++i) {
 	rb_ary_push(list, enc_new(enc_table.list[i].enc));
     }
-
-    rb_const_set(rb_cEncoding, rb_intern_const("COMPAT_MODE_AVAILABLE"), Qtrue);
-    rb_define_singleton_method(rb_cEncoding, "compat_mode_enabled?", rb_enc_compat_mode_enabled_p, 0);
 }
 
 /* locale insensitive ctype functions */

@@ -1178,7 +1178,7 @@ rb_hash_reject(VALUE hash)
 #endif
 	}
     }
-#if HASH_REJECT_COPY_EXTRA_STATES
+#if HASH_REJECT_COPY_MISC_ATTRIBUTES
     result = rb_hash_dup_empty(hash);
 #else
     result = rb_hash_new();
@@ -2436,7 +2436,7 @@ static VALUE rb_hash_compare_by_id_p(VALUE hash);
  *     h1["a"]        #=> 100
  *     h1.compare_by_identity
  *     h1.compare_by_identity? #=> true
- *     h1["a".dup]    #=> nil  # different objects.
+ *     h1["a"]        #=> nil  # different objects.
  *     h1[:c]         #=> "c"  # same symbols are all same.
  *
  */

@@ -42,8 +42,8 @@
 # define RUBY_DESCRIPTION	    \
     "ruby "RUBY_VERSION		    \
     RUBY_PATCHLEVEL_STR		    \
-    "-github"			    \
-    " (development) "		    \
+    " ("RUBY_RELEASE_DATE	    \
+    RUBY_REVISION_STR") "	    \
     "["RUBY_PLATFORM"]"
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \

@@ -170,7 +170,6 @@ class_alloc(VALUE flags, VALUE klass)
 
     RCLASS_REFINED_CLASS(obj) = Qnil;
     RCLASS_EXT(obj)->allocator = 0;
-    MEMZERO(&RCLASS_EXT(obj)->cache, struct rb_meth_cache, 1);
     return (VALUE)obj;
 }
 
@@ -507,7 +506,6 @@ make_singleton_class(VALUE obj)
 {
     VALUE orig_class = RBASIC(obj)->klass;
     VALUE klass = rb_class_boot(orig_class);
-    rb_method_cache_copy(orig_class, klass);
 
     FL_SET(klass, FL_SINGLETON);
     RBASIC_SET_CLASS(obj, klass);

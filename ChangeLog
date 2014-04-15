@@ -1,16 +1,3 @@
-Fri Mar  7 12:06:19 2014  Martin Bosslet  <Martin.Bosslet@gmail.com>
-
-	* test/openssl/test_ssl.rb: Reuse TLS default options from
-	  OpenSSL::SSL::SSLContext::DEFAULT_PARAMS.
-
-Thu Mar  6 10:33:31 2014  Martin Bosslet  <Martin.Bosslet@gmail.com>
-
-	* lib/openssl/ssl.rb: Explicitly whitelist the default
-	  SSL/TLS ciphers. Forbid SSLv2 and SSLv3, disable
-	  compression by default.
-	  Reported by Jeff Hodges.
-	  [ruby-core:59829] [Bug #9424]
-
 Mon Feb 24 13:05:48 2014  Aaron Patterson <aaron@tenderlovemaking.com>
 
 	* ext/psych/lib/psych.rb: New release of psych.
@@ -590,7 +577,6 @@ Thu Jan  9 08:21:00 2014  Aman Gupta <ruby@tmm1.net>
 	* test/net/imap/Makefile: add `make regen_certs` to automate this
 	  process.
 
->>>>>>> v2_1_1
 Thu Dec 26 03:28:11 2013  Koichi Sasada  <ko1@atdot.net>
 
 	* vm_insnhelper.c (argument_error): insert dummy frame to make

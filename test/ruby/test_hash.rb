@@ -215,13 +215,6 @@ class TestHash < Test::Unit::TestCase
     assert_equal(256,     h[z])
   end
 
-  def test_ASET_fstring_key
-    a, b = {}, {}
-    a["abc"] = 1
-    b["abc"] = 1
-    assert_same a.keys[0], b.keys[0]
-  end
-
   def test_NEWHASH_fstring_key
     a = {"ABC" => :t}
     b = {"ABC" => :t}
@@ -972,7 +965,7 @@ class TestHash < Test::Unit::TestCase
     h = @cls[]
     h.compare_by_identity
     h["a"] = 1
-    h["a".dup] = 2
+    h["a"] = 2
     assert_equal(["a",1], h.assoc("a"))
   end
 

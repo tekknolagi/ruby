@@ -4330,23 +4330,6 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	    }
 	    break;
 	}
-	if (node->nd_mid == idAREF &&
-	    node->nd_recv != (NODE *)1 &&
-	    node->nd_args &&
-	    nd_type(node->nd_args) == NODE_ARRAY &&
-	    node->nd_args->nd_alen == 1 &&
-	    nd_type(node->nd_args->nd_head) == NODE_STR)
-	{
-	    VALUE str = rb_fstring(node->nd_args->nd_head->nd_lit);
-	    node->nd_args->nd_head->nd_lit = str;
-	    COMPILE(ret, "recv", node->nd_recv);
-	    ADD_INSN2(ret, line, opt_aref_str,
-		      new_callinfo(iseq, idAREF, 1, 0, 0), str);
-	    if (poped) {
-		ADD_INSN(ret, line, pop);
-	    }
-	    break;
-	}
       case NODE_FCALL:
       case NODE_VCALL:{		/* VCALL: variable or call */
 	/*
@@ -5316,28 +5299,6 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	DECL_ANCHOR(args);
 	VALUE flag = 0;
 	VALUE argc;
-
-	if (node->nd_mid == idASET &&
-	    node->nd_recv != (NODE *)1 &&
-	    node->nd_args &&
-	    nd_type(node->nd_args) == NODE_ARRAY &&
-	    node->nd_args->nd_alen == 2 &&
-	    nd_type(node->nd_args->nd_head) == NODE_STR)
-	{
-	    VALUE str = rb_fstring(node->nd_args->nd_head->nd_lit);
-	    node->nd_args->nd_head->nd_lit = str;
-	    iseq_add_mark_object(iseq, str);
-	    COMPILE(ret, "recv", node->nd_recv);
-	    COMPILE(ret, "value", node->nd_args->nd_next->nd_head);
-	    if (!poped) {
-		ADD_INSN(ret, line, swap);
-		ADD_INSN1(ret, line, topn, INT2FIX(1));
-	    }
-	    ADD_INSN2(ret, line, opt_aset_str,
-		      new_callinfo(iseq, idASET, 2, 0, 0), str);
-	    ADD_INSN(ret, line, pop);
-	    break;
-	}
 
 	INIT_ANCHOR(recv);
 	INIT_ANCHOR(args);

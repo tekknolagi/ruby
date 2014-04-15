@@ -7,7 +7,6 @@
 #include "st.h"
 #else
 #include "ruby/ruby.h"
-#include "pool_alloc.h"
 #endif
 
 #include <stdio.h>
@@ -33,10 +32,10 @@ typedef struct st_packed_entry {
 
 #define STATIC_ASSERT(name, expr) typedef int static_assert_##name##_check[(expr) ? 1 : -1];
 
-#define ST_DEFAULT_MAX_DENSITY 2
+#define ST_DEFAULT_MAX_DENSITY 5
 #define ST_DEFAULT_INIT_TABLE_SIZE 11
 #define ST_DEFAULT_SECOND_TABLE_SIZE 19
-#define ST_DEFAULT_PACKED_TABLE_SIZE 19
+#define ST_DEFAULT_PACKED_TABLE_SIZE 18
 #define PACKED_UNIT (int)(sizeof(st_packed_entry) / sizeof(st_table_entry*))
 #define MAX_PACKED_HASH (int)(ST_DEFAULT_PACKED_TABLE_SIZE * sizeof(st_table_entry*) / sizeof(st_packed_entry))
 
@@ -89,39 +88,6 @@ static void rehash(st_table *);
 #define do_hash_bin(key,table) (do_hash((key), (table))%(table)->num_bins)
 
 /* preparation for possible allocation improvements */
-#ifdef POOL_ALLOC_API
-#define st_alloc_entry() (st_table_entry *)ruby_xpool_malloc_6p()
-#define st_free_entry(entry) ruby_xpool_free(entry)
-#define st_alloc_table() (st_table *)ruby_xpool_malloc_6p()
-#define st_dealloc_table(table) ruby_xpool_free(table)
-static inline st_table_entry **
-st_alloc_bins(st_index_t size)
-{
-    st_table_entry **result;
-    if (size == 11) {
-        result = (st_table_entry **) ruby_xpool_malloc_11p();
-        memset(result, 0, 11 * sizeof(st_table_entry *));
-    }
-    else
-        result = (st_table_entry **) ruby_xcalloc(size, sizeof(st_table_entry*));
-    return result;
-}
-static inline void
-st_free_bins(st_table_entry **bins, st_index_t size)
-{
-    if (size == 11)
-	ruby_xpool_free(bins);
-    else
-	ruby_xfree(bins);
-}
-static inline st_table_entry**
-st_realloc_bins(st_table_entry **bins, st_index_t newsize, st_index_t oldsize)
-{
-    st_table_entry **new_bins = st_alloc_bins(newsize);
-    st_free_bins(bins, oldsize);
-    return new_bins;
-}
-#else
 #define st_alloc_entry() (st_table_entry *)malloc(sizeof(st_table_entry))
 #define st_free_entry(entry) free(entry)
 #define st_alloc_table() (st_table *)malloc(sizeof(st_table))
@@ -135,7 +101,6 @@ st_realloc_bins(st_table_entry **bins, st_index_t newsize, st_index_t oldsize)
     MEMZERO(bins, st_table_entry*, newsize);
     return bins;
 }
-#endif
 
 /* Shortcut */
 #define bins as.big.bins
