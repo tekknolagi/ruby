@@ -427,9 +427,11 @@ rb_vmdebug_thread_dump_state(VALUE self)
 }
 
 #if defined(HAVE_BACKTRACE)
-# if HAVE_LIBUNWIND
-#  undef backtrace
-#  define backtrace unw_backtrace
+# if defined(HAVE_LIBUNWIND)
+#  if !defined(__linux__)
+#   undef backtrace
+#   define backtrace unw_backtrace
+#  endif
 # elif defined(__APPLE__) && defined(__x86_64__)
 #  define UNW_LOCAL_ONLY
 #  include <libunwind.h>
@@ -676,6 +678,8 @@ dump_thread(void *arg)
 }
 #endif
 
+extern void * ruby_signal_ctx;
+
 void
 rb_print_backtrace(void)
 {
@@ -683,18 +687,22 @@ rb_print_backtrace(void)
 #define MAX_NATIVE_TRACE 1024
     static void *trace[MAX_NATIVE_TRACE];
     int n = backtrace(trace, MAX_NATIVE_TRACE);
-    char **syms = backtrace_symbols(trace, n);
+    if (ruby_signal_ctx) {
+	backtrace_symbols_fd(trace, n, STDERR_FILENO);
+    } else {
+	char **syms = backtrace_symbols(trace, n);
 
-    if (syms) {
-#ifdef USE_ELF
-	rb_dump_backtrace_with_lines(n, trace, syms);
-#else
-	int i;
-	for (i=0; i<n; i++) {
-	    fprintf(stderr, "%s\n", syms[i]);
+	if (syms) {
+# ifdef USE_ELF
+	    rb_dump_backtrace_with_lines(n, trace, syms);
+# else
+	    int i;
+	    for (i=0; i<n; i++) {
+		fprintf(stderr, "%s\n", syms[i]);
+	    }
+# endif
+	    free(syms);
 	}
-#endif
-	free(syms);
     }
 #elif defined(_WIN32)
     DWORD tid = GetCurrentThreadId();
@@ -703,6 +711,35 @@ rb_print_backtrace(void)
 	WaitForSingleObject(th, INFINITE);
 #endif
 }
+
+#if __linux__
+# if __x86_64__
+#  define HAVE_PRINT_MACHINE_REGISTERS
+# endif
+#endif
+
+#ifdef HAVE_PRINT_MACHINE_REGISTERS
+static void
+print_machine_register(mcontext_t *ctx, greg_t reg, const char *reg_name, int *col_count)
+{
+    int ret;
+    char buf[64];
+
+#ifdef __LP64__
+    ret = snprintf(buf, sizeof(buf), "%3s: 0x%016" PRIx64 " ", reg_name, ctx->gregs[reg]);
+#else
+    ret = snprintf(buf, sizeof(buf), "%3s: 0x%08x ", reg_name, ctx->gregs[reg]);
+#endif
+    if (col_count) {
+	if (*col_count + ret > 80) {
+	    fputs("\n", stderr);
+	    *col_count = 0;
+	}
+	*col_count += ret;
+    }
+    fputs(buf, stderr);
+}
+#endif
 
 void
 rb_vm_bugreport(void)
@@ -734,6 +771,40 @@ rb_vm_bugreport(void)
 	rb_backtrace_print_as_bugreport();
 	fputs("\n", stderr);
     }
+
+#ifdef HAVE_PRINT_MACHINE_REGISTERS
+    if (ruby_signal_ctx) {
+	int col_count = 0;
+	mcontext_t *mctx = &((ucontext_t *) ruby_signal_ctx)->uc_mcontext;
+
+	fprintf(stderr, "-- Machine register context "
+	    "------------------------------------------------\n");
+
+#ifdef __x86_64__
+	print_machine_register(mctx, REG_RIP, "RIP", &col_count);
+	print_machine_register(mctx, REG_RBP, "RBP", &col_count);
+	print_machine_register(mctx, REG_RSP, "RSP", &col_count);
+	print_machine_register(mctx, REG_RAX, "RAX", &col_count);
+	print_machine_register(mctx, REG_RBX, "RBX", &col_count);
+	print_machine_register(mctx, REG_RCX, "RCX", &col_count);
+	print_machine_register(mctx, REG_RDX, "RDX", &col_count);
+	print_machine_register(mctx, REG_RDI, "RDI", &col_count);
+	print_machine_register(mctx, REG_RSI, "RSI", &col_count);
+	print_machine_register(mctx, REG_R8, "R8", &col_count);
+	print_machine_register(mctx, REG_R9, "R9", &col_count);
+	print_machine_register(mctx, REG_R10, "R10", &col_count);
+	print_machine_register(mctx, REG_R11, "R11", &col_count);
+	print_machine_register(mctx, REG_R12, "R12", &col_count);
+	print_machine_register(mctx, REG_R13, "R13", &col_count);
+	print_machine_register(mctx, REG_R14, "R14", &col_count);
+	print_machine_register(mctx, REG_R15, "R15", &col_count);
+	print_machine_register(mctx, REG_EFL, "EFL", &col_count);
+#else
+	fprintf(stderr, " UNKNOWN!")
+#endif
+	fprintf(stderr, "\n\n");
+    }
+#endif /* HAVE_PRINT_MACHINE_REGISTERS */
 
 #if HAVE_BACKTRACE || defined(_WIN32)
     fprintf(stderr, "-- C level backtrace information "
