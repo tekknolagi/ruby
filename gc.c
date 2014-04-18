@@ -414,6 +414,15 @@ typedef struct rb_heap_struct {
     size_t total_slots;      /* total slot count (page_length * HEAP_OBJ_LIMIT) */
 } rb_heap_t;
 
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+typedef struct heap_slab {
+    struct heap_slab *next;
+    size_t num_chunks;
+    size_t last_index;
+    bits_t bits[1];
+} heap_slab_t;
+#endif
+
 typedef struct rb_objspace {
     struct {
 	size_t limit;
@@ -427,6 +436,9 @@ typedef struct rb_objspace {
     rb_heap_t eden_heap;
     rb_heap_t tomb_heap; /* heap for zombies and ghosts */
 
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+    heap_slab_t *root_slab;
+#endif
     struct {
 	struct heap_page **sorted;
 	size_t used;
@@ -880,6 +892,140 @@ rb_objspace_alloc(void)
 #endif
 
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
+
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+#include <sys/mman.h>
+
+#define HEAP_SLAB_SHIFT 25
+#define HEAP_SLAB_CHUNK_SHIFT 14
+#define HEAP_SLAB_SIZE (1UL << HEAP_SLAB_SHIFT) /* 256MB slabs */
+#define HEAP_SLAB_CHUNK_SIZE (1UL << HEAP_SLAB_CHUNK_SHIFT) /* 16KB chunks */
+
+#define HEAP_SLAB_BITS_INDEX(p) ((((bits_t) p & (HEAP_SLAB_SIZE - 1)) >> HEAP_SLAB_CHUNK_SHIFT) / (BITS_BITLENGTH / 2))
+#define HEAP_SLAB_BITS_OFFSET(p, off) (1UL << (((((bits_t) p >> HEAP_SLAB_CHUNK_SHIFT) & ((BITS_BITLENGTH / 2) - 1)) << 1) + off))
+
+#define HEAP_SLAB_BITS_USE(bits, p) ((bits)[HEAP_SLAB_BITS_INDEX(p)] |= (HEAP_SLAB_BITS_OFFSET(p, 0) | HEAP_SLAB_BITS_OFFSET(p, 1)))
+#define HEAP_SLAB_BITS_FREE(bits, p) ((bits)[HEAP_SLAB_BITS_INDEX(p)] &= ~HEAP_SLAB_BITS_OFFSET(p, 1))
+
+#define HEAP_SLAB_BITS_IS_USED(bits, p) ((bits)[HEAP_SLAB_BITS_INDEX(p)] & HEAP_SLAB_BITS_OFFSET(p, 1))
+#define HEAP_SLAB_BITS_IS_FREE(bits, p) !(HEAP_SLAB_BITS_IS_USED(bits, p))
+#define HEAP_SLAB_BITS_IS_ACCESSIBLE(bits, p) ((bits)[HEAP_SLAB_BITS_INDEX(p)] & HEAP_SLAB_BITS_OFFSET(p, 0))
+
+#define HEAP_SLAB_GET_SLAB(p) (heap_slab_t *) ((bits_t) p & ~(HEAP_SLAB_SIZE - 1))
+
+static int pagesize = 0;
+
+#define HEAP_SLAB_MAX_REGION_ADDR (1UL << (32 + 5)) /* 32 bits + 32-byte aligned pointers */
+
+static void *
+get_aligned_virtual_region(size_t size) {
+    FILE *maps;
+    char buf[256], *bufp;
+    size_t prev_start = 0, prev_end = 0, start = 0, end = 0, diff;
+    void *p = NULL;
+
+    maps = fopen("/proc/self/maps", "r");
+    if (!maps) rb_memerror();
+
+    while (!feof(maps) && end < HEAP_SLAB_MAX_REGION_ADDR) {
+	if (!fgets(buf, 256, maps)) rb_memerror();
+	prev_start = start;
+	prev_end = end;
+	bufp = strchr(buf, '-');
+	*bufp++ = '\0';
+	start = strtoull(buf, NULL, 16);
+	end = strtoull(bufp, NULL, 16);
+
+	diff = start - prev_end;
+	if (prev_end == 0 && diff > (size * 2)) {
+	    p = mmap((void *) size, size, PROT_NONE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
+	} else if (diff > size) {
+	    p = mmap((void *) prev_end, size, PROT_NONE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
+	}
+	if (p) break;
+    }
+
+    if (maps) fclose(maps);
+    return p;
+}
+
+static heap_slab_t *
+heap_slab_allocate(rb_objspace_t *objspace) {
+    int ret;
+    heap_slab_t *slab = (heap_slab_t *) get_aligned_virtual_region(HEAP_SLAB_SIZE);
+    if (!slab) rb_memerror();
+
+    if (!pagesize) pagesize = sysconf(_SC_PAGE_SIZE);
+
+    ret = mprotect(slab, HEAP_SLAB_CHUNK_SIZE, PROT_READ|PROT_WRITE);
+    if (ret != 0) rb_memerror();
+
+    memset(slab, 0, HEAP_SLAB_CHUNK_SIZE);
+    slab->num_chunks = HEAP_SLAB_SIZE / HEAP_SLAB_CHUNK_SIZE;
+    HEAP_SLAB_BITS_USE(slab->bits, slab);
+
+    if (objspace->root_slab != NULL) {
+	slab->next = objspace->root_slab;
+    }
+    objspace->root_slab = slab;
+    return slab;
+}
+
+static void *
+heap_slab_find_free_chunk(heap_slab_t *slab) {
+    bits_t *bits;
+    void *addr;
+    size_t i, j;
+    int ret;
+    size_t num_indeces = slab->num_chunks / (BITS_BITLENGTH / 2);
+    int has_last_index = slab->last_index != 0 ? 1 : 0;
+
+    for (i = slab->last_index; i < num_indeces; slab->last_index = ++i) {
+	bits = &slab->bits[i];
+	for (j = 0; j < (BITS_BITLENGTH / 2); ++j) {
+	    if ((*bits & ((1UL << (j << 1)) << 1)) == 0) {
+		addr = (void *) ((bits_t) slab + ((((i << HEAP_SLAB_CHUNK_SHIFT) * BITS_BITLENGTH / 2) | (j << HEAP_SLAB_CHUNK_SHIFT))));
+		if ((*bits & (1UL << (j << 1))) == 0) {
+		    ret = mprotect(addr, HEAP_SLAB_CHUNK_SIZE, PROT_READ|PROT_WRITE);
+		    if (ret != 0) rb_memerror();
+		    *bits |= (1UL << (j << 1));
+		}
+		*bits |= ((1UL << (j << 1)) << 1);
+		return addr;
+	    }
+	}
+	if (i + 1 == num_indeces && has_last_index) {
+	    has_last_index = 0;
+	    i = 0;
+	}
+    }
+    return NULL;
+}
+
+static void *
+heap_slab_allocate_chunk(rb_objspace_t *objspace) {
+    void *addr;
+    heap_slab_t *slab = objspace->root_slab;
+
+    while (slab != NULL) {
+	addr = heap_slab_find_free_chunk(slab);
+	if (addr) return addr;
+	slab = slab->next;
+    }
+
+    slab = heap_slab_allocate(objspace);
+    if (!slab) rb_memerror();
+    return heap_slab_find_free_chunk(slab);
+}
+
+static void
+heap_slab_free_chunk(rb_objspace_t *objspace, void *p) {
+    heap_slab_t *slab = HEAP_SLAB_GET_SLAB(p);
+    madvise(p, HEAP_SLAB_CHUNK_SIZE, MADV_DONTNEED);
+    HEAP_SLAB_BITS_FREE(slab->bits, p);
+}
+#endif /* RUBY_GC_HEAP_SLAB_ALLOCATOR */
+
 static void free_stack_chunks(mark_stack_t *);
 static void heap_page_free(rb_objspace_t *objspace, struct heap_page *page);
 
@@ -916,6 +1062,18 @@ rb_objspace_free(rb_objspace_t *objspace)
 	objspace->eden_heap.pages = NULL;
     }
     free_stack_chunks(&objspace->mark_stack);
+
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+    if (objspace->root_slab) {
+	heap_slab_t *next, *slab = objspace->root_slab;
+	while (slab) {
+	    next = slab->next;
+	    munmap(slab, (slab->num_chunks * HEAP_SLAB_CHUNK_SIZE));
+	    slab = next;
+	}
+	objspace->root_slab = NULL;
+    }
+#endif
     free(objspace);
 }
 #endif
@@ -983,10 +1141,19 @@ heap_unlink_page(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *pag
 }
 
 static void
+heap_page_body_free(rb_objspace_t *objspace, struct heap_page_body *page_body) {
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+    heap_slab_free_chunk(objspace, page_body);
+#else
+    aligned_free(page_body);
+#endif
+}
+
+static void
 heap_page_free(rb_objspace_t *objspace, struct heap_page *page)
 {
     heap_pages_used--;
-    aligned_free(page->body);
+    heap_page_body_free(objspace, page->body);
     free(page);
 }
 
@@ -1019,6 +1186,15 @@ heap_pages_free_unused_pages(rb_objspace_t *objspace)
     assert(j == heap_pages_used);
 }
 
+static struct heap_page_body *
+heap_page_body_allocate(rb_objspace_t *objspace) {
+#if RUBY_GC_HEAP_SLAB_ALLOCATOR
+    return (struct heap_page_body *) heap_slab_allocate_chunk(objspace);
+#else
+    return (struct heap_page_body *) aligned_malloc(HEAP_ALIGN, HEAP_SIZE);
+#endif
+}
+
 static struct heap_page *
 heap_page_allocate(rb_objspace_t *objspace)
 {
@@ -1029,7 +1205,7 @@ heap_page_allocate(rb_objspace_t *objspace)
     size_t limit = HEAP_OBJ_LIMIT;
 
     /* assign heap_page body (contains heap_page_header and RVALUEs) */
-    page_body = (struct heap_page_body *)aligned_malloc(HEAP_ALIGN, HEAP_SIZE);
+    page_body = heap_page_body_allocate(objspace);
     if (page_body == 0) {
 	during_gc = 0;
 	rb_memerror();
@@ -1038,7 +1214,7 @@ heap_page_allocate(rb_objspace_t *objspace)
     /* assign heap_page entry */
     page = (struct heap_page *)malloc(sizeof(struct heap_page));
     if (page == 0) {
-	aligned_free(page_body);
+	heap_page_body_free(objspace, page_body);
 	during_gc = 0;
 	rb_memerror();
     }
