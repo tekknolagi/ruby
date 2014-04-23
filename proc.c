@@ -584,7 +584,7 @@ proc_new(VALUE klass, int is_lambda)
     procval = block->proc;
 
     if (procval) {
-	if (RBASIC(procval)->klass == klass) {
+	if (RBASIC_CLASS(procval) == klass) {
 	    return procval;
 	}
 	else {

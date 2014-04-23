@@ -351,7 +351,7 @@ vm_get_iclass(rb_control_frame_t *cfp, VALUE klass)
     if (RB_TYPE_P(klass, T_MODULE) &&
 	FL_TEST(klass, RMODULE_IS_OVERLAID) &&
 	RB_TYPE_P(cfp->klass, T_ICLASS) &&
-	RBASIC(cfp->klass)->klass == klass) {
+	RBASIC_CLASS(cfp->klass) == klass) {
 	return cfp->klass;
     }
     else {
@@ -487,7 +487,7 @@ vm_getivar(VALUE obj, ID id, IC ic, rb_call_info_t *ci, int is_attr)
 #if USE_IC_FOR_IVAR
     if (RB_TYPE_P(obj, T_OBJECT)) {
 	VALUE val = Qundef;
-	VALUE klass = RBASIC(obj)->klass;
+	VALUE klass = RBASIC_CLASS(obj);
 
 	if (LIKELY((!is_attr && ic->ic_serial == RCLASS_SERIAL(klass)) ||
 		   (is_attr && ci->aux.index > 0))) {
@@ -540,7 +540,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, rb_call_info_t *ci, int is_attr)
     rb_check_frozen(obj);
 
     if (RB_TYPE_P(obj, T_OBJECT)) {
-	VALUE klass = RBASIC(obj)->klass;
+	VALUE klass = RBASIC_CLASS(obj);
 	st_data_t index;
 
 	if (LIKELY(
@@ -1921,8 +1921,8 @@ static inline VALUE
 vm_search_normal_superclass(VALUE klass)
 {
     if (BUILTIN_TYPE(klass) == T_ICLASS &&
-	FL_TEST(RBASIC(klass)->klass, RMODULE_IS_REFINEMENT)) {
-	klass = RBASIC(klass)->klass;
+	FL_TEST(RBASIC_CLASS(klass), RMODULE_IS_REFINEMENT)) {
+	klass = RBASIC_CLASS(klass);
     }
     klass = RCLASS_ORIGIN(klass);
     return RCLASS_SUPER(klass);
@@ -2005,7 +2005,7 @@ vm_search_super_method(rb_thread_t *th, rb_control_frame_t *reg_cfp, rb_call_inf
 	!FL_TEST(current_defined_class, RMODULE_INCLUDED_INTO_REFINEMENT) &&
 	!rb_obj_is_kind_of(ci->recv, current_defined_class)) {
 	VALUE m = RB_TYPE_P(current_defined_class, T_ICLASS) ?
-	    RBASIC(current_defined_class)->klass : current_defined_class;
+	    RBASIC_CLASS(current_defined_class) : current_defined_class;
 
 	rb_raise(rb_eTypeError,
 		 "self has wrong type to call super in this context: "

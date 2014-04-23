@@ -5297,7 +5297,7 @@ static VALUE
 coverage(VALUE fname, int n)
 {
     VALUE coverages = rb_get_coverages();
-    if (RTEST(coverages) && RBASIC(coverages)->klass == 0) {
+    if (RTEST(coverages) && RBASIC_CLASS(coverages) == 0) {
 	VALUE lines = rb_ary_new2(n);
 	int i;
 	RBASIC_CLEAR_CLASS(lines);
@@ -10581,7 +10581,7 @@ rb_id2str(ID id)
 
     if (st_lookup(global_symbols.id_str, id, &data)) {
         VALUE str = (VALUE)data;
-        if (RBASIC(str)->klass == 0)
+        if (RBASIC_CLASS(str) == 0)
             RBASIC_SET_CLASS_RAW(str, rb_cString);
 	return str;
     }
@@ -10604,7 +10604,7 @@ rb_id2str(ID id)
 	register_symid_str(id, str);
 	if (st_lookup(global_symbols.id_str, id, &data)) {
             VALUE str = (VALUE)data;
-            if (RBASIC(str)->klass == 0)
+            if (RBASIC_CLASS(str) == 0)
                 RBASIC_SET_CLASS_RAW(str, rb_cString);
             return str;
         }

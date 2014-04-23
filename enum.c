@@ -848,7 +848,7 @@ sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, _data))
 
     v = rb_yield(i);
 
-    if (RBASIC(ary)->klass) {
+    if (RBASIC_CLASS(ary)) {
 	rb_raise(rb_eRuntimeError, "sort_by reentered");
     }
     if (RARRAY_LEN(data->buf) != SORT_BY_BUFSIZE*2) {
@@ -872,7 +872,7 @@ sort_by_cmp(const void *ap, const void *bp, void *data)
     VALUE b;
     VALUE ary = (VALUE)data;
 
-    if (RBASIC(ary)->klass) {
+    if (RBASIC_CLASS(ary)) {
 	rb_raise(rb_eRuntimeError, "sort_by reentered");
     }
 
@@ -990,7 +990,7 @@ enum_sort_by(VALUE obj)
 		      ruby_qsort(ptr, RARRAY_LEN(ary)/2, 2*sizeof(VALUE),
 				 sort_by_cmp, (void *)ary));
     }
-    if (RBASIC(ary)->klass) {
+    if (RBASIC_CLASS(ary)) {
 	rb_raise(rb_eRuntimeError, "sort_by reentered");
     }
     for (i=1; i<RARRAY_LEN(ary); i+=2) {

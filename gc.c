@@ -1796,7 +1796,7 @@ internal_object_p(VALUE obj)
 	    if (FL_TEST(p, FL_SINGLETON))
 	      break;
 	  default:
-	    if (!p->as.basic.klass) break;
+	    if (!RBASIC_CLASS(p)) break;
 	    return 0;
 	}
     }
@@ -3836,7 +3836,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE ptr)
 	return;			/* no need to mark class. */
     }
 
-    gc_mark(objspace, obj->as.basic.klass);
+    gc_mark(objspace, RBASIC_CLASS(obj));
     switch (BUILTIN_TYPE(obj)) {
       case T_ICLASS:
       case T_CLASS:

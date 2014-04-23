@@ -494,7 +494,7 @@ rb_search_method_entry(VALUE recv, ID mid, VALUE *defined_class_ptr)
                      rb_id2name(mid), (void *)recv);
         }
         flags = RBASIC(recv)->flags;
-        klass = RBASIC(recv)->klass;
+        klass = RBASIC_CLASS(recv);
         if (flags == 0) {
             rb_raise(rb_eNotImpError,
                      "method `%s' called on terminated object"
@@ -550,7 +550,7 @@ rb_method_call_status(rb_thread_t *th, const rb_method_entry_t *me, call_type sc
 		VALUE defined_class = klass;
 
 		if (RB_TYPE_P(defined_class, T_ICLASS)) {
-		    defined_class = RBASIC(defined_class)->klass;
+		    defined_class = RBASIC_CLASS(defined_class);
 		}
 
 		if (self == Qundef || !rb_obj_is_kind_of(self, defined_class)) {
