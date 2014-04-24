@@ -840,7 +840,7 @@ rb_str_new_frozen(VALUE orig)
 	long ofs;
 	assert(OBJ_FROZEN(str));
 	ofs = RSTRING_LEN(str) - RSTRING_LEN(orig);
-	if ((ofs > 0) || (klass != RBASIC(str)->klass) ||
+	if ((ofs > 0) || (klass != RBASIC_CLASS(str)) ||
 	    ((RBASIC(str)->flags ^ RBASIC(orig)->flags) & FL_TAINT) ||
 	    ENCODING_GET(str) != ENCODING_GET(orig)) {
 	    str = str_new3(klass, str);

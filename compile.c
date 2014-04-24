@@ -5402,7 +5402,7 @@ static VALUE
 opobj_inspect(VALUE obj)
 {
     struct RBasic *r = (struct RBasic *) obj;
-    if (!SPECIAL_CONST_P(r)  && r->klass == 0) {
+    if (!SPECIAL_CONST_P(r)  && RBASIC_CLASS(r) == 0) {
 	switch (BUILTIN_TYPE(r)) {
 	  case T_STRING:
 	    obj = rb_str_new_cstr(RSTRING_PTR(obj));

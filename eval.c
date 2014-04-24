@@ -1105,7 +1105,7 @@ rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
 	if (!NIL_P(c = rb_hash_lookup(cref->nd_refinements, klass))) {
 	    superclass = c;
 	    while (c && RB_TYPE_P(c, T_ICLASS)) {
-		if (RBASIC(c)->klass == module) {
+		if (RBASIC_CLASS(c) == module) {
 		    /* already used refinement */
 		    return;
 		}
@@ -1155,7 +1155,7 @@ using_module_recursive(NODE *cref, VALUE klass)
 	break;
 
       case T_ICLASS:
-	module = RBASIC(klass)->klass;
+	module = RBASIC_CLASS(klass);
 	break;
 
       default:
@@ -1195,7 +1195,7 @@ add_activated_refinement(VALUE activated_refinements,
     if (!NIL_P(c = rb_hash_lookup(activated_refinements, klass))) {
 	superclass = c;
 	while (c && RB_TYPE_P(c, T_ICLASS)) {
-	    if (RBASIC(c)->klass == refinement) {
+	    if (RBASIC_CLASS(c) == refinement) {
 		/* already used refinement */
 		return;
 	    }

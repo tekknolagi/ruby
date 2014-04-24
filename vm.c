@@ -584,7 +584,7 @@ vm_rewrite_ep_in_errinfo(rb_thread_t *th)
 		VALUE *escape_ep = GET_THROWOBJ_CATCH_POINT(errinfo);
 		if (! ENV_IN_HEAP_P(th, escape_ep)) {
 		    VALUE epval = *escape_ep;
-		    if (!SPECIAL_CONST_P(epval) && RBASIC(epval)->klass == rb_cEnv) {
+		    if (!SPECIAL_CONST_P(epval) && RBASIC_CLASS(epval) == rb_cEnv) {
 			rb_env_t *epenv;
 			GetEnvPtr(epval, epenv);
 			SET_THROWOBJ_CATCH_POINT(errinfo, (VALUE)(epenv->env + epenv->local_size));

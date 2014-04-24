@@ -131,7 +131,7 @@ rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
     arg.alen = (socklen_t)sizeof(arg.buf);
 
     arg.str = str = rb_tainted_str_new(0, buflen);
-    klass = RBASIC(str)->klass;
+    klass = RBASIC_CLASS(str);
     rb_obj_hide(str);
 
     while (rb_io_check_closed(fptr),
@@ -140,7 +140,7 @@ rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
         if (!rb_io_wait_readable(fptr->fd)) {
             rb_sys_fail("recvfrom(2)");
         }
-	if (RBASIC(str)->klass || RSTRING_LEN(str) != buflen) {
+	if (RBASIC_CLASS(str) || RSTRING_LEN(str) != buflen) {
 	    rb_raise(rb_eRuntimeError, "buffer string modified");
 	}
     }

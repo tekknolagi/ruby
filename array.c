@@ -2363,7 +2363,7 @@ enum {
 static VALUE
 sort_reentered(VALUE ary)
 {
-    if (RBASIC(ary)->klass) {
+    if (RBASIC_CLASS(ary)) {
 	rb_raise(rb_eRuntimeError, "sort reentered");
     }
     return Qnil;
@@ -4304,7 +4304,7 @@ flatten(VALUE ary, int level, int *modified)
 	while (i < RARRAY_LEN(ary)) {
 	    elt = RARRAY_AREF(ary, i++);
 	    tmp = rb_check_array_type(elt);
-	    if (RBASIC(result)->klass) {
+	    if (RBASIC_CLASS(result)) {
 		rb_raise(rb_eRuntimeError, "flatten reentered");
 	    }
 	    if (NIL_P(tmp) || (level >= 0 && RARRAY_LEN(stack) / 2 >= level)) {
@@ -4728,7 +4728,7 @@ permute0(long n, long r, long *p, long index, char *used, VALUE values)
 		for (j = 0; j < r; j++) result_array[j] = values_array[p[j]];
 		ARY_SET_LEN(result, r);
 		rb_yield(result);
-		if (RBASIC(values)->klass) {
+		if (RBASIC_CLASS(values)) {
 		    rb_raise(rb_eRuntimeError, "permute reentered");
 		}
 	    }
@@ -4911,7 +4911,7 @@ rb_ary_combination(VALUE ary, VALUE num)
 		chosen[lev] = RARRAY_AREF(ary, stack[lev+1] = stack[lev]+1);
 	    }
 	    rb_yield(rb_ary_new4(n, chosen));
-	    if (RBASIC(t0)->klass) {
+	    if (RBASIC_CLASS(t0)) {
 		rb_raise(rb_eRuntimeError, "combination reentered");
 	    }
 	    do {
@@ -4959,7 +4959,7 @@ rpermute0(long n, long r, long *p, long index, VALUE values)
 	    for (j = 0; j < r; j++) result_array[j] = values_array[p[j]];
 	    ARY_SET_LEN(result, r);
 	    rb_yield(result);
-	    if (RBASIC(values)->klass) {
+	    if (RBASIC_CLASS(values)) {
 		rb_raise(rb_eRuntimeError, "repeated permute reentered");
 	    }
 	}
@@ -5055,7 +5055,7 @@ rcombinate0(long n, long r, long *p, long index, long rest, VALUE values)
 	for (j = 0; j < r; ++j) result_array[j] = values_array[p[j]];
 	ARY_SET_LEN(result, r);
 	rb_yield(result);
-	if (RBASIC(values)->klass) {
+	if (RBASIC_CLASS(values)) {
 	    rb_raise(rb_eRuntimeError, "repeated combination reentered");
 	}
     }

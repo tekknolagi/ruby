@@ -695,7 +695,7 @@ VALUE rb_obj_setup(VALUE obj, VALUE klass, VALUE type);
 #define OBJSETUP(obj,c,t) rb_obj_setup(obj, c, t) /* use NEWOBJ_OF instead of NEWOBJ()+OBJSETUP() */
 #define CLONESETUP(clone,obj) do {\
     OBJSETUP((clone),rb_singleton_class_clone((VALUE)(obj)),RBASIC(obj)->flags);\
-    rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)(clone));\
+    rb_singleton_class_attached(RBASIC_CLASS(clone), (VALUE)(clone));\
     if (FL_TEST((obj), FL_EXIVAR)) rb_copy_generic_ivar((VALUE)(clone),(VALUE)(obj));\
 } while (0)
 #define DUPSETUP(dup,obj) do {\
@@ -1639,7 +1639,7 @@ rb_class_of(VALUE obj)
 	if (obj == Qnil)   return rb_cNilClass;
 	if (obj == Qfalse) return rb_cFalseClass;
     }
-    return RBASIC(obj)->klass;
+    return RBASIC_CLASS(obj);
 }
 
 static inline int
