@@ -680,7 +680,7 @@ rb_method_entry_with_refinements(VALUE klass, ID id,
 
     if (me && me->def->type == VM_METHOD_TYPE_REFINED) {
 	NODE *cref = rb_vm_cref();
-	VALUE refinements = cref ? cref->nd_refinements : Qnil;
+	VALUE refinements = cref ? NODE_GET_REFINEMENTS(cref) : Qnil;
 
 	me = rb_resolve_refined_method(refinements, me, &defined_class);
     }

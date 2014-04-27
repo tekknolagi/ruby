@@ -209,11 +209,11 @@ set_relation(rb_iseq_t *iseq, const VALUE parent)
     if (type == ISEQ_TYPE_TOP) {
 	/* toplevel is private */
 	RB_OBJ_WRITE(iseq->self, &iseq->cref_stack, NEW_CREF(rb_cObject));
-	iseq->cref_stack->nd_refinements = Qnil;
+	NODE_SET_REFINEMENTS(iseq->cref_stack, Qnil);
 	iseq->cref_stack->nd_visi = NOEX_PRIVATE;
 	if (th->top_wrapper) {
 	    NODE *cref = NEW_CREF(th->top_wrapper);
-	    cref->nd_refinements = Qnil;
+	    NODE_SET_REFINEMENTS(cref, Qnil);
 	    cref->nd_visi = NOEX_PRIVATE;
 	    RB_OBJ_WRITE(cref, &cref->nd_next, iseq->cref_stack);
 	    ISEQ_SET_CREF(iseq, cref);
@@ -222,7 +222,7 @@ set_relation(rb_iseq_t *iseq, const VALUE parent)
     }
     else if (type == ISEQ_TYPE_METHOD || type == ISEQ_TYPE_CLASS) {
 	ISEQ_SET_CREF(iseq, NEW_CREF(0)); /* place holder */
-	iseq->cref_stack->nd_refinements = Qnil;
+	NODE_SET_REFINEMENTS(iseq->cref_stack, Qnil);
 	iseq->local_iseq = iseq;
     }
     else if (RTEST(parent)) {
@@ -1938,7 +1938,7 @@ rb_iseq_clone(VALUE iseqval, VALUE newcbase)
     }
     if (newcbase) {
 	ISEQ_SET_CREF(iseq1, NEW_CREF(newcbase));
-	RB_OBJ_WRITE(iseq1->cref_stack, &iseq1->cref_stack->nd_refinements, iseq0->cref_stack->nd_refinements);
+	RB_OBJ_WRITE_COMPRESSED(iseq1->cref_stack, NODE_GET_REFINEMENTS_ADDR(iseq1->cref_stack), NODE_GET_REFINEMENTS(iseq0->cref_stack));
 	iseq1->cref_stack->nd_visi = iseq0->cref_stack->nd_visi;
 	if (iseq0->cref_stack->nd_next) {
 	    RB_OBJ_WRITE(iseq1->cref_stack, &iseq1->cref_stack->nd_next, iseq0->cref_stack->nd_next);

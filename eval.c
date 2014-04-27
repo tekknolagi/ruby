@@ -1094,15 +1094,15 @@ rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
 
     Check_Type(klass, T_CLASS);
     Check_Type(module, T_MODULE);
-    if (NIL_P(cref->nd_refinements)) {
-	cref->nd_refinements = hidden_identity_hash_new();
+    if (NIL_P(NODE_GET_REFINEMENTS(cref))) {
+	NODE_SET_REFINEMENTS(cref, hidden_identity_hash_new());
     }
     else {
 	if (cref->flags & NODE_FL_CREF_OMOD_SHARED) {
-	    cref->nd_refinements = rb_hash_dup(cref->nd_refinements);
+	    NODE_SET_REFINEMENTS(cref, rb_hash_dup(NODE_GET_REFINEMENTS(cref)));
 	    cref->flags &= ~NODE_FL_CREF_OMOD_SHARED;
 	}
-	if (!NIL_P(c = rb_hash_lookup(cref->nd_refinements, klass))) {
+	if (!NIL_P(c = rb_hash_lookup(NODE_GET_REFINEMENTS(cref), klass))) {
 	    superclass = c;
 	    while (c && RB_TYPE_P(c, T_ICLASS)) {
 		if (RBASIC_CLASS(c) == module) {
@@ -1127,7 +1127,7 @@ rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
 	RCLASS_REFINED_CLASS(c) = klass;
 	module = RCLASS_SUPER(module);
     }
-    rb_hash_aset(cref->nd_refinements, klass, iclass);
+    rb_hash_aset(NODE_GET_REFINEMENTS(cref), klass, iclass);
 }
 
 static int

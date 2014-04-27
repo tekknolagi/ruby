@@ -598,15 +598,15 @@ rb_float_new_inline(double d)
 VALUE rb_obj_equal(VALUE obj1, VALUE obj2);
 
 struct RBasicRaw {
-    VALUE flags;
-    VALUE klass;
+    rb_flags_t flags;
+    VALUE_COMPRESSED klass;
 };
 
 #define RBASIC_CLEAR_CLASS(obj)        (((struct RBasicRaw *)((VALUE)(obj)))->klass = 0)
-#define RBASIC_SET_CLASS_RAW(obj, cls) (((struct RBasicRaw *)((VALUE)(obj)))->klass = (cls))
+#define RBASIC_SET_CLASS_RAW(obj, cls) (((struct RBasicRaw *)((VALUE)(obj)))->klass = COMPRESS_VALUE(cls))
 #define RBASIC_SET_CLASS(obj, cls)     do { \
     VALUE _obj_ = (obj); \
-    RB_OBJ_WRITE(_obj_, &((struct RBasicRaw *)(_obj_))->klass, cls); \
+    RB_OBJ_WRITE_COMPRESSED(_obj_, &((struct RBasicRaw *)(_obj_))->klass, cls); \
 } while (0)
 
 /* parse.y */

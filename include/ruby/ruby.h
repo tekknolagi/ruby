@@ -744,9 +744,16 @@ VALUE rb_obj_setup(VALUE obj, VALUE klass, VALUE type);
 #define RGENGC_WB_PROTECTED_NODE_CREF 1
 #endif
 
+typedef uint32_t rb_flags_t;
+typedef uint32_t VALUE_COMPRESSED;
+
+/* We expect that VALUEs are 32-byte aligned and at an address < 0x2000000000 (2^37)*/
+#define COMPRESS_VALUE(v) ((VALUE_COMPRESSED) (v == Qnil ? Qnil : ((VALUE)(v) >> 5)))
+#define UNCOMPRESS_VALUE(v) (v == Qnil ? Qnil : ((VALUE) v << 5))
+
 struct RBasic {
-    VALUE flags;
-    const VALUE klass;
+    rb_flags_t flags;
+    const VALUE_COMPRESSED klass;
 }
 #ifdef __GNUC__
     __attribute__((aligned(sizeof(VALUE))))
@@ -756,7 +763,7 @@ struct RBasic {
 VALUE rb_obj_hide(VALUE obj);
 VALUE rb_obj_reveal(VALUE obj, VALUE klass); /* do not use this API to change klass information */
 
-#define RBASIC_CLASS(obj) (RBASIC(obj)->klass)
+#define RBASIC_CLASS(obj) UNCOMPRESS_VALUE(RBASIC(obj)->klass)
 
 #define ROBJECT_EMBED_LEN_MAX 3
 struct RObject {
@@ -1210,7 +1217,8 @@ void rb_gc_writebarrier_unprotect_promoted(VALUE obj);
  *       Please catch up if you want to insert WB into C-extensions
  *       correctly.
  */
-#define RB_OBJ_WRITE(a, slot, b)       rb_obj_write((VALUE)(a), (VALUE *)(slot), (VALUE)(b), __FILE__, __LINE__)
+#define RB_OBJ_WRITE(a, slot, b)       rb_obj_write((VALUE)(a), (void *)(slot), (VALUE)(b), 0, __FILE__, __LINE__)
+#define RB_OBJ_WRITE_COMPRESSED(a, slot, b)       rb_obj_write((VALUE)(a), (void *)(slot), (VALUE)(b), 1, __FILE__, __LINE__)
 #define RB_OBJ_WRITTEN(a, oldv, b)     rb_obj_written((VALUE)(a), (VALUE)(oldv), (VALUE)(b), __FILE__, __LINE__)
 
 #ifndef USE_RGENGC_LOGGING_WB_UNPROTECT
@@ -1259,13 +1267,16 @@ rb_obj_written(VALUE a, RB_UNUSED_VAR(VALUE oldv), VALUE b, RB_UNUSED_VAR(const 
 }
 
 static inline VALUE
-rb_obj_write(VALUE a, VALUE *slot, VALUE b, RB_UNUSED_VAR(const char *filename), RB_UNUSED_VAR(int line))
+rb_obj_write(VALUE a, void *slot, VALUE b, int compressed, RB_UNUSED_VAR(const char *filename), RB_UNUSED_VAR(int line))
 {
 #ifdef RGENGC_LOGGING_WRITE
     RGENGC_LOGGING_WRITE(a, slot, b, filename, line);
 #endif
 
-    *slot = b;
+    if (compressed)
+	*((VALUE_COMPRESSED *) slot) = COMPRESS_VALUE(b);
+    else
+	*((VALUE *) slot) = b;
 
 #if USE_RGENGC
     rb_obj_written(a, Qundef /* ignore `oldv' now */, b, filename, line);

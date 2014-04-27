@@ -1823,7 +1823,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	break;
 
       default:
-	rb_bug("gc_sweep(): unknown data type 0x%x(%p) 0x%"PRIxVALUE,
+	rb_bug("gc_sweep(): unknown data type 0x%x(%p) 0x%x",
 	       BUILTIN_TYPE(obj), (void*)obj, RBASIC(obj)->flags);
     }
 
@@ -3999,7 +3999,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE ptr)
 	    break;
 
 	  case NODE_CREF:
-	    gc_mark(objspace, obj->as.node.nd_refinements);
+	    gc_mark(objspace, NODE_GET_REFINEMENTS(((struct RNode *) &(obj->as.node))));
 	    gc_mark(objspace, (VALUE)obj->as.node.nd_clss);
 	    ptr = (VALUE)obj->as.node.nd_next;
 	    goto again;

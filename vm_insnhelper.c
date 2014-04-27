@@ -283,7 +283,7 @@ vm_cref_push(rb_thread_t *th, VALUE klass, int noex, rb_block_t *blockptr)
 {
     rb_control_frame_t *cfp = vm_get_ruby_level_caller_cfp(th, th->cfp);
     NODE *cref = NEW_CREF(klass);
-    cref->nd_refinements = Qnil;
+    NODE_SET_REFINEMENTS(cref, Qnil);
     cref->nd_visi = noex;
 
     if (blockptr) {
@@ -294,7 +294,7 @@ vm_cref_push(rb_thread_t *th, VALUE klass, int noex, rb_block_t *blockptr)
     }
     /* TODO: why cref->nd_next is 1? */
     if (cref->nd_next && cref->nd_next != (void *) 1 &&
-	!NIL_P(cref->nd_next->nd_refinements)) {
+	!NIL_P(NODE_GET_REFINEMENTS(cref->nd_next))) {
 	COPY_CREF_OMOD(cref, cref->nd_next);
     }
 
@@ -1808,7 +1808,7 @@ vm_call_method(rb_thread_t *th, rb_control_frame_t *cfp, rb_call_info_t *ci)
 		break;
 	      case VM_METHOD_TYPE_REFINED:{
 		NODE *cref = rb_vm_get_cref(cfp->iseq, cfp->ep);
-		VALUE refinements = cref ? cref->nd_refinements : Qnil;
+		VALUE refinements = cref ? NODE_GET_REFINEMENTS(cref) : Qnil;
 		VALUE refinement, defined_class;
 		rb_method_entry_t *me;
 
