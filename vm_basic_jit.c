@@ -38,16 +38,26 @@ rb_iseq_allocate_jit_compiled_iseq(unsigned long size)
 }
 
 static unsigned long
-rb_iseq_jit_compiled_size(rb_iseq_t *iseq, void **insns_address_table, void **end_insns)
+rb_iseq_jit_compiled_size(rb_iseq_t *iseq, const void * const *insns_address_table, void **end_insns)
 {
-    /*
-    TODO: walk the instructions in iseq, summing sizes
-    size is diff between insns_address_table[i+1] & insns_address_table[i]
-    */
+    unsigned long size = 0;
+    unsigned long i = 0;
+    while (i < iseq->iseq_size) {
+        int insn = (int)iseq->iseq[i];
+        char *beg = (char *)insns_address_table[insn];
+        char *end = (char *)end_insns;
+        if (insn + 1 < VM_INSTRUCTION_SIZE) {
+            end = (char *)insns_address_table[insn + 1];
+        }
+        size += end - beg;
+        /* TODO add space for branch instructions? */
+        i += insn_len(insn);
+    }
+    return size;
 }
 
 static int
-rb_iseq_jit_compile(rb_iseq_t *iseq, void **insns_address_table, void **end_insns)
+rb_iseq_jit_compile(rb_iseq_t *iseq, const void * const *insns_address_table, void **end_insns)
 {
     /*
     TODO: compute the compiled iseq size, allocate chunk from jit code cache, copy into chunk
