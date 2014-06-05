@@ -1,4 +1,8 @@
 #if OPT_BASIC_JIT
+
+#include <sys/mman.h>
+#include "insns_info.inc"
+
 struct rb_jit_free_list {
     size_t size;
     struct rb_jit_free_list *next;
@@ -17,7 +21,7 @@ struct rb_jit_code_chunk {
 static void
 enable_execution_in_jit_code_cache(struct rb_jit_code_cache *cache)
 {
-    if (mprotect(cache->start, cache->size, PROT_READ | PROT_EXEC)) {
+    if (mprotect(cache, cache->size, PROT_READ | PROT_EXEC)) {
         rb_sys_fail("mprotect");
     }
 }
@@ -25,7 +29,7 @@ enable_execution_in_jit_code_cache(struct rb_jit_code_cache *cache)
 static void
 enable_write_in_jit_code_cache(struct rb_jit_code_cache *cache)
 {
-    if (mprotect(cache->start, cache->size, PROT_READ | PROT_WRITE)) {
+    if (mprotect(cache, cache->size, PROT_READ | PROT_WRITE)) {
         rb_sys_fail("mprotect");
     }
 }
@@ -33,10 +37,25 @@ enable_write_in_jit_code_cache(struct rb_jit_code_cache *cache)
 void
 rb_iseq_free_jit_compiled_iseq(void *jit_compiled_iseq)
 {
+    char *seq = (char *) jit_compiled_iseq;
     rb_vm_t *vm = GET_VM();
-    /*
-    TODO: free block in jit code cache
-    */
+    struct rb_jit_code_cache *cache = vm->jit_code_cache;
+    if (jit_compiled_iseq == 0) {
+        return;
+    }
+    while (cache) {
+        char *start = (char *) cache;
+        char *end = ((char *) cache) + cache->size;
+        if (start <= seq && seq <= end) {
+            /* TODO search for adjacent free chunk */
+            struct rb_jit_code_chunk *chunk = (struct rb_jit_code_chunk *) seq;
+            struct rb_jit_free_list *free_list = (struct rb_jit_free_list *) (chunk - 1);
+            free_list->next = cache->free_list;
+            cache->free_list = free_list;
+            return;
+        }
+        cache = cache->next;
+    }
 }
 
 static struct rb_jit_code_cache *
@@ -53,7 +72,7 @@ rb_iseq_allocate_jit_compiled_iseq(rb_iseq_t *iseq, size_t size)
         while (free_list) {
             if (free_list->size >= size) {
                 struct rb_jit_code_chunk *chunk = (struct rb_jit_code_chunk *) free_list;
-                if (free_list->size > size + sizeof(rb_jit_code_chunk)) {
+                if (free_list->size > size + sizeof(struct rb_jit_code_chunk)) {
                     /* TODO add remainder to free list */
                 } else {
                     *free_list_ptr = free_list->next;
@@ -62,7 +81,7 @@ rb_iseq_allocate_jit_compiled_iseq(rb_iseq_t *iseq, size_t size)
                 iseq->jit_compiled_iseq = (void *)(chunk + 1);
                 return cache;
             }
-            free_list_ptr = &free_list->next
+            free_list_ptr = &free_list->next;
             free_list = *free_list_ptr;
         }
         cache = cache->next;
@@ -139,9 +158,13 @@ vm_exec_jit(rb_thread_t *th, VALUE initial)
 #define GET_PC() (reg_pc)
 #undef  SET_PC
 #define SET_PC(x) (reg_cfp->pc = REG_PC = (x))
-#endif
 
+#undef LABEL
+#define LABEL(x)  INSN_LABEL_##x
+#undef LABEL_PTR
+#define LABEL_PTR(x) &&LABEL(x)
 #include "vmtc.inc"
+
     if (UNLIKELY(th->cfp->iseq->jit_compiled_iseq == 0)) {
         if (rb_iseq_jit_compile(th->cfp->iseq, insns_address_table, LABEL_PTR(__END__))) {
             return -1;
@@ -154,6 +177,14 @@ vm_exec_jit(rb_thread_t *th, VALUE initial)
   first:
     goto *reg_cfp->iseq->jit_compiled_iseq;
     /* TODO define macros (see vm_exec.h) for vm.inc */
+#undef INSN_ENTRY
+#define INSN_ENTRY(insn) \
+    LABEL(insn): \
+    __asm__ __volatile__("" : "=r" (REG_PC), "=r" (REG_CFP) : : ); \
+
+#undef END_INSN
+#define END_INSN(insn) \
+    __asm__ __volatile__("" : : "r" (REG_PC), "r" (REG_CFP) : )
 /*****************/
  #include "vm.inc"
 /*****************/
