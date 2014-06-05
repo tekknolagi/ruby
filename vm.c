@@ -79,6 +79,7 @@ static rb_serial_t ruby_vm_class_serial = 1;
 #include "vm_insnhelper.c"
 #include "vm_exec.h"
 #include "vm_exec.c"
+#include "vm_basic_jit.c"
 
 #include "vm_method.c"
 #include "vm_eval.c"

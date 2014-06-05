@@ -78,6 +78,10 @@ iseq_free(void *ptr)
 		RUBY_FREE_UNLESS_NULL(iseq->iseq_encoded);
 	    }
 
+#if OPT_BASIC_JIT
+            rb_iseq_free_jit_compiled_iseq(iseq->jit_compiled_iseq);
+#endif
+
 	    RUBY_FREE_UNLESS_NULL(iseq->iseq);
 	    RUBY_FREE_UNLESS_NULL(iseq->line_info_table);
 	    RUBY_FREE_UNLESS_NULL(iseq->local_table);

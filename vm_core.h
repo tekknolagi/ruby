@@ -100,6 +100,11 @@
 #endif /* OPT_STACK_CACHING */
 #endif /* OPT_CALL_THREADED_CODE */
 
+#if defined(__GNUC__) && defined(__x86_64__)
+#elif defined(OPT_BASIC_JIT)
+error !
+#endif
+
 /* likely */
 #if __GNUC__ >= 3
 #define LIKELY(x)   (__builtin_expect((x), 1))
@@ -227,6 +232,12 @@ struct rb_iseq_struct {
     unsigned long iseq_size;
     const VALUE mark_ary;     /* Array: includes operands which should be GC marked */
     const VALUE coverage;     /* coverage array */
+
+#if OPT_BASIC_JIT
+    int call_count;
+    int exec_count;
+    void *jit_compiled_iseq;
+#endif
 
     /* insn info, must be freed */
     struct iseq_line_info_entry *line_info_table;

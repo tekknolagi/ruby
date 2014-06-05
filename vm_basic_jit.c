@@ -1,0 +1,79 @@
+#if OPT_BASIC_JIT
+void
+rb_iseq_free_jit_compiled_iseq(void *jit_compiled_iseq)
+{
+    rb_vm_t *vm = GET_VM();
+    /*
+    TODO: free block in jit code cache
+    */
+}
+
+static void *
+rb_iseq_allocate_jit_compiled_iseq(unsigned long size)
+{
+    /*
+    TODO: allocate chunk of size from jit code cache
+    */
+}
+
+static unsigned long
+rb_iseq_jit_compiled_size(rb_iseq_t *iseq, void **insns_address_table, void **end_insns)
+{
+    /*
+    TODO: walk the instructions in iseq, summing sizes
+    size is diff between insns_address_table[i+1] & insns_address_table[i]
+    */
+}
+
+static int
+rb_iseq_jit_compile(rb_iseq_t *iseq, void **insns_address_table, void **end_insns)
+{
+    /*
+    TODO: compute the compiled iseq size, allocate chunk from jit code cache, copy into chunk
+    copy by walking instructions in iseq, copying from insns_address_table[i] to insns_address_table[i+1]
+    */
+}
+
+static int
+vm_exec_jit(rb_thread_t *th, VALUE initial)
+{
+    DECL_SC_REG(VALUE *, pc, "14");
+    DECL_SC_REG(rb_control_frame_t *, cfp, "15");
+
+#undef  RESTORE_REGS
+#define RESTORE_REGS() \
+{ \
+  REG_CFP = th->cfp; \
+  reg_pc  = reg_cfp->pc; \
+}
+
+#undef  REG_PC
+#define REG_PC reg_pc
+#undef  GET_PC
+#define GET_PC() (reg_pc)
+#undef  SET_PC
+#define SET_PC(x) (reg_cfp->pc = REG_PC = (x))
+#endif
+
+#include "vmtc.inc"
+    if (UNLIKELY(th->cfp->iseq->jit_compiled_iseq == 0)) {
+        if (rb_iseq_jit_compile(th->cfp->iseq, insns_address_table, LABEL_PTR(__END__))) {
+            return -1;
+        }
+    }
+
+    reg_cfp = th->cfp;
+    reg_pc = reg_cfp->pc;
+
+  first:
+    goto *reg_cfp->iseq->jit_compiled_iseq;
+/*****************/
+ #include "vm.inc"
+/*****************/
+LABEL(__END__):
+
+    /* unreachable */
+    rb_bug("vm_eval: unreachable");
+    goto first;
+}
+#endif

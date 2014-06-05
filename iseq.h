@@ -35,6 +35,11 @@ VALUE rb_iseq_line_trace_specify(VALUE iseqval, VALUE pos, VALUE set);
 rb_iseq_t *rb_method_get_iseq(VALUE body);
 rb_iseq_t *rb_proc_get_iseq(VALUE proc, int *is_proc);
 
+/* vm_basic_jit.c */
+#if OPT_BASIC_JIT
+void rb_iseq_free_jit_compiled_iseq(void *jit_compiled_iseq);
+#endif
+
 struct rb_compile_option_struct {
     int inline_const_cache;
     int peephole_optimization;
