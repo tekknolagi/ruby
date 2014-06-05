@@ -1,4 +1,25 @@
 #if OPT_BASIC_JIT
+struct rb_jit_code_cache {
+    void *start;
+    size_t size;
+};
+
+static void
+enable_execution_in_jit_code_cache(struct rb_jit_code_cache *cache)
+{
+    if (mprotect(cache->start, cache->size, PROT_READ | PROT_EXEC)) {
+        rb_sys_fail("mprotect");
+    }
+}
+
+static void
+enable_write_in_jit_code_cache(struct rb_jit_code_cache *cache)
+{
+    if (mprotect(cache->start, cache->size, PROT_READ | PROT_WRITE)) {
+        rb_sys_fail("mprotect");
+    }
+}
+
 void
 rb_iseq_free_jit_compiled_iseq(void *jit_compiled_iseq)
 {

@@ -134,6 +134,10 @@ struct iseq_compile_data_ensure_node_stack;
 
 typedef struct rb_compile_option_struct rb_compile_option_t;
 
+#if OPT_BASIC_JIT
+struct rb_jit_code_cache;
+#endif
+
 
 struct iseq_inline_cache_entry {
     rb_serial_t ic_serial;
@@ -416,6 +420,10 @@ typedef struct rb_vm_struct {
 
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
     struct rb_objspace *objspace;
+#endif
+
+#if OPT_BASIC_JIT
+    struct rb_jit_code_cache *jit_code_cache;
 #endif
 
     /*
