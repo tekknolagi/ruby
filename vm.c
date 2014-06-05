@@ -1302,6 +1302,10 @@ vm_exec(rb_thread_t *th)
     _tag.retval = Qnil;
     if ((state = EXEC_TAG()) == 0) {
       vm_loop_start:
+#if OPT_BASIC_JIT
+        result = vm_exec_jit(th, initial);
+        if (result == (VALUE)-1)
+#endif
 	result = vm_exec_core(th, initial);
 	if ((state = th->state) != 0) {
 	    err = result;

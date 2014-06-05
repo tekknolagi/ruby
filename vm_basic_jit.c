@@ -165,6 +165,9 @@ vm_exec_jit(rb_thread_t *th, VALUE initial)
 #define LABEL_PTR(x) &&LABEL(x)
 #include "vmtc.inc"
 
+    if (LIKELY(th->cfp->iseq->call_count != 0 && th->cfp->iseq->exec_count != 0)) {
+        return -1;
+    }
     if (UNLIKELY(th->cfp->iseq->jit_compiled_iseq == 0)) {
         if (rb_iseq_jit_compile(th->cfp->iseq, insns_address_table, LABEL_PTR(__END__))) {
             return -1;
