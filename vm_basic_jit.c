@@ -50,8 +50,10 @@ rb_iseq_free_jit_compiled_iseq(void *jit_compiled_iseq)
             /* TODO search for adjacent free chunk */
             struct rb_jit_code_chunk *chunk = (struct rb_jit_code_chunk *) seq;
             struct rb_jit_free_list *free_list = (struct rb_jit_free_list *) (chunk - 1);
+            enable_write_in_jit_code_cache(cache);
             free_list->next = cache->free_list;
             cache->free_list = free_list;
+            enable_execution_in_jit_code_cache(cache);
             return;
         }
         cache = cache->next;
@@ -72,6 +74,7 @@ rb_iseq_allocate_jit_compiled_iseq(rb_iseq_t *iseq, size_t size)
         while (free_list) {
             if (free_list->size >= size) {
                 struct rb_jit_code_chunk *chunk = (struct rb_jit_code_chunk *) free_list;
+                enable_write_in_jit_code_cache(cache);
                 if (free_list->size > size + sizeof(struct rb_jit_code_chunk)) {
                     /* TODO add remainder to free list */
                 } else {
@@ -79,6 +82,7 @@ rb_iseq_allocate_jit_compiled_iseq(rb_iseq_t *iseq, size_t size)
                 }
                 chunk->size = size + sizeof(struct rb_jit_code_chunk *);
                 iseq->jit_compiled_iseq = (void *)(chunk + 1);
+                enable_execution_in_jit_code_cache(cache);
                 return cache;
             }
             free_list_ptr = &free_list->next;
