@@ -17,6 +17,7 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "probes.h"
+#include "method.h"
 #include "id.h"
 
 #ifndef ARRAY_DEBUG
@@ -26,7 +27,7 @@
 
 VALUE rb_cArray;
 
-static ID id_cmp, id_div, id_power;
+static ID id_cmp, id_div, id_power, id_each;
 
 #define ARY_DEFAULT_SIZE 16
 #define ARY_MAX_SIZE (LONG_MAX / (int)sizeof(VALUE))
@@ -2619,6 +2620,18 @@ rb_ary_bsearch(VALUE ary)
     return rb_ary_entry(ary, low);
 }
 
+static VALUE
+rb_ary_any(VALUE ary)
+{
+    if (RARRAY_LEN(ary) == 0) {
+	rb_method_entry_t *me = rb_method_entry_at(RBASIC_CLASS(ary), id_each);
+	if (me && me->def && me->def->type == VM_METHOD_TYPE_CFUNC &&
+	    me->def->body.cfunc.func == rb_ary_each) {
+	    return Qfalse;
+	}
+    }
+    return rb_call_super(0, 0);
+}
 
 static VALUE
 sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, dummy))
@@ -5708,8 +5721,11 @@ Init_Array(void)
     rb_define_method(rb_cArray, "drop_while", rb_ary_drop_while, 0);
     rb_define_method(rb_cArray, "bsearch", rb_ary_bsearch, 0);
 
+    rb_define_method(rb_cArray, "any?", rb_ary_any, 0);
+
     id_cmp = rb_intern("<=>");
     id_random = rb_intern("random");
     id_div = rb_intern("div");
     id_power = rb_intern("**");
+    id_each = rb_intern("each");
 }
