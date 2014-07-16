@@ -16,7 +16,8 @@
 #include "ruby/util.h"
 #include "ruby/encoding.h"
 #include "internal.h"
-#include "method.h"
+#include "vm_core.h"
+#include "vm_insnhelper.h"
 #include <errno.h>
 #include "probes.h"
 
@@ -68,7 +69,7 @@ rb_hash_freeze(VALUE hash)
 VALUE rb_cHash;
 
 static VALUE envtbl;
-static ID id_hash, id_yield, id_default, id_flatten_bang, id_each;
+static ID id_hash, id_yield, id_default, id_flatten_bang;
 
 VALUE
 rb_hash_set_ifnone(VALUE hash, VALUE ifnone)
@@ -2475,12 +2476,9 @@ rb_hash_compare_by_id_p(VALUE hash)
 static VALUE
 rb_hash_any(VALUE hash)
 {
-    if (RHASH_EMPTY_P(hash) == 0) {
-	rb_method_entry_t *me = rb_method_entry_at(RBASIC_CLASS(hash), id_each);
-	if (me && me->def && me->def->type == VM_METHOD_TYPE_CFUNC &&
-	    me->def->body.cfunc.func == rb_hash_each_pair) {
-	    return Qfalse;
-	}
+    if (RHASH_EMPTY_P(hash) == 0 &&
+	BASIC_OP_UNREDEFINED_P(BOP_EACH, HASH_REDEFINED_OP_FLAG)) {
+	return Qfalse;
     }
     return rb_call_super(0, 0);
 }
@@ -3784,7 +3782,6 @@ Init_Hash(void)
     id_yield = rb_intern("yield");
     id_default = rb_intern("default");
     id_flatten_bang = rb_intern("flatten!");
-    id_each = rb_intern("each");
 
     rb_cHash = rb_define_class("Hash", rb_cObject);
 

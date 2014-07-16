@@ -17,7 +17,8 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "probes.h"
-#include "method.h"
+#include "vm_core.h"
+#include "vm_insnhelper.h"
 #include "id.h"
 
 #ifndef ARRAY_DEBUG
@@ -27,7 +28,7 @@
 
 VALUE rb_cArray;
 
-static ID id_cmp, id_div, id_power, id_each;
+static ID id_cmp, id_div, id_power;
 
 #define ARY_DEFAULT_SIZE 16
 #define ARY_MAX_SIZE (LONG_MAX / (int)sizeof(VALUE))
@@ -2623,12 +2624,9 @@ rb_ary_bsearch(VALUE ary)
 static VALUE
 rb_ary_any(VALUE ary)
 {
-    if (RARRAY_LEN(ary) == 0) {
-	rb_method_entry_t *me = rb_method_entry_at(RBASIC_CLASS(ary), id_each);
-	if (me && me->def && me->def->type == VM_METHOD_TYPE_CFUNC &&
-	    me->def->body.cfunc.func == rb_ary_each) {
-	    return Qfalse;
-	}
+    if (RARRAY_LEN(ary) == 0 &&
+	BASIC_OP_UNREDEFINED_P(BOP_EACH, ARRAY_REDEFINED_OP_FLAG)) {
+	return Qfalse;
     }
     return rb_call_super(0, 0);
 }
@@ -5727,5 +5725,4 @@ Init_Array(void)
     id_random = rb_intern("random");
     id_div = rb_intern("div");
     id_power = rb_intern("**");
-    id_each = rb_intern("each");
 }
