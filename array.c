@@ -17,8 +17,6 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "probes.h"
-#include "vm_core.h"
-#include "vm_insnhelper.h"
 #include "id.h"
 
 #ifndef ARRAY_DEBUG
@@ -2621,15 +2619,6 @@ rb_ary_bsearch(VALUE ary)
     return rb_ary_entry(ary, low);
 }
 
-static VALUE
-rb_ary_any(VALUE ary)
-{
-    if (RARRAY_LEN(ary) == 0 &&
-	BASIC_OP_UNREDEFINED_P(BOP_EACH, ARRAY_REDEFINED_OP_FLAG)) {
-	return Qfalse;
-    }
-    return rb_call_super(0, 0);
-}
 
 static VALUE
 sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, dummy))
@@ -5718,8 +5707,6 @@ Init_Array(void)
     rb_define_method(rb_cArray, "drop", rb_ary_drop, 1);
     rb_define_method(rb_cArray, "drop_while", rb_ary_drop_while, 0);
     rb_define_method(rb_cArray, "bsearch", rb_ary_bsearch, 0);
-
-    rb_define_method(rb_cArray, "any?", rb_ary_any, 0);
 
     id_cmp = rb_intern("<=>");
     id_random = rb_intern("random");

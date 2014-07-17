@@ -16,8 +16,6 @@
 #include "ruby/util.h"
 #include "ruby/encoding.h"
 #include "internal.h"
-#include "vm_core.h"
-#include "vm_insnhelper.h"
 #include <errno.h>
 #include "probes.h"
 
@@ -2473,16 +2471,6 @@ rb_hash_compare_by_id_p(VALUE hash)
     return Qfalse;
 }
 
-static VALUE
-rb_hash_any(VALUE hash)
-{
-    if (RHASH_EMPTY_P(hash) == 0 &&
-	BASIC_OP_UNREDEFINED_P(BOP_EACH, HASH_REDEFINED_OP_FLAG)) {
-	return Qfalse;
-    }
-    return rb_call_super(0, 0);
-}
-
 static int path_tainted = -1;
 
 static char **origenviron;
@@ -3853,8 +3841,6 @@ Init_Hash(void)
 
     rb_define_method(rb_cHash,"compare_by_identity", rb_hash_compare_by_id, 0);
     rb_define_method(rb_cHash,"compare_by_identity?", rb_hash_compare_by_id_p, 0);
-
-    rb_define_method(rb_cHash, "any?", rb_hash_any, 0);
 
     /* Document-class: ENV
      *
