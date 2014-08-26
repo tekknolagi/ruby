@@ -339,8 +339,8 @@ interrupt_init(int argc, VALUE *argv, VALUE self)
 void
 ruby_default_signal(int sig)
 {
-    signal(sig, SIG_DFL);
-    raise(sig);
+    /*signal(sig, SIG_DFL);
+    raise(sig);*/
 }
 
 /*
@@ -506,6 +506,7 @@ rb_register_sigaltstack(rb_thread_t *th)
 }
 #endif /* USE_SIGALTSTACK */
 
+#if 0
 #ifdef POSIX_SIGNAL
 static sighandler_t
 ruby_signal(int signum, sighandler_t handler)
@@ -566,6 +567,14 @@ ruby_nativethread_signal(int signum, sighandler_t handler)
 }
 #endif
 #endif
+
+#endif
+
+#define ruby_signal(sig, sighandler) 0
+sighandler_t posix_signal(int signum, sighandler_t handler)
+{
+    return ruby_signal(signum, handler);
+}
 
 static RETSIGTYPE
 sighandler(int sig)
