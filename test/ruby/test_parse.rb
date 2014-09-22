@@ -1,6 +1,7 @@
 # coding: US-ASCII
 require 'test/unit'
 require 'stringio'
+require_relative 'envutil'
 
 class TestParse < Test::Unit::TestCase
   def setup
