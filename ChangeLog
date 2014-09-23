@@ -1,3 +1,8 @@
+Wed Sep 24 02:30:55 2014  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (parse_ident): just after a label, new expression should
+	  start, cannot be a modifier.  [ruby-core:65211] [Bug #10279]
+
 Fri Mar  7 12:06:19 2014  Martin Bosslet  <Martin.Bosslet@gmail.com>
 
 	* test/openssl/test_ssl.rb: Reuse TLS default options from
