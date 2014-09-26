@@ -1,3 +1,9 @@
+Fri Sep 26 12:52:36 2014  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/stringio/stringio.c (strio_write): ASCII-8BIT StringIO
+	  should be writable any encoding strings, without conversion.
+	  [ruby-core:65240] [Bug #10285]
+
 Wed Sep 24 02:30:55 2014  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* parse.y (parse_ident): just after a label, new expression should
