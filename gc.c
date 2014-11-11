@@ -1196,30 +1196,26 @@ heap_add_pages(rb_objspace_t *objspace, rb_heap_t *heap, size_t add)
     heap_pages_increment = 0;
 }
 
-static size_t
-heap_extend_pages(rb_objspace_t *objspace)
+static void
+heap_set_increment(rb_objspace_t *objspace, size_t minimum_limit)
 {
     size_t used = heap_pages_used - heap_tomb->page_length;
     size_t next_used_limit = (size_t)(used * gc_params.growth_factor);
-
     if (gc_params.growth_max_slots > 0) {
 	size_t max_used_limit = (size_t)(used + gc_params.growth_max_slots/HEAP_OBJ_LIMIT);
 	if (next_used_limit > max_used_limit) next_used_limit = max_used_limit;
     }
-
-    return next_used_limit - used;
-    }
-
-static void
-heap_set_increment(rb_objspace_t *objspace, size_t additional_pages)
-{
-    size_t used = heap_eden->page_length;
-    size_t next_used_limit = used + additional_pages;
-
     if (next_used_limit == heap_pages_used) next_used_limit++;
+
+    if (next_used_limit < minimum_limit) {
+	next_used_limit = minimum_limit;
+    }
 
     heap_pages_increment = next_used_limit - used;
     heap_pages_expand_sorted(objspace);
+
+    if (0) fprintf(stderr, "heap_set_increment: heap_pages_length: %d, heap_pages_used: %d, heap_pages_increment: %d, next_used_limit: %d\n",
+		   (int)heap_pages_length, (int)heap_pages_used, (int)heap_pages_increment, (int)next_used_limit);
 }
 
 static int
@@ -2862,7 +2858,7 @@ gc_heap_prepare_minimum_pages(rb_objspace_t *objspace, rb_heap_t *heap)
 {
     if (!heap->free_pages) {
 	/* there is no free after page_sweep() */
-	heap_set_increment(objspace, 1);
+	heap_set_increment(objspace, 0);
 	if (!heap_increment(objspace, heap)) { /* can't allocate additional free objects */
 	    during_gc = 0;
 	    rb_memerror();
@@ -3001,13 +2997,18 @@ gc_after_sweep(rb_objspace_t *objspace)
 		  (int)heap->total_slots, (int)heap_pages_swept_slots, (int)heap_pages_min_free_slots);
 
     if (heap_pages_swept_slots < heap_pages_min_free_slots) {
+#if USE_RGENGC
 	if (objspace->rgengc.during_minor_gc && objspace->profile.count - objspace->rgengc.last_major_gc > 2 /* magic number */) {
 	    objspace->rgengc.need_major_gc = GPR_FLAG_MAJOR_BY_NOFREE;
 	}
 	else {
-	    heap_set_increment(objspace, heap_extend_pages(objspace));
+	    heap_set_increment(objspace, (heap_pages_min_free_slots - heap_pages_swept_slots) / HEAP_OBJ_LIMIT);
 	    heap_increment(objspace, heap);
 	}
+#else
+	heap_set_increment(objspace, (heap_pages_min_free_slots - heap_pages_swept_slots) / HEAP_OBJ_LIMIT);
+	heap_increment(objspace, heap);
+#endif
     }
 
     gc_prof_set_heap_info(objspace);
@@ -3255,14 +3256,14 @@ init_mark_stack(mark_stack_t *stack)
 /* Marking */
 
 #ifdef __ia64
-#define SET_STACK_END (SET_MACHINE_STACK_END(&th->machine_stack_end), th->machine_register_stack_end = rb_ia64_bsp())
+#define SET_STACK_END (SET_MACHINE_STACK_END(&th->machine.stack_end), th->machine.register_stack_end = rb_ia64_bsp())
 #else
-#define SET_STACK_END SET_MACHINE_STACK_END(&th->machine_stack_end)
+#define SET_STACK_END SET_MACHINE_STACK_END(&th->machine.stack_end)
 #endif
 
-#define STACK_START (th->machine_stack_start)
-#define STACK_END (th->machine_stack_end)
-#define STACK_LEVEL_MAX (th->machine_stack_maxsize/sizeof(VALUE))
+#define STACK_START (th->machine.stack_start)
+#define STACK_END (th->machine.stack_end)
+#define STACK_LEVEL_MAX (th->machine.stack_maxsize/sizeof(VALUE))
 
 #if STACK_GROW_DIRECTION < 0
 # define STACK_LENGTH  (size_t)(STACK_START - STACK_END)
@@ -3304,8 +3305,8 @@ stack_check(int water_mark)
     ret = STACK_LENGTH > STACK_LEVEL_MAX - water_mark;
 #ifdef __ia64
     if (!ret) {
-        ret = (VALUE*)rb_ia64_bsp() - th->machine_register_stack_start >
-              th->machine_register_stack_maxsize/sizeof(VALUE) - water_mark;
+        ret = (VALUE*)rb_ia64_bsp() - th->machine.register_stack_start >
+              th->machine.register_stack_maxsize/sizeof(VALUE) - water_mark;
     }
 #endif
     return ret;
@@ -3523,13 +3524,17 @@ mark_current_machine_context(rb_objspace_t *objspace, rb_thread_t *th)
     /* This assumes that all registers are saved into the jmp_buf (and stack) */
     rb_setjmp(save_regs_gc_mark.j);
 
+    /* SET_STACK_END must be called in this function because
+     * the stack frame of this function may contain
+     * callee save registers and they should be marked. */
+    SET_STACK_END;
     GET_STACK_BOUNDS(stack_start, stack_end, 1);
 
     mark_locations_array(objspace, save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
 
     rb_gc_mark_locations(stack_start, stack_end);
 #ifdef __ia64
-    rb_gc_mark_locations(th->machine_register_stack_start, th->machine_register_stack_end);
+    rb_gc_mark_locations(th->machine.register_stack_start, th->machine.register_stack_end);
 #endif
 #if defined(__mc68000__)
     mark_locations_array(objspace, (VALUE*)((char*)STACK_END + 2),
@@ -3546,7 +3551,7 @@ rb_gc_mark_machine_stack(rb_thread_t *th)
     GET_STACK_BOUNDS(stack_start, stack_end, 0);
     rb_gc_mark_locations(stack_start, stack_end);
 #ifdef __ia64
-    rb_gc_mark_locations(th->machine_register_stack_start, th->machine_register_stack_end);
+    rb_gc_mark_locations(th->machine.register_stack_start, th->machine.register_stack_end);
 #endif
 }
 
@@ -4190,7 +4195,6 @@ gc_marks_body(rb_objspace_t *objspace, int full_mark)
     }
     else {
 	objspace->profile.major_gc_count++;
-	objspace->rgengc.last_major_gc = objspace->profile.count;
 	rgengc_mark_and_rememberset_clear(objspace, heap_eden);
     }
 #endif
@@ -4551,8 +4555,8 @@ gc_marks(rb_objspace_t *objspace, int full_mark)
 	    {
 		/* See the comment about RUBY_GC_HEAP_OLDOBJECT_LIMIT_FACTOR */
 		const double r = gc_params.oldobject_limit_factor;
-		objspace->rgengc.remembered_shady_object_limit = objspace->rgengc.remembered_shady_object_count * r;
-		objspace->rgengc.old_object_limit = objspace->rgengc.old_object_count * r;
+		objspace->rgengc.remembered_shady_object_limit = (size_t)(objspace->rgengc.remembered_shady_object_count * r);
+		objspace->rgengc.old_object_limit = (size_t)(objspace->rgengc.old_object_count * r);
 	    }
 	}
 	else { /* minor GC */
@@ -5070,7 +5074,7 @@ heap_ready_to_gc(rb_objspace_t *objspace, rb_heap_t *heap)
     if (dont_gc || during_gc) {
 	if (!heap->freelist && !heap->free_pages) {
 	    if (!heap_increment(objspace, heap)) {
-		heap_set_increment(objspace, 1);
+		heap_set_increment(objspace, 0);
                 heap_increment(objspace, heap);
             }
 	}
@@ -5795,7 +5799,7 @@ ruby_gc_set_params(int safe_level)
     get_envparam_int("RUBY_GC_MALLOC_LIMIT_MAX", &gc_params.malloc_limit_max, 0);
     get_envparam_double("RUBY_GC_MALLOC_LIMIT_GROWTH_FACTOR", &gc_params.malloc_limit_growth_factor, 1.0);
 
-#ifdef RGENGC_ESTIMATE_OLDMALLOC
+#if RGENGC_ESTIMATE_OLDMALLOC
     if (get_envparam_int("RUBY_GC_OLDMALLOC_LIMIT", &gc_params.oldmalloc_limit_min, 0)) {
 	rb_objspace_t *objspace = &rb_objspace;
 	objspace->rgengc.oldmalloc_increase_limit = gc_params.oldmalloc_limit_min;

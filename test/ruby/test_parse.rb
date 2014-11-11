@@ -1,6 +1,7 @@
 # coding: US-ASCII
 require 'test/unit'
 require 'stringio'
+require_relative 'envutil'
 
 class TestParse < Test::Unit::TestCase
   def setup
@@ -658,8 +659,11 @@ x = __ENCODING__
   end
 
   def test_invalid_char
+    bug10117 = '[ruby-core:64243] [Bug #10117]'
+    invalid_char = /Invalid char `\\x01'/
     x = 1
-    assert_equal(1, eval("\x01x"))
+    assert_in_out_err(%W"-e \x01x", "", [], invalid_char, bug10117)
+    assert_syntax_error("\x01x", invalid_char, bug10117)
     assert_equal(nil, eval("\x04x"))
   end
 

@@ -91,8 +91,8 @@ extern int rb_encoding_compat;
 TRANS_INIT(single_byte)
 {
     if (rb_encoding_compat) {
-        ((struct rb_transcoder *)&rb_from_ASCII_8BIT)->conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
-        ((struct rb_transcoder *)  &rb_to_ASCII_8BIT)->conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
+        rb_from_ASCII_8BIT.conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
+        rb_to_ASCII_8BIT.conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
     }
 <%= transcode_register_code %>
 }
