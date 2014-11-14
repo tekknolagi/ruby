@@ -799,8 +799,6 @@ typedef void rb_check_funcall_hook(int, VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 				 rb_check_funcall_hook *hook, VALUE arg);
 VALUE rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, int *stateptr);
-VALUE ruby_eval_string_from_file(const char *str, const char *filename);
-VALUE ruby_eval_string_from_file_protect(const char *str, const char *filename, int *state);
 
 /* vm_insnhelper.c */
 VALUE rb_equal_opt(VALUE obj1, VALUE obj2);
@@ -895,6 +893,9 @@ void rb_mark_generic_ivar_tbl(void);
 
 int rb_st_insert_id_and_value(VALUE obj, st_table *tbl, ID key, VALUE value);
 st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
+
+/* vm_eval.c */
+VALUE ruby_eval_string_from_file(const char *str, const char *filename);
 
 /* gc.c */
 size_t rb_obj_memsize_of(VALUE);
