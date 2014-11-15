@@ -943,6 +943,9 @@ int rb_frame_method_id_and_class(ID *idp, VALUE *klassp);
 VALUE rb_make_backtrace(void);
 VALUE rb_make_exception(int, VALUE*);
 
+/* vm_eval.c */
+VALUE ruby_eval_string_from_file(const char *str, const char *filename);
+
 /* deprecated */
 DEPRECATED(void rb_frame_pop(void));
 
