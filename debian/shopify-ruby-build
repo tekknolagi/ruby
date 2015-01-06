@@ -36,6 +36,11 @@ def error(msg)
   raise BuildError.new(msg)
 end
 
+def run_command(cmd)
+  system(cmd)
+  error "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
+end
+
 def get_ruby_version(dir)
   error "version.h does not exist in #{dir}" unless File.exist?(dir + 'version.h')
   version = nil
@@ -98,8 +103,8 @@ def setup_debian(dir, version, patch_level, dist, tag, sha)
     end
 
     FileUtils.rm_f('debian/changelog')
-    system("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
-    system("dch -r '#{changelog_message}'")
+    run_command("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
+    run_command("dch -r '#{changelog_message}'")
 
     generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib ))
     generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", prefix, %w( share/doc share/man share/ri ))
@@ -160,7 +165,7 @@ tag = nil if tag.empty?
 outdir = Pathname.new(Dir.pwd) + outdir
 
 Dir.mktmpdir('shopify-ruby-build') do |tmpdir|
-  system("git archive --format tar --prefix=src/ #{sha} | tar xf - -C #{tmpdir}")
+  run_command("git archive --format tar --prefix=src/ #{sha} | tar xf - -C #{tmpdir}")
   src_dir = Pathname.new(tmpdir) + 'src'
   FileUtils.cp_r("debian", src_dir) unless Dir.exists?("#{src_dir}/debian")
 
@@ -172,11 +177,11 @@ Dir.mktmpdir('shopify-ruby-build') do |tmpdir|
     base_tgz = cachedir + "#{dist}-base.tgz"
     popts = pbuilder_opts(dist, base_tgz)
     unless File.exist?(base_tgz)
-      system("sudo pbuilder --create #{popts}")
+      run_command("sudo pbuilder --create #{popts}")
     else
-      system("sudo pbuilder --update #{popts}")
+      run_command("sudo pbuilder --update #{popts}")
     end
 
-    system("sudo pdebuild -- #{popts} --buildresult #{outdir}")
+    run_command("sudo pdebuild -- #{popts} --buildresult #{outdir}")
   end
 end
