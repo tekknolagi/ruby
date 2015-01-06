@@ -1,0 +1,25 @@
+# vim: ft=debcontrol
+
+Source: shopify-ruby-<%= version %>
+Section: ruby
+Priority: optional
+Maintainer: Shopify Ops <ops@shopify.com>
+Build-Depends: debhelper (>= 7.3), autoconf, bison, build-essential, devscripts, equivs, libreadline-gplv2-dev | libreadline-dev, ruby, libssl-dev (>= 0.9.6b), libyaml-dev, zlib1g-dev, systemtap-sdt-dev, libffi-dev
+Standards-Version: 3.9.4
+Homepage: https://github.com/Shopify/ruby
+Vcs-Git: git://github.com/Shopify/ruby.git
+Vcs-Browser: https://github.com/Shopify/ruby
+
+Package: shopify-ruby-<%= version %>
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: shopify-ruby
+Provides: shopify-ruby-any, shopify-ruby-<%= major_minor %>
+Suggests: shopify-ruby-<%= version %>-doc
+Description: Ruby <%= version %> for Shopify servers
+ Built using shopify-ruby-build.
+
+Package: shopify-ruby-<%= version %>-doc
+Architecture: any
+Description: Ruby <%= version %> for Shopify servers (documentation)
+ Built using shopify-ruby-build.

@@ -1,0 +1,11 @@
+#!/bin/sh
+# vim: ft=sh sw=8 noexpandtab
+
+set -e
+
+for name in default; do
+	if [ ! -L /usr/lib/shopify-ruby/$name ]; then
+		echo "Setting $name shopify-ruby: <%= version %>"
+		ln -s "<%= prefix %>" /usr/lib/shopify-ruby/$name || true
+	fi
+done

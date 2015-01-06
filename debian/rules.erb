@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+# vim: ft=make
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+# This has to be exported to make some magic below work.
+export DH_OPTIONS
+
+ROOT=$(shell pwd)
+DESTDIR=$(ROOT)/debian/tmp
+PREFIX=<%= prefix %>
+RUBY_LIB_DIR=$(DESTDIR)/$(PREFIX)/lib/ruby/<%= ruby_lib_version %>
+RUBYLIB="$(RUBY_LIB_DIR):$(RUBY_LIB_DIR)/$(shell uname -m)-linux"
+DH_FLAGS=-O--parallel
+
+%:
+	dh $@ --parallel
+
+override_dh_auto_configure:
+	test configure -nt configure.in || autoconf
+	./configure --prefix="$(PREFIX)"
+
+override_dh_auto_install:
+	dh_auto_install $(DH_FLAGS) --destdir "$(DESTDIR)"
+	RUBYLIB="$(RUBYLIB)" "$(DESTDIR)$(PREFIX)/bin/ruby" debian/gem install $(ROOT)/debian/gems/*.gem
+
+override_dh_strip:
+	dh_strip $(DH_FLAGS) -X bin/ruby
+
+override_dh_install:
+	dh_install $(DH_FLAGS) --fail-missing

@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+
+require 'getoptlong'
+require 'pathname'
+require 'tmpdir'
+require 'fileutils'
+require 'erb'
+
+def usage
+<<-EOF
+Usage: shopify-ruby-build [-o <dir>] [-d dist] <ref>
+
+ref is either a tag or a commit. If a tag is specified, a shopify-ruby package
+will be built for that version, for example, if v2_2_0 is provided, a new
+package will be built, shopify-ruby-2.2.0. If the ref is a commit, a dev
+package will be built.
+
+Options:
+
+  -h, --help
+    Displays this message
+
+  -d, --distribution <dist>
+    Specifies what distribution the package will be built for, defaults to the
+    current distribution (#{current_dist}).
+
+  -o, --output <dir>
+    Output directory for generated files, defaults to "..".
+
+EOF
+end
+
+class BuildError < StandardError; end
+
+def error(msg)
+  raise BuildError.new(msg)
+end
+
+def get_ruby_version(dir)
+  error "version.h does not exist in #{dir}" unless File.exist?(dir + 'version.h')
+  version = nil
+  patch_level = nil
+  File.open(dir + 'version.h') do |f|
+    while line = f.gets
+      if /RUBY_VERSION\s\"(\d+\.\d+\.\d+)\"\s*$/.match(line)
+        version = $1
+      elsif /RUBY_PATCHLEVEL\s(\d+)\s*$/.match(line)
+        patch_level = $1
+      end
+    end
+  end
+  error "version.h is missing ruby version and/or patch level" unless version && patch_level
+  [version, patch_level]
+end
+
+def parse_tag(tag)
+  error "cannot parse tag #{tag}" unless /^v(\d+)[-_\.](\d+)[-_\.](\d+)[-_]?(\w+)?$/.match(tag)
+  "#{$1}.#{$2}.#{$3}#{$4 ? '-' : ''}#{$4}"
+end
+
+def get_major_minor(version)
+  error "cannot parse version #{version}" unless /^(\d+\.\d+)/.match(version)
+  $1
+end
+
+def generate_debian_install_files(target, prefix, files)
+  File.open(target, 'w') do |t|
+    files.each { |f| t.puts(prefix + f) }
+  end
+end
+
+# Increment this value whenever any packaging options change
+DEBIAN_PACKAGING_VERSION = 0
+
+def setup_debian(dir, version, patch_level, dist, tag, sha)
+  major_minor = get_major_minor(version)
+  version = "#{version}-dev" unless tag
+  prefix = Pathname.new('/usr/lib/shopify-ruby') + version
+  ruby_lib_version = "#{major_minor}.0"
+  debian_version = "#{DEBIAN_PACKAGING_VERSION}+p#{patch_level}"
+  debian_version << "+#{sha[0..7]}" unless tag
+  changelog_message = unless tag
+    "Snapshot of git commit #{sha}"
+  else
+    "Ruby #{version}p#{patch_level} (git: #{tag})"
+  end
+
+  b = binding
+
+  Dir.chdir(dir) do
+    Dir.foreach('debian') do |file|
+      next unless File.extname(file) == '.erb'
+      template =  dir + 'debian' + file
+      target = template.sub(/\.erb$/, '')
+      result = ERB.new(template.read).result(b)
+      File.open(target, 'w') { |f| f.print result }
+      target.chmod(template.stat.mode)
+    end
+
+    FileUtils.rm_f('debian/changelog')
+    system("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
+    system("dch -r '#{changelog_message}'")
+
+    generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib ))
+    generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", prefix, %w( share/doc share/man share/ri ))
+  end
+end
+
+def current_dist
+  `lsb_release -c -s`.chomp
+end
+
+def pbuilder_base(dist)
+  "/var/cache/pbuilder/#{dist}-base.tgz"
+end
+
+def pbuilder_opts(dist, base_tgz)
+  " --distribution #{dist} --components 'main universe multiverse' --basetgz #{base_tgz} --debbuildopts '-j#{`nproc`.chomp}'"
+end
+
+def validate_environment
+  error "could not find debian/ directory" unless Dir.exist?('debian')
+  error "could not find pbuilder (sudo apt-get install pbuilder)" unless system('which pbuilder > /dev/null 2>&1')
+end
+
+validate_environment
+
+opts = GetoptLong.new(
+  [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+  [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--distribution', '-d', GetoptLong::REQUIRED_ARGUMENT ]
+)
+
+outdir = '..'
+sha = nil
+dist = current_dist
+
+opts.each do |opt,arg|
+  case opt
+  when '--help'
+    puts usage
+    exit 0
+  when '--output'
+    p = Pathname.new(Dir.pwd) + arg
+    error "directory #{p} does not exist" unless Dir.exists?(p)
+    outdir = arg
+  when '--distribution'
+    dist = arg
+  end
+end
+
+error 'no ref was specified' if ARGV.length != 1
+sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
+error "invalid ref: #{ARGV[0]}" unless $? == 0
+tag = system("git show-ref --quiet --tags #{ARGV[0]}") ? ARGV[0] : nil
+
+outdir = Pathname.new(Dir.pwd) + outdir
+
+Dir.mktmpdir('shopify-ruby-build') do |tmpdir|
+  system("git archive --format tar --prefix=src/ #{sha} | tar xf - -C #{tmpdir}")
+  src_dir = Pathname.new(tmpdir) + 'src'
+  FileUtils.cp_r("debian", src_dir) unless Dir.exists?("#{src_dir}/debian")
+
+  version, patch_level = get_ruby_version(src_dir)
+  version = parse_tag(tag) if tag
+  setup_debian(src_dir, version, patch_level, dist, tag, sha)
+
+  Dir.chdir(src_dir) do
+    base_tgz = pbuilder_base(dist)
+    popts = pbuilder_opts(dist, base_tgz)
+    unless File.exist?(base_tgz)
+      system("sudo pbuilder --create #{popts}")
+    else
+      system("sudo pbuilder --update #{popts}")
+    end
+
+    system("sudo pdebuild -- #{popts} --buildresult #{outdir}")
+  end
+end
