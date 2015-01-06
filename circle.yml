@@ -1,0 +1,15 @@
+general:
+  artifacts:
+    - "~/pbuilder/result"
+
+dependencies:
+  pre:
+    - mkdir -p ~/pbuilder/cache
+    - mkdir -p ~/pbuilder/result
+    - sudo apt-get install pbuilder
+  cache_directories:
+    - "~/pbuilder/cache"
+
+test:
+  override:
+    - ./debian/shopify-ruby-build -o ~/pbuilder/result -c ~/pbuilder/cache $CIRCLE_SHA1

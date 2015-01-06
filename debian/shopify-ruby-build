@@ -110,10 +110,6 @@ def current_dist
   `lsb_release -c -s`.chomp
 end
 
-def pbuilder_base(dist)
-  "/var/cache/pbuilder/#{dist}-base.tgz"
-end
-
 def pbuilder_opts(dist, base_tgz)
   " --distribution #{dist} --components 'main universe multiverse' --basetgz #{base_tgz} --debbuildopts '-j#{`nproc`.chomp}'"
 end
@@ -128,11 +124,13 @@ validate_environment
 opts = GetoptLong.new(
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
   [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--cachedir', '-c', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--distribution', '-d', GetoptLong::REQUIRED_ARGUMENT ]
 )
 
 outdir = '..'
 sha = nil
+cachedir = Pathname.new('/var/cache/pbuilder')
 dist = current_dist
 
 opts.each do |opt,arg|
@@ -142,8 +140,12 @@ opts.each do |opt,arg|
     exit 0
   when '--output'
     p = Pathname.new(Dir.pwd) + arg
-    error "directory #{p} does not exist" unless Dir.exists?(p)
+    error "directory #{p} does not exist" unless Dir.exist?(p)
     outdir = arg
+  when '--cachedir'
+    p = Pathname.new(Dir.pwd) + arg
+    error "cache directory #{p} does not exist" unless Dir.exist?(p)
+    cachedir = p
   when '--distribution'
     dist = arg
   end
@@ -152,7 +154,8 @@ end
 error 'no ref was specified' if ARGV.length != 1
 sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
 error "invalid ref: #{ARGV[0]}" unless $? == 0
-tag = system("git show-ref --quiet --tags #{ARGV[0]}") ? ARGV[0] : nil
+tag = `git tag --points-at #{sha}`.chomp
+tag = nil if tag.empty?
 
 outdir = Pathname.new(Dir.pwd) + outdir
 
@@ -166,7 +169,7 @@ Dir.mktmpdir('shopify-ruby-build') do |tmpdir|
   setup_debian(src_dir, version, patch_level, dist, tag, sha)
 
   Dir.chdir(src_dir) do
-    base_tgz = pbuilder_base(dist)
+    base_tgz = cachedir + "#{dist}-base.tgz"
     popts = pbuilder_opts(dist, base_tgz)
     unless File.exist?(base_tgz)
       system("sudo pbuilder --create #{popts}")
