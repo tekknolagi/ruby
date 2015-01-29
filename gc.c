@@ -920,7 +920,8 @@ static void heap_page_free(rb_objspace_t *objspace, struct heap_page *page);
 void
 rb_objspace_free(rb_objspace_t *objspace)
 {
-    gc_rest_sweep(objspace);
+    if (is_lazy_sweeping(heap_eden))
+        rb_bug("lazy sweeping underway when freeing object space");
 
     if (objspace->profile.records) {
 	free(objspace->profile.records);
@@ -2255,6 +2256,12 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     st_free_table(finalizer_table);
     finalizer_table = 0;
     ATOMIC_SET(finalizing, 0);
+
+    /*
+     * finish any lazy sweeps that may have been started
+     * when finalizing the objects in the heap
+     */
+    gc_rest_sweep(objspace);
 }
 
 static inline int
