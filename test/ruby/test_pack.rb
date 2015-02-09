@@ -1,5 +1,6 @@
 # coding: US-ASCII
 require 'test/unit'
+require_relative '../ruby/envutil'
 
 class TestPack < Test::Unit::TestCase
   def test_pack
