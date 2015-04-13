@@ -3,6 +3,7 @@ $extmk = true
 require 'test/unit'
 require 'mkmf'
 require 'tmpdir'
+require_relative '../ruby/envutil'
 
 $extout = '$(topdir)/'+RbConfig::CONFIG["EXTOUT"]
 RbConfig::CONFIG['topdir'] = CONFIG['topdir'] = File.expand_path(CONFIG['topdir'])
