@@ -948,6 +948,10 @@ VALUE rb_f_eval(int argc, VALUE *argv, VALUE self);
 DEPRECATED(void rb_frame_pop(void));
 
 
+/* deprecated */
+DEPRECATED(void rb_frame_pop(void));
+
+
 RUBY_SYMBOL_EXPORT_END
 
 #if defined(__cplusplus)
