@@ -86,6 +86,10 @@
 
 TRANS_INIT(single_byte)
 {
+    if (rb_encoding_compat) {
+        rb_from_ASCII_8BIT.conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
+        rb_to_ASCII_8BIT.conv_tree_start = from_UTF_8_COMPAT_to_ASCII_8BIT;
+    }
 <%= transcode_register_code %>
 }
 
