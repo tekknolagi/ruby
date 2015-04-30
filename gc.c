@@ -889,7 +889,8 @@ static void heap_page_free(rb_objspace_t *objspace, struct heap_page *page);
 void
 rb_objspace_free(rb_objspace_t *objspace)
 {
-    gc_rest_sweep(objspace);
+    if (is_lazy_sweeping(heap_eden))
+        rb_bug("lazy sweeping underway when freeing object space");
 
     if (objspace->profile.records) {
 	free(objspace->profile.records);
@@ -2215,6 +2216,12 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     st_free_table(finalizer_table);
     finalizer_table = 0;
     ATOMIC_SET(finalizing, 0);
+
+    /*
+     * finish any lazy sweeps that may have been started
+     * when finalizing the objects in the heap
+     */
+    gc_rest_sweep(objspace);
 }
 
 static inline int
@@ -6413,7 +6420,7 @@ wmap_final_func(st_data_t *key, st_data_t *value, st_data_t arg, int existing)
 	return ST_DELETE;
     }
     if (j < i) {
-	ptr = ruby_sized_xrealloc2(ptr, j, sizeof(VALUE), i);
+	ptr = ruby_sized_xrealloc2(ptr, j + 1, sizeof(VALUE), i);
 	ptr[0] = j;
 	*value = (st_data_t)ptr;
     }

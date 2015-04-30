@@ -942,6 +942,11 @@ VALUE rb_time_succ(VALUE);
 int rb_frame_method_id_and_class(ID *idp, VALUE *klassp);
 VALUE rb_make_backtrace(void);
 VALUE rb_make_exception(int, VALUE*);
+VALUE rb_f_eval(int argc, VALUE *argv, VALUE self);
+
+/* deprecated */
+DEPRECATED(void rb_frame_pop(void));
+
 
 /* vm_eval.c */
 VALUE ruby_eval_string_from_file(const char *str, const char *filename);
