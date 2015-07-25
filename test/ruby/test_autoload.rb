@@ -156,6 +156,31 @@ p Foo::Bar
     }
   end
 
+  def test_require_implemented_in_ruby_is_called
+    kernel = class << Kernel; alias :old_require :require; self; end
+  
+    called_with = []
+    kernel.send :define_method, :require do |path|
+      called_with << path
+      old_require path
+    end
+  
+    Tempfile.create(['autoload', '.rb']) {|file|
+      file.puts 'class AutoloadTest; end'
+      file.close
+      add_autoload(file.path)
+      begin
+        assert(Object::AutoloadTest)
+      ensure
+        remove_autoload_constant
+      end
+      assert_equal [file.path], called_with
+    }
+  
+  ensure
+    class << Kernel; alias :require :old_require; undef :old_require; end
+  end
+
   def add_autoload(path)
     (@autoload_paths ||= []) << path
     eval <<-END
