@@ -52,30 +52,6 @@ script:
   - "make test OPTS=-v"
 #  - "make test-all TESTS='-v'"
 
-# Branch matrix.  Not all branches are Travis-ready so we limit branches here.
-branches:
-  only:
-    - trunk
-    - ruby_1_9_3
-
-# We want to be notified when something happens.
-notifications:
-  irc:
-    channels:
-      - "irc.freenode.org#ruby-core"
-      - "irc.freenode.org#ruby-ja"
-    on_success: change # [always|never|change] # default: always
-    on_failure: change # [always|never|change] # default: always
-    template:
-      - "%{message} by @%{author}: See %{build_url}"
-
-  # Update ruby-head installed on Travis CI so other projects can test against it.
-  webhooks:
-    urls:
-      - "https://rubies.travis-ci.org/rebuild/ruby-head"
-    on_success: always
-    on_failure: never
-
 # Local Variables:
 # mode: YAML
 # coding: utf-8-unix
