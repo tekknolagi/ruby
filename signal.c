@@ -832,6 +832,8 @@ check_stack_overflow(const void *addr)
 # define MESSAGE_FAULT_ADDRESS
 #endif
 
+void * ruby_signal_ctx = NULL;
+
 #if defined SIGSEGV || defined SIGBUS || defined SIGILL || defined SIGFPE
 NOINLINE(static void check_reserved_signal_(const char *name, size_t name_len));
 /* noinine to reduce stack usage in signal handers */
@@ -852,6 +854,7 @@ sigbus(int sig SIGINFO_ARG)
 #if defined __APPLE__ || defined __linux__
     CHECK_STACK_OVERFLOW();
 #endif
+    ruby_signal_ctx = ctx;
     rb_bug_context(SIGINFO_CTX, "Bus Error" MESSAGE_FAULT_ADDRESS);
 }
 #endif
@@ -876,6 +879,7 @@ sigsegv(int sig SIGINFO_ARG)
 {
     check_reserved_signal("SEGV");
     CHECK_STACK_OVERFLOW();
+    ruby_signal_ctx = ctx;
     rb_bug_context(SIGINFO_CTX, "Segmentation fault" MESSAGE_FAULT_ADDRESS);
 }
 #endif
