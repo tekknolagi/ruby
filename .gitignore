@@ -1,4 +1,5 @@
 *-*-*.def
+*.rbo
 *.a
 *.bak
 *.dSYM
