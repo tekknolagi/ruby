@@ -1560,15 +1560,22 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *anchor)
 			}
 		      case TS_CDHASH:
 			{
+			    int i;
 			    VALUE map = operands[j];
 			    struct cdhash_set_label_struct data;
-                            data.hash = map;
-                            data.pos = pos;
-                            data.len = len;
-			    rb_hash_foreach(map, cdhash_set_label_i, (VALUE)&data);
+			    data.hash = map;
+			    data.pos = pos;
+			    data.len = len;
+			    if (RB_TYPE_P(map, T_ARRAY)) {
+				data.hash = rb_hash_new();
+				for (i=0; i<RARRAY_LEN(map); i+=2)
+				    cdhash_set_label_i(RARRAY_AREF(map, i), RARRAY_AREF(map, i+1), &data);
+			    } else {
+				rb_hash_foreach(map, cdhash_set_label_i, (VALUE)&data);
+			    }
 
-			    hide_obj(map);
-			    generated_iseq[pos + 1 + j] = map;
+			    hide_obj(data.hash);
+			    generated_iseq[pos + 1 + j] = data.hash;
 			    break;
 			}
 		      case TS_LINDEX:

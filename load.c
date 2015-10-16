@@ -9,6 +9,8 @@
 #include "eval_intern.h"
 #include "probes.h"
 #include "node.h"
+#include "iseq.h"
+#include "vm_debug.h"
 
 VALUE ruby_dln_librefs;
 
@@ -606,12 +608,25 @@ rb_load_internal0(rb_thread_t *th, VALUE fname, int wrap)
     if (state == 0) {
 	NODE *node;
 	VALUE iseq;
+	VALUE io;
+	VALUE fcname = rb_str_plus(fname, rb_str_new2("o"));
 
-	th->mild_compile_error++;
-	node = (NODE *)rb_load_file_str(fname);
-	loaded = TRUE;
-	iseq = rb_iseq_new_top(node, rb_str_new2("<top (required)>"), fname, rb_realpath_internal(Qnil, fname, 1), Qfalse);
-	th->mild_compile_error--;
+	if (RTEST(rb_funcall(rb_cFile, rb_intern("exist?"), 1, fcname))) {
+	    dpv("loading bytecode from", fcname);
+	    iseq = rb_iseq_load(rb_marshal_load(rb_funcall(rb_cIO, rb_intern("binread"), 1, fcname)), Qnil, Qnil);
+	    loaded = TRUE;
+	} else {
+	    th->mild_compile_error++;
+	    node = (NODE *)rb_load_file_str(fname);
+	    loaded = TRUE;
+	    iseq = rb_iseq_new_top(node, rb_str_new2("<top (required)>"), fname, rb_realpath_internal(Qnil, fname, 1), Qfalse);
+	    th->mild_compile_error--;
+
+	    io = rb_file_open_str(fcname, "w");
+	    rb_marshal_dump(rb_funcall(iseq, rb_intern("to_a"), 0), io);
+	    rb_io_close(io);
+	    dpv("wrote bytecode to", fcname);
+	}
 	rb_iseq_eval(iseq);
     }
     POP_TAG();

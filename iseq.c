@@ -1718,7 +1718,12 @@ iseq_data_to_ary(rb_iseq_t *iseq)
     for (i=0; i<iseq->local_table_size; i++) {
 	ID lid = iseq->local_table[i];
 	if (lid) {
-	    if (rb_id2str(lid)) rb_ary_push(locals, ID2SYM(lid));
+	    if (rb_id2str(lid)) {
+		rb_ary_push(locals, ID2SYM(lid));
+	    }
+	    else { /* hidden variable from id_internal() */
+		rb_ary_push(locals, ULONG2NUM(iseq->local_table_size-i+1));
+	    }
 	}
 	else {
 	    rb_ary_push(locals, ID2SYM(rb_intern("#arg_rest")));
