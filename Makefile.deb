@@ -5,6 +5,9 @@ DISTRO = precise trusty
 all: check-env ruby
 
 check-env:
+ifeq ($(shell gem list package_cloud -i), false)
+	gem install --user-install package_cloud
+endif
 ifndef SHA
 	$(error SHA is undefined)
 else

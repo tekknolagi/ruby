@@ -10,6 +10,10 @@ DEFAULT_DISTRIBUTION = `lsb_release -c -s`.chomp
 DEFAULT_PARALLEL = `nproc`.chomp
 DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..'
 EXTRAPACKAGES="devscripts equivs python-software-properties debhelper autoconf bison ruby libffi-dev build-essential libreadline-dev libssl-dev libyaml-dev zlib1g-dev systemtap-sdt-dev"
+DEFAULT_PACKAGE_SERVER_URL="https://packages.shopify.io/"
+DEFAULT_PACKAGE_CONF="~/packages.shopify.io.conf"
+DEFAULT_PACKAGE_OS="ubuntu"
+DEFAULT_PACKAGE_REPO="shopify/stable"
 
 def usage
 <<-EOF
@@ -34,6 +38,13 @@ Options:
 
   -o, --output <dir>
     Output directory for generated files, defaults to #{DEFAULT_OUTDIR}.
+
+  -u, --url <package_cloud_url>
+    Server URL for Package Cloud, defaults to #{DEFAULT_PACKAGE_SERVER_URL}.
+
+  -r, --repo <reponame>
+    Repository name in Package Cloud, defaults to #{DEFAULT_PACKAGE_REPO}.
+
 
 EOF
 end
@@ -121,12 +132,29 @@ def pbuilder_opts(dist, base_tgz, parallel)
   " --distribution #{dist} --components 'main universe multiverse' --basetgz #{base_tgz} --extrapackages '#{EXTRAPACKAGES}' --debbuildopts '-j#{parallel}'"
 end
 
+def package_cloud_opts(dist, url, repo)
+  "--url '#{url}' --config '#{DEFAULT_PACKAGE_CONF}' '#{repo}/#{DEFAULT_PACKAGE_OS}/#{dist}'"
+end
+
+def push_packages(dist, out_dir, pc_opts)
+  puts Dir.getwd
+  puts out_dir
+  Dir.chdir(out_dir) do
+    Dir.glob("*#{dist}*.deb") do |filename|
+      puts "pushing packages for #{dist}/#{filename}"
+      command = "#{Gem.user_dir}/bin/package_cloud yank #{pc_opts} #{filename}"
+      lines = system(command)
+      run_command("#{Gem.user_dir}/bin/package_cloud push #{pc_opts} #{filename}")
+    end
+  end
+end
+
 def validate_environment
   error "this script is only supported on Linux" unless `uname -s`.chomp == 'Linux'
   error "could not find pbuilder (sudo apt-get install pbuilder)" unless system('which pbuilder > /dev/null 2>&1')
 end
 
-def build_package(dist, sha, debian_dir, cache_dir, out_dir, parallel)
+def build_package(dist, sha, debian_dir, cache_dir, out_dir, parallel, package_cloud_opts)
   tag = `git tag --points-at #{sha}`.chomp
   tag = nil if tag.empty?
 
@@ -149,6 +177,7 @@ def build_package(dist, sha, debian_dir, cache_dir, out_dir, parallel)
       end
 
       run_command("sudo pdebuild --buildresult #{out_dir} -- #{popts}")
+      push_packages(dist, out_dir, package_cloud_opts)
       run_command("sudo rm -rf #{cache_dir}")
     end
   end
@@ -160,7 +189,9 @@ opts = GetoptLong.new(
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
   [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--distribution', '-d', GetoptLong::REQUIRED_ARGUMENT ],
-  [ '--parallel', '-j', GetoptLong::REQUIRED_ARGUMENT ]
+  [ '--parallel', '-j', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--repo', '-r', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--url', '-u', GetoptLong::REQUIRED_ARGUMENT ]
 )
 
 debian_dir = Pathname.new(File.expand_path(File.dirname(__FILE__))) + 'debian'
@@ -168,6 +199,8 @@ out_dir = DEFAULT_OUTDIR
 sha = nil
 dist = [DEFAULT_DISTRIBUTION]
 parallel = DEFAULT_PARALLEL
+package_repo = DEFAULT_PACKAGE_REPO
+package_url = DEFAULT_PACKAGE_SERVER_URL
 
 opts.each do |opt,arg|
   case opt
@@ -182,6 +215,10 @@ opts.each do |opt,arg|
     dist = arg.split(',')
   when '--parallel'
     parallel = Integer(arg)
+  when '--repo'
+    package_repo = arg
+  when '--url'
+    package_url = arg
   end
 end
 
@@ -190,4 +227,7 @@ error 'no ref was specified' if ARGV.length != 1
 sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
 error "invalid ref: #{ARGV[0]}" unless $? == 0
 cache_dir = Dir.mktmpdir('shopify-ruby-build')
-dist.each { |d| build_package(d, sha, debian_dir, cache_dir, out_dir, parallel) }
+dist.each { |d| 
+  pc_opts = package_cloud_opts(d, package_url, package_repo)
+  build_package(d, sha, debian_dir, cache_dir, out_dir, parallel, pc_opts)
+}
