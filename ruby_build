@@ -9,11 +9,6 @@ require 'erb'
 DEFAULT_DISTRIBUTION = `lsb_release -c -s`.chomp
 DEFAULT_PARALLEL = `nproc`.chomp
 DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..'
-EXTRAPACKAGES="devscripts equivs python-software-properties debhelper autoconf bison ruby libffi-dev build-essential libreadline-dev libssl-dev libyaml-dev zlib1g-dev systemtap-sdt-dev"
-DEFAULT_PACKAGE_SERVER_URL="https://packages.shopify.io/"
-DEFAULT_PACKAGE_CONF="~/packages.shopify.io.conf"
-DEFAULT_PACKAGE_OS="ubuntu"
-DEFAULT_PACKAGE_REPO="shopify/stable"
 
 def usage
 <<-EOF
@@ -129,24 +124,7 @@ def current_dist
 end
 
 def pbuilder_opts(dist, base_tgz, parallel)
-  " --distribution #{dist} --components 'main universe multiverse' --basetgz #{base_tgz} --extrapackages '#{EXTRAPACKAGES}' --debbuildopts '-j#{parallel}'"
-end
-
-def package_cloud_opts(dist, url, repo)
-  "--url '#{url}' --config '#{DEFAULT_PACKAGE_CONF}' '#{repo}/#{DEFAULT_PACKAGE_OS}/#{dist}'"
-end
-
-def push_packages(dist, out_dir, pc_opts)
-  puts Dir.getwd
-  puts out_dir
-  Dir.chdir(out_dir) do
-    Dir.glob("*#{dist}*.deb") do |filename|
-      puts "pushing packages for #{dist}/#{filename}"
-      command = "#{Gem.user_dir}/bin/package_cloud yank #{pc_opts} #{filename}"
-      lines = system(command)
-      run_command("#{Gem.user_dir}/bin/package_cloud push #{pc_opts} #{filename}")
-    end
-  end
+  " --distribution #{dist} --basetgz #{base_tgz} --debbuildopts '-j#{parallel} -b -uc -us'"
 end
 
 def validate_environment
@@ -154,7 +132,7 @@ def validate_environment
   error "could not find pbuilder (sudo apt-get install pbuilder)" unless system('which pbuilder > /dev/null 2>&1')
 end
 
-def build_package(dist, sha, debian_dir, cache_dir, out_dir, parallel, package_cloud_opts)
+def build_package(dist, sha, debian_dir, cache_dir, out_dir, base_tgz, parallel)
   tag = `git tag --points-at #{sha}`.chomp
   tag = nil if tag.empty?
 
@@ -168,16 +146,8 @@ def build_package(dist, sha, debian_dir, cache_dir, out_dir, parallel, package_c
     setup_debian(src_dir, version, patch_level, dist, tag, sha)
 
     Dir.chdir(src_dir) do
-      base_tgz = cache_dir + "/#{dist}-base.tgz"
       popts = pbuilder_opts(dist, base_tgz, parallel)
-      unless File.exist?(base_tgz)
-        run_command("sudo pbuilder --create #{popts}")
-      else
-        run_command("sudo pbuilder --update #{popts}")
-      end
-
-      run_command("sudo pdebuild --buildresult #{out_dir} -- #{popts}")
-      push_packages(dist, out_dir, package_cloud_opts)
+      run_command("pdebuild --buildresult #{out_dir} -- #{popts}")
       run_command("sudo rm -rf #{cache_dir}")
     end
   end
@@ -190,8 +160,6 @@ opts = GetoptLong.new(
   [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--distribution', '-d', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--parallel', '-j', GetoptLong::REQUIRED_ARGUMENT ],
-  [ '--repo', '-r', GetoptLong::REQUIRED_ARGUMENT ],
-  [ '--url', '-u', GetoptLong::REQUIRED_ARGUMENT ]
 )
 
 debian_dir = Pathname.new(File.expand_path(File.dirname(__FILE__))) + 'debian'
@@ -199,8 +167,7 @@ out_dir = DEFAULT_OUTDIR
 sha = nil
 dist = [DEFAULT_DISTRIBUTION]
 parallel = DEFAULT_PARALLEL
-package_repo = DEFAULT_PACKAGE_REPO
-package_url = DEFAULT_PACKAGE_SERVER_URL
+basetgz = nil
 
 opts.each do |opt,arg|
   case opt
@@ -209,16 +176,12 @@ opts.each do |opt,arg|
     exit 0
   when '--output'
     p = Pathname.new(Dir.pwd) + arg
-    error "directory #{p} does not exist" unless Dir.exist?(p)
+    FileUtils.mkdir_p("#{p}") unless Dir.exist?(p)
     out_dir = p
   when '--distribution'
     dist = arg.split(',')
   when '--parallel'
     parallel = Integer(arg)
-  when '--repo'
-    package_repo = arg
-  when '--url'
-    package_url = arg
   end
 end
 
@@ -228,6 +191,6 @@ sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
 error "invalid ref: #{ARGV[0]}" unless $? == 0
 cache_dir = Dir.mktmpdir('shopify-ruby-build')
 dist.each { |d| 
-  pc_opts = package_cloud_opts(d, package_url, package_repo)
-  build_package(d, sha, debian_dir, cache_dir, out_dir, parallel, pc_opts)
+  basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
+  build_package(d, sha, debian_dir, cache_dir, out_dir, basetgz, parallel)
 }
