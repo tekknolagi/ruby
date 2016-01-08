@@ -1,0 +1,20 @@
+DISTRO = precise trusty
+
+.PHONY: ruby all $(DISTRO) check-env
+
+all: check-env ruby
+
+check-env:
+ifeq ($(shell gem list package_cloud -i), false)
+	gem install --user-install package_cloud
+endif
+ifndef SHA
+	$(error SHA is undefined)
+else
+	echo Building SHA=$(SHA)
+endif
+
+ruby: check-env $(DISTRO)
+
+$(DISTRO): check-env
+	./ruby_build -d $@ $(SHA)
