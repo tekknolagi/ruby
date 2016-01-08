@@ -434,9 +434,11 @@ rb_vmdebug_thread_dump_state(VALUE self)
 
 #if defined(HAVE_BACKTRACE)
 # ifdef HAVE_LIBUNWIND
-#  undef backtrace
-#  define backtrace unw_backtrace
-# elif defined(__APPLE__) && defined(__x86_64__) && defined(HAVE_LIBUNWIND_H)
+#  if !defined(__linux__)
+#    undef backtrace
+#    define backtrace unw_backtrace
+#  endif
+# elif defined(__APPLE__) && defined(__x86_64__)
 #  define UNW_LOCAL_ONLY
 #  include <libunwind.h>
 #  undef backtrace
@@ -684,6 +686,8 @@ dump_thread(void *arg)
 }
 #endif
 
+extern void * ruby_signal_ctx;
+
 void
 rb_print_backtrace(void)
 {
@@ -691,18 +695,23 @@ rb_print_backtrace(void)
 #define MAX_NATIVE_TRACE 1024
     static void *trace[MAX_NATIVE_TRACE];
     int n = backtrace(trace, MAX_NATIVE_TRACE);
-#if defined(USE_ELF) && defined(HAVE_DLADDR)
-    rb_dump_backtrace_with_lines(n, trace);
-#else
-    char **syms = backtrace_symbols(trace, n);
-    if (syms) {
-	int i;
-	for (i=0; i<n; i++) {
-	    fprintf(stderr, "%s\n", syms[i]);
+    if (ruby_signal_ctx) {
+	backtrace_symbols_fd(trace, n, STDERR_FILENO);
+    } else {
+	char **syms = backtrace_symbols(trace, n);
+
+	if (syms) {
+# ifdef USE_ELF
+	    rb_dump_backtrace_with_lines(n, trace);
+# else
+	    int i;
+	    for (i=0; i<n; i++) {
+		fprintf(stderr, "%s\n", syms[i]);
+	    }
+# endif
+	    free(syms);
 	}
-	free(syms);
     }
-#endif
 #elif defined(_WIN32)
     DWORD tid = GetCurrentThreadId();
     HANDLE th = (HANDLE)_beginthread(dump_thread, 0, &tid);
