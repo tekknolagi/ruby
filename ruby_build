@@ -139,7 +139,7 @@ def build_package(dist, sha, debian_dir, cache_dir, out_dir, base_tgz, parallel)
   begin
     run_command("git archive --format tar --prefix=src/ #{sha} | tar xf - -C #{cache_dir}")
     src_dir = Pathname.new(cache_dir) + 'src'
-    FileUtils.cp_r(debian_dir, src_dir, :remove_destination => true)
+    system("cp -nr #{debian_dir} #{src_dir}")
 
     version, patch_level = get_ruby_version(src_dir)
     version = parse_tag(tag) if tag
