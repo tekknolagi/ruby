@@ -144,6 +144,10 @@ rb_gc_guarded_ptr_val(volatile VALUE *ptr, VALUE val)
 #define GC_OLDMALLOC_LIMIT_MAX (128 * 1024 * 1024 /* 128MB */)
 #endif
 
+#ifndef GC_FORK_PROMOTE
+#define GC_FORK_PROMOTE (0)
+#endif
+
 #ifndef PRINT_MEASURE_LINE
 #define PRINT_MEASURE_LINE 0
 #endif
@@ -169,6 +173,7 @@ typedef struct {
     size_t oldmalloc_limit_min;
     size_t oldmalloc_limit_max;
     double oldmalloc_limit_growth_factor;
+    size_t fork_promote;
     VALUE gc_stress;
 } ruby_gc_params_t;
 
@@ -184,6 +189,7 @@ static ruby_gc_params_t gc_params = {
     GC_OLDMALLOC_LIMIT_MIN,
     GC_OLDMALLOC_LIMIT_MAX,
     GC_OLDMALLOC_LIMIT_GROWTH_FACTOR,
+    GC_FORK_PROMOTE,
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
     FALSE,
 #endif
@@ -487,6 +493,7 @@ typedef struct rb_objspace {
 
     struct {
 	rb_atomic_t finalizing;
+	rb_atomic_t fork_need_promote;
     } atomic_flags;
 
     struct mark_func_data_struct {
@@ -691,6 +698,7 @@ VALUE *ruby_initial_gc_stress_ptr = &ruby_initial_gc_stress;
 #define dont_gc 		objspace->flags.dont_gc
 #define during_gc		objspace->flags.during_gc
 #define finalizing		objspace->atomic_flags.finalizing
+#define fork_need_promote	objspace->atomic_flags.fork_need_promote
 #define finalizer_table 	objspace->finalizer_table
 #define global_list		objspace->global_list
 #define ruby_gc_stressful	objspace->flags.gc_stressful
@@ -1094,7 +1102,7 @@ RVALUE_AGE_INC(rb_objspace_t *objspace, VALUE obj)
 	rb_bug("RVALUE_AGE_INC: can not increment age of OLD object %s.", obj_info(obj));
     }
 
-    age++;
+    age = (fork_need_promote ? RVALUE_OLD_AGE : age+1);
     RBASIC(obj)->flags = RVALUE_FLAGS_AGE_SET(flags, age);
 
     if (age == RVALUE_OLD_AGE) {
@@ -6208,6 +6216,21 @@ rb_gc(void)
     if (!finalizing) finalize_deferred(objspace);
 }
 
+void
+rb_gc_fork_promote(void)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    int prev_dont_gc = dont_gc;
+    if (gc_params.fork_promote == 0) {
+      return;
+    }
+    ATOMIC_SET(fork_need_promote, 1);
+    dont_gc = FALSE;
+    garbage_collect(objspace, FALSE, TRUE, TRUE, GPR_FLAG_CAPI);
+    dont_gc = prev_dont_gc;
+    ATOMIC_SET(fork_need_promote, 0);
+}
+
 int
 rb_during_gc(void)
 {
@@ -7037,6 +7060,7 @@ ruby_gc_set_params(int safe_level)
     get_envparam_size  ("RUBY_GC_OLDMALLOC_LIMIT_MAX", &gc_params.oldmalloc_limit_max, 0);
     get_envparam_double("RUBY_GC_OLDMALLOC_LIMIT_GROWTH_FACTOR", &gc_params.oldmalloc_limit_growth_factor, 1.0);
 #endif
+    get_envparam_size  ("GC_FORK_PROMOTE", &gc_params.fork_promote, 0);
 }
 
 void

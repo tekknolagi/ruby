@@ -3678,6 +3678,7 @@ rb_f_fork(VALUE obj)
 
     rb_secure(2);
 
+    rb_gc_fork_promote();
     switch (pid = rb_fork_ruby(NULL)) {
       case 0:
 	rb_thread_atfork();
