@@ -1,0 +1,9 @@
+deploy:
+  override:
+    - make -f Makefile.pbuilder
+    - find "\`pwd\`" -name "*.deb"
+    - echo [TODO] actually deploy to packagecloud here"
+
+ci:
+  hide:
+    - ci/circleci
