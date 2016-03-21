@@ -1,8 +1,11 @@
 deploy:
   override:
-    - make -f Makefile.pbuilder
-    - find "\`pwd\`" -name "*.deb"
-    - echo [TODO] actually deploy to packagecloud here"
+    - SHA=`cat build.version` make -f Makefile.pbuilder
+    - |
+      for DISTRO in $(ls artifacts)
+      do
+        upload_to_packagecloud.sh $DISTRO $(ls artifacts/$DISTRO/*.deb)
+      done
 
 ci:
   hide:

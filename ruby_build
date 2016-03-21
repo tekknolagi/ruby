@@ -148,7 +148,7 @@ def build_package(dist, sha, debian_dir, cache_dir, out_dir, base_tgz, parallel)
     Dir.chdir(src_dir) do
       popts = pbuilder_opts(dist, base_tgz, parallel)
       run_command("pdebuild --buildresult #{out_dir} -- #{popts}")
-      run_command("sudo rm -rf #{cache_dir}")
+      run_command("rm -rf #{cache_dir}")
     end
   end
 end
@@ -190,7 +190,7 @@ error 'no ref was specified' if ARGV.length != 1
 sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
 error "invalid ref: #{ARGV[0]}" unless $? == 0
 cache_dir = Dir.mktmpdir('shopify-ruby-build')
-dist.each { |d| 
+dist.each { |d|
   basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
   build_package(d, sha, debian_dir, cache_dir, out_dir, basetgz, parallel)
 }
