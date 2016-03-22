@@ -1,4 +1,5 @@
 #!/bin/bash
+set -xeuo pipefail
 
 SHA=`cat build.version` make -f Makefile.pbuilder
 ls artifacts/*
