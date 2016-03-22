@@ -10,3 +10,4 @@ deploy:
 ci:
   hide:
     - ci/circleci
+    - continuous-integration/travis-ci/push
