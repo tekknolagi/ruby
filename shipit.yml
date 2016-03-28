@@ -1,6 +1,6 @@
 deploy:
   override:
-    - ./deploy.sh
+    - do_pbuilder_deploy.sh
 
 ci:
   hide:
