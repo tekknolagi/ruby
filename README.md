@@ -10,3 +10,4 @@ To deploy:
 Deploy it using the web UI - it will build, test, and upload `.deb`s to [PackageCloud](https://packages.shopify.io/).
 
 For more context, read the [codelab](https://github.com/Shopify/codelabs/tree/master/building_a_new_ruby_version).
+Also, see the [codelab](https://github.com/Shopify/codelabs/tree/master/deploying_debs_with_pbuilder_and_shipit) on pbuilder.
