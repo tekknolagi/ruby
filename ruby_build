@@ -76,9 +76,9 @@ def get_major_minor(version)
   $1
 end
 
-def generate_debian_install_files(target, files)
+def generate_debian_install_files(target, prefix, files)
   File.open(target, 'w') do |t|
-    files.each { |f| t.puts(f) }
+    files.each { |f| t.puts(prefix + f) }
   end
 end
 
@@ -88,6 +88,7 @@ DEBIAN_PACKAGING_VERSION = 0
 def setup_debian(dir, version, patch_level, dist, tag, sha)
   major_minor = get_major_minor(version)
   version = "#{version}-dev" unless tag
+  prefix = Pathname.new('/usr')
   ruby_lib_version = "#{major_minor}.0"
   debian_version = "#{DEBIAN_PACKAGING_VERSION}+p#{patch_level}"
   debian_version << "+#{sha[0..7]}" unless tag
@@ -113,8 +114,8 @@ def setup_debian(dir, version, patch_level, dist, tag, sha)
     run_command("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
     run_command("dch -r '#{changelog_message}'")
 
-    generate_debian_install_files("debian/shopify-ruby-#{version}.install", %w( bin include lib ))
-    generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", %w( usr/share/doc usr/share/man usr/share/ri ))
+    generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib ))
+    generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", prefix, %w( share/doc share/man share/ri ))
   end
 end
 
