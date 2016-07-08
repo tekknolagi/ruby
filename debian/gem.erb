@@ -5,11 +5,11 @@ require 'rubygems/gem_runner'
 require 'rubygems/exceptions'
 
 def Gem.ruby
-  "<%= prefix %>/bin/ruby"
+  /bin/ruby"
 end
 
 def Gem.bindir(*args)
-  "#{Dir.pwd}/debian/tmp<%= prefix %>/bin"
+  "#{Dir.pwd}/debian/tmp/bin"
 end
 
 args = ARGV.clone
