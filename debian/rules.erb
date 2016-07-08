@@ -28,4 +28,4 @@ override_dh_strip:
 	dh_strip $(DH_FLAGS) -X bin/ruby
 
 override_dh_install:
-	dh_install $(DH_FLAGS) --fail-missing
+	dh_install $(DH_FLAGS) --fail-missing --destdir "$(DESTDIR)"
