@@ -9,7 +9,7 @@ export DH_OPTIONS
 
 ROOT=$(shell pwd)
 DESTDIR=$(ROOT)/debian/tmp
-RUBY_LIB_DIR=$(DESTDIR)/lib/ruby/<%= ruby_lib_version %>
+RUBY_LIB_DIR=$(DESTDIR)/usr/lib/ruby/<%= ruby_lib_version %>
 RUBYLIB="$(RUBY_LIB_DIR):$(RUBY_LIB_DIR)/$(shell uname -m)-linux"
 DH_FLAGS=-O--parallel
 
