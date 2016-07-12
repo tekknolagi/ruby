@@ -3,9 +3,17 @@
 
 set -e
 
-for name in default; do
-	if [ ! -L /usr/lib/shopify-ruby/$name ]; then
-		echo "Setting $name shopify-ruby: <%= version %>"
-		ln -s "<%= prefix %>" /usr/lib/shopify-ruby/$name || true
-	fi
-done
+<%=
+  MASTER_BINARY = 'ruby'
+  IMPORTANT_BINARIES = %w(jruby irb gem ri rdoc erb rake rails)
+  SHIMS = %w(shopify-ruby bundle)
+
+  "update-alternatives --install \n" +
+    "  /usr/bin/#{MASTER_BINARY} #{MASTER_BINARY} #{prefix}/bin/#{MASTER_BINARY} 1 \\\n" +
+    IMPORTANT_BINARIES.map do |b|
+      "  --slave /usr/bin/#{b} #{b} #{prefix}/bin/#{b} \\\n"
+    end.join("") +
+    SHIMS.map do |shim|
+      "  --slave /usr/bin/#{shim} #{shim} #{prefix}/shims/#{shim} \\\n"
+    end.join("")
+%>
