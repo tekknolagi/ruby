@@ -1,0 +1,6 @@
+#!/bin/bash
+
+COMMAND=$1
+shift
+
+"/usr/lib/shopify-ruby/default/bin/$COMMAND" $@
