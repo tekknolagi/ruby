@@ -114,7 +114,7 @@ def setup_debian(dir, version, patch_level, dist, tag, sha)
     run_command("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
     run_command("dch -r '#{changelog_message}'")
 
-    generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib ))
+    generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib shims ))
     generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", prefix, %w( share/doc share/man share/ri ))
   end
 end
