@@ -15,5 +15,5 @@ all: ruby
 
 ruby: $(DISTRO)
 
-$(DISTRO): 
-	./ruby_build -d $@ $(shell cat build.version) --output $(OUTDIR)/$@
+$(DISTRO):
+	./ruby_build -d $@ --output $(OUTDIR)/$@

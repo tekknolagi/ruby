@@ -5,19 +5,15 @@ require 'pathname'
 require 'tmpdir'
 require 'fileutils'
 require 'erb'
+require 'yaml'
+require 'ostruct'
 
-DEFAULT_DISTRIBUTION = `lsb_release -c -s`.chomp
 DEFAULT_PARALLEL = `nproc`.chomp
 DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..'
 
 def usage
 <<-EOF
-Usage: build [-d dist] [-c <dir>] [-j <workers>] [-o <dir>] <ref>
-
-ref is either a tag or a commit. If a tag is specified, a shopify-ruby package
-will be built for that version, for example, if v2_2_0 is provided, a new
-package will be built, shopify-ruby-2.2.0. If the ref is a commit, a dev
-package will be built.
+Usage: build [-d dist] [-c <dir>] [-j <workers>] [-o <dir>]
 
 Options:
 
@@ -33,46 +29,56 @@ Options:
 
   -o, --output <dir>
     Output directory for generated files, defaults to #{DEFAULT_OUTDIR}.
-
-  -u, --url <package_cloud_url>
-    Server URL for Package Cloud, defaults to #{DEFAULT_PACKAGE_SERVER_URL}.
-
-  -r, --repo <reponame>
-    Repository name in Package Cloud, defaults to #{DEFAULT_PACKAGE_REPO}.
-
-
 EOF
-end
-
-class BuildError < StandardError; end
-
-def error(msg)
-  raise BuildError.new(msg)
 end
 
 def run_command(cmd)
   system(cmd)
-  error "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
+  raise "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
+end
+
+def configure_ruby(src_dir)
+  ruby = OpenStruct.new
+  ruby.version, ruby.patch_level = get_ruby_version(src_dir)
+  ruby.lib_version = "#{get_major_minor(ruby.version)}.0"
+  ruby
+end
+
+def configure_package(ruby)
+  build = YAML.load_file('build.yml')
+
+  package = OpenStruct.new
+  package.name = "shopify-ruby-#{ruby.version}"
+  package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
+  package.doc_name = package.name + '-doc'
+  package.provides = "shopify-ruby-any, shopify-ruby-#{ruby.major_minor}"
+  package.prefix = Pathname.new('/usr/lib/shopify-ruby') + package.name
+  package.version = build['package-version']
+  package.description =
+    "#{package.name}, providing Ruby #{ruby.version}p#{ruby.patch_level}, possibly with Shopify-specific modifications. " \
+    "Built via pbuilder at #{Time.now} from ref #{build['ref']}. Memo: #{build['memo']}"
+  package.doc_description = "Documentation for #{package.description}"
+  package.changelog = package.description
+
+  # Later versions have a higher priority than earlier versions, for easier upgrades
+  package.priority = ruby.version.split('.').map(&:to_i).inject { |v, i| 100 * v + i }
+
+  package
 end
 
 def get_ruby_version(dir)
-  error "version.h does not exist in #{dir}" unless File.exist?(dir + 'version.h')
+  raise "version.h does not exist in #{dir}" unless File.exist?(dir + 'version.h')
   version = nil
   patch_level = nil
   version_file = File.read(dir + 'version.h')
   version = $1 if version_file.match(/RUBY_VERSION\s\"(\d+\.\d+\.\d+)\"\s*$/m)
   patch_level = $1 if version_file.match(/RUBY_PATCHLEVEL\s(\d+)\s*$/m)
-  error "version.h is missing ruby version and/or patch level" unless version && patch_level
+  raise "version.h is missing ruby version and/or patch level" unless version && patch_level
   [version, patch_level]
 end
 
-def parse_tag(tag)
-  error "cannot parse tag #{tag}" unless /^v(\d+)[-_\.](\d+)[-_\.](\d+)[-_]?(\w+)?$/.match(tag)
-  "#{$1}.#{$2}.#{$3}#{$4 ? '-' : ''}#{$4}"
-end
-
 def get_major_minor(version)
-  error "cannot parse version #{version}" unless /^(\d+\.\d+)/.match(version)
+  raise "cannot parse version #{version}" unless /^(\d+\.\d+)/.match(version)
   $1
 end
 
@@ -82,28 +88,15 @@ def generate_debian_install_files(target, prefix, files)
   end
 end
 
-# Increment this value whenever any packaging options change
-DEBIAN_PACKAGING_VERSION = 0
-
-def setup_debian(dir, version, patch_level, dist, tag, sha)
-  major_minor = get_major_minor(version)
-  version = "#{version}-dev" unless tag
-  prefix = Pathname.new('/usr/lib/shopify-ruby') + version
-  ruby_lib_version = "#{major_minor}.0"
-  debian_version = "#{DEBIAN_PACKAGING_VERSION}+p#{patch_level}"
-  debian_version << "+#{sha[0..7]}" unless tag
-  changelog_message = unless tag
-    "Snapshot of git commit #{sha}"
-  else
-    "Ruby #{version}p#{patch_level} (git: #{tag})"
-  end
-
+def setup_debian(src_dir, dist, ref)
+  ruby = configure_ruby(src_dir)
+  package = configure_package(ruby)
   b = binding
 
-  Dir.chdir(dir) do
+  Dir.chdir(src_dir) do
     Dir.foreach('debian') do |file|
       next unless File.extname(file) == '.erb'
-      template =  dir + 'debian' + file
+      template = src_dir + 'debian' + file
       target = template.sub(/\.erb$/, '')
       result = ERB.new(template.read).result(b)
       File.open(target, 'w') { |f| f.print result }
@@ -111,49 +104,31 @@ def setup_debian(dir, version, patch_level, dist, tag, sha)
     end
 
     FileUtils.rm_f('debian/changelog')
-    run_command("dch --create --package shopify-ruby-#{version} -v '#{debian_version}~#{dist}' --force-distribution -D #{dist} '#{changelog_message}'")
-    run_command("dch -r '#{changelog_message}'")
+    run_command("dch --create --package #{package.name} -v '#{package.version}~#{dist}' --force-distribution -D #{dist} '#{package.changelog}'")
+    run_command("dch -r '#{package.changelog}'")
 
-    generate_debian_install_files("debian/shopify-ruby-#{version}.install", prefix, %w( bin include lib shims ))
-    generate_debian_install_files("debian/shopify-ruby-#{version}-doc.install", prefix, %w( share/doc share/man share/ri ))
+    generate_debian_install_files("debian/#{package.name}.install", package.prefix, %w( bin include lib shims ))
+    generate_debian_install_files("debian/#{package.doc_name}.install", package.prefix, %w( share/doc share/man share/ri ))
   end
-end
-
-def current_dist
-  `lsb_release -c -s`.chomp
 end
 
 def pbuilder_opts(dist, base_tgz, parallel)
   " --distribution #{dist} --basetgz #{base_tgz} --debbuildopts '-j#{parallel} -b -uc -us'"
 end
 
-def validate_environment
-  error "this script is only supported on Linux" unless `uname -s`.chomp == 'Linux'
-  error "could not find pbuilder (sudo apt-get install pbuilder)" unless system('which pbuilder > /dev/null 2>&1')
-end
+def build_package(dist, ref, debian_dir, cache_dir, out_dir, base_tgz, parallel)
+  run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
+  src_dir = Pathname.new(cache_dir) + 'src'
+  system("cp -nr #{debian_dir} #{src_dir}")
 
-def build_package(dist, sha, debian_dir, cache_dir, out_dir, base_tgz, parallel)
-  tag = `git tag --points-at #{sha}`.chomp
-  tag = nil if tag.empty?
+  setup_debian(src_dir, dist, ref)
 
-  begin
-    run_command("git archive --format tar --prefix=src/ #{sha} | tar xf - -C #{cache_dir}")
-    src_dir = Pathname.new(cache_dir) + 'src'
-    system("cp -nr #{debian_dir} #{src_dir}")
-
-    version, patch_level = get_ruby_version(src_dir)
-    version = parse_tag(tag) if tag
-    setup_debian(src_dir, version, patch_level, dist, tag, sha)
-
-    Dir.chdir(src_dir) do
-      popts = pbuilder_opts(dist, base_tgz, parallel)
-      run_command("pdebuild --buildresult #{out_dir} -- #{popts}")
-      run_command("rm -rf #{cache_dir}")
-    end
+  Dir.chdir(src_dir) do
+    popts = pbuilder_opts(dist, base_tgz, parallel)
+    run_command("pdebuild --buildresult #{out_dir} -- #{popts}")
+    run_command("rm -rf #{cache_dir}")
   end
 end
-
-validate_environment
 
 opts = GetoptLong.new(
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
@@ -164,8 +139,7 @@ opts = GetoptLong.new(
 
 debian_dir = Pathname.new(File.expand_path(File.dirname(__FILE__))) + 'debian'
 out_dir = DEFAULT_OUTDIR
-sha = nil
-dist = [DEFAULT_DISTRIBUTION]
+dist = nil
 parallel = DEFAULT_PARALLEL
 basetgz = nil
 
@@ -185,12 +159,11 @@ opts.each do |opt,arg|
   end
 end
 
-error 'no ref was specified' if ARGV.length != 1
+raise 'No distro specified' unless dist
 
-sha = `git rev-parse --quiet --verify #{ARGV[0]}`.chomp
-error "invalid ref: #{ARGV[0]}" unless $? == 0
+ref = YAML.load_file('build.yml')['ref']
 cache_dir = Dir.mktmpdir('shopify-ruby-build')
 dist.each { |d|
   basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
-  build_package(d, sha, debian_dir, cache_dir, out_dir, basetgz, parallel)
+  build_package(d, ref, debian_dir, cache_dir, out_dir, basetgz, parallel)
 }

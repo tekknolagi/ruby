@@ -1,6 +1,6 @@
 # vim: ft=debcontrol
 # no empty line before Source: pbuilder bug :-( https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=741227
-Source: shopify-ruby-<%= version %>
+Source: <%= package.name %>
 Section: ruby
 Priority: optional
 Maintainer: Shopify Ops <ops@shopify.com>
@@ -10,16 +10,14 @@ Homepage: https://github.com/Shopify/ruby
 Vcs-Git: git://github.com/Shopify/ruby.git
 Vcs-Browser: https://github.com/Shopify/ruby
 
-Package: shopify-ruby-<%= version %>
+Package: <%= package.name %>
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Conflicts: shopify-ruby
-Provides: shopify-ruby-any, shopify-ruby-<%= major_minor %>
-Suggests: shopify-ruby-<%= version %>-doc
-Description: Ruby <%= version %> for Shopify servers
- Built using shopify-ruby-build.
+Provides: <%= package.provides %>
+Suggests: <%= package.doc_name %>
+Description: <%= package.description %>
 
-Package: shopify-ruby-<%= version %>-doc
+Package: <%= package.doc_name %>
 Architecture: any
-Description: Ruby <%= version %> for Shopify servers (documentation)
- Built using shopify-ruby-build.
+Description: <%= package.doc_description %>

@@ -9,11 +9,11 @@ set -e
   SHIMS = %w(shopify-ruby bundle)
 
   "update-alternatives --install \n" +
-    "  /usr/bin/#{MASTER_BINARY} #{MASTER_BINARY} #{prefix}/bin/#{MASTER_BINARY} 1 \\\n" +
+    "  /usr/bin/#{MASTER_BINARY} #{MASTER_BINARY} #{package.prefix}/bin/#{MASTER_BINARY} #{package.priority} \\\n" +
     IMPORTANT_BINARIES.map do |b|
-      "  --slave /usr/bin/#{b} #{b} #{prefix}/bin/#{b} \\\n"
+      "  --slave /usr/bin/#{b} #{b} #{package.prefix}/bin/#{b} \\\n"
     end.join("") +
     SHIMS.map do |shim|
-      "  --slave /usr/bin/#{shim} #{shim} #{prefix}/shims/#{shim} \\\n"
+      "  --slave /usr/bin/#{shim} #{shim} #{package.prefix}/shims/#{shim} \\\n"
     end.join("")
 %>
