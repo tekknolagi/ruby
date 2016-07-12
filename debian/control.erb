@@ -13,7 +13,7 @@ Vcs-Browser: https://github.com/Shopify/ruby
 Package: shopify-ruby-<%= version %>
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Recommends: shopify-ruby
+Conflicts: shopify-ruby
 Provides: shopify-ruby-any, shopify-ruby-<%= major_minor %>
 Suggests: shopify-ruby-<%= version %>-doc
 Description: Ruby <%= version %> for Shopify servers
