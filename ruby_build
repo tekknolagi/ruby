@@ -48,7 +48,7 @@ def configure_package(ruby)
   build = YAML.load_file('build.yml')
 
   package = OpenStruct.new
-  package.name = "shopify-ruby-#{ruby.version}"
+  package.name = "shopify-ruby-wrapperless-#{ruby.version}"
   package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
   package.doc_name = package.name + '-doc'
   package.provides = "shopify-ruby-any, shopify-ruby-#{ruby.major_minor}"

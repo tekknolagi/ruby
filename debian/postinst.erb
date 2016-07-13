@@ -8,7 +8,7 @@ set -e
   IMPORTANT_BINARIES = %w(jruby irb gem ri rdoc erb rake rails)
   SHIMS = %w(shopify-ruby bundle)
 
-  "update-alternatives --install \n" +
+  "update-alternatives --install \\\n" +
     "  /usr/bin/#{MASTER_BINARY} #{MASTER_BINARY} #{package.prefix}/bin/#{MASTER_BINARY} #{package.priority} \\\n" +
     IMPORTANT_BINARIES.map do |b|
       "  --slave /usr/bin/#{b} #{b} #{package.prefix}/bin/#{b} \\\n"
