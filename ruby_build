@@ -94,9 +94,8 @@ def setup_debian(src_dir, dist, ref)
   b = binding
 
   Dir.chdir(src_dir) do
-    Dir.foreach('debian') do |file|
-      next unless File.extname(file) == '.erb'
-      template = src_dir + 'debian' + file
+    Dir.glob('debian/**/*.erb') do |filename|
+      template = src_dir + filename
       target = template.sub(/\.erb$/, '')
       result = ERB.new(template.read).result(b)
       File.open(target, 'w') { |f| f.print result }

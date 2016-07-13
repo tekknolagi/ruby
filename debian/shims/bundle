@@ -1,2 +1,0 @@
-#!/bin/bash
-PATH=/usr/lib/shopify-ruby/default/bin:$PATH /usr/lib/shopify-ruby/default/bin/bundle $@
