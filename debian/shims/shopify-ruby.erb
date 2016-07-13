@@ -3,4 +3,4 @@
 COMMAND=$1
 shift
 
-"<%= package.prefix %>/bin/$COMMAND" $@
+exec "<%= package.prefix %>/bin/$COMMAND" $@
