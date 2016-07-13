@@ -119,7 +119,8 @@ end
 def build_package(dist, ref, debian_dir, cache_dir, out_dir, base_tgz, parallel)
   run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
   src_dir = Pathname.new(cache_dir) + 'src'
-  system("cp -nr #{debian_dir} #{src_dir}")
+  run_command("rm -rf #{src_dir}/debian")
+  run_command("cp -nr #{debian_dir} #{src_dir}")
 
   setup_debian(src_dir, dist, ref)
 
