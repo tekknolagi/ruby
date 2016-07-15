@@ -51,7 +51,8 @@ def configure_package(ruby)
   package.name = "shopify-ruby-wrapperless-#{ruby.version}"
   package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
   package.doc_name = package.name + '-doc'
-  package.provides = "shopify-ruby-any, shopify-ruby-#{ruby.major_minor}"
+  package.provides = "shopify-ruby-wrapperless-any, shopify-ruby-wrapperless-#{ruby.major_minor}"
+  package.conflict = "shopify-ruby, shopify-ruby-any"
   package.prefix = Pathname.new('/usr/lib/shopify-ruby') + package.name
   package.version = build['package-version']
   package.description =
