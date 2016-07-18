@@ -44,7 +44,7 @@ def configure_ruby(src_dir)
   ruby
 end
 
-def configure_package(ruby)
+def configure_package(build, ruby)
   package = OpenStruct.new
   package.name = "ruby-shopify-#{ruby.version}"
   package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
@@ -87,9 +87,9 @@ def generate_debian_install_files(target, prefix, files)
   end
 end
 
-def setup_debian(src_dir, dist, ref)
+def setup_debian(src_dir, dist, build)
   ruby = configure_ruby(src_dir)
-  package = configure_package(ruby)
+  package = configure_package(build, ruby)
   b = binding
 
   Dir.chdir(src_dir) do
@@ -114,13 +114,15 @@ def pbuilder_opts(dist, base_tgz, parallel)
   " --distribution #{dist} --basetgz #{base_tgz} --debbuildopts '-j#{parallel} -b -uc -us'"
 end
 
-def build_package(dist, ref, debian_dir, cache_dir, out_dir, base_tgz, parallel)
+def build_package(dist, build, debian_dir, cache_dir, out_dir, base_tgz, parallel)
+  ref = build['ref']
+
   run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
   src_dir = Pathname.new(cache_dir) + 'src'
   run_command("rm -rf #{src_dir}/debian")
   run_command("cp -nr #{debian_dir} #{src_dir}")
 
-  setup_debian(src_dir, dist, ref)
+  setup_debian(src_dir, dist, build)
 
   Dir.chdir(src_dir) do
     popts = pbuilder_opts(dist, base_tgz, parallel)
@@ -160,9 +162,10 @@ end
 
 raise 'No distro specified' unless dist
 
-ref = YAML.load_file('build.yml')['ref']
+build = YAML.load_file('build.yml')
+
 cache_dir = Dir.mktmpdir('ruby-build')
 dist.each { |d|
   basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
-  build_package(d, ref, debian_dir, cache_dir, out_dir, basetgz, parallel)
+  build_package(d, build, debian_dir, cache_dir, out_dir, basetgz, parallel)
 }
