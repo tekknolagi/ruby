@@ -45,15 +45,13 @@ def configure_ruby(src_dir)
 end
 
 def configure_package(ruby)
-  build = YAML.load_file('build.yml')
-
   package = OpenStruct.new
-  package.name = "shopify-ruby-wrapperless-#{ruby.version}"
+  package.name = "ruby-shopify-#{ruby.version}"
   package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
   package.doc_name = package.name + '-doc'
-  package.provides = "shopify-ruby-wrapperless-any, shopify-ruby-wrapperless-#{ruby.major_minor}"
+  package.provides = "ruby-shopify-any, ruby-shopify-#{ruby.major_minor}}"
   package.conflicts = "shopify-ruby"
-  package.prefix = Pathname.new('/usr/lib/shopify-ruby') + package.name
+  package.prefix = Pathname.new('/usr/lib/ruby-shopify') + package.name
   package.version = build['package-version']
   package.description =
     "#{package.name}, providing Ruby #{ruby.version}p#{ruby.patch_level}, possibly with Shopify-specific modifications. " \
@@ -163,7 +161,7 @@ end
 raise 'No distro specified' unless dist
 
 ref = YAML.load_file('build.yml')['ref']
-cache_dir = Dir.mktmpdir('shopify-ruby-build')
+cache_dir = Dir.mktmpdir('ruby-build')
 dist.each { |d|
   basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
   build_package(d, ref, debian_dir, cache_dir, out_dir, basetgz, parallel)
