@@ -164,7 +164,7 @@ raise 'No distro specified' unless dist
 
 build = YAML.load_file('build.yml')
 
-cache_dir = Dir.mktmpdir('ruby-build')
+cache_dir = "/Users/as3richa/Code/Shopify/ruby/tmp/" #Dir.mktmpdir('ruby-build')
 dist.each { |d|
   basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
   build_package(d, build, debian_dir, cache_dir, out_dir, basetgz, parallel)

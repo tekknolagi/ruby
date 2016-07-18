@@ -3,17 +3,23 @@
 
 set -e
 
-<%=
-  MASTER_BINARY = 'ruby'
-  IMPORTANT_BINARIES = %w(irb gem ri rdoc erb)
-  SHIMS = %w(shopify-ruby bundle)
+<%
+  def slave(name, prefix, location: 'bin')
+    "  --slave /usr/bin/#{name} #{name} #{prefix}/#{location}/#{name}"
+  end
 
-  "update-alternatives --install \\\n" +
-    "  /usr/bin/#{MASTER_BINARY} #{MASTER_BINARY} #{package.prefix}/bin/#{MASTER_BINARY} #{package.priority} \\\n" +
-    IMPORTANT_BINARIES.map do |b|
-      "  --slave /usr/bin/#{b} #{b} #{package.prefix}/bin/#{b} \\\n"
-    end.join("") +
-    SHIMS.map do |shim|
-      "  --slave /usr/bin/#{shim} #{shim} #{package.prefix}/shims/#{shim} \\\n"
-    end.join("")
+  MASTER = "  /usr/bin/ruby #{package.prefix}/bin/ruby #{package.priority}"
+
+  BIN_SLAVES = %w(irb gem ri rdoc erb).map { |bin|
+    slave(bin, package.prefix)
+  }.join(" \\\n")
+
+  SHIM_SLAVES = %w(shopify-ruby bundle).map { |shim|
+    slave(shim, package.prefix, location: 'shims')
+  }.join(" \\\n")
 %>
+
+update-alternatives --install \
+<%= MASTER %> \
+<%= BIN_SLAVES %> \
+<%= SHIM_SLAVES %>
