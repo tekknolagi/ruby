@@ -8,24 +8,19 @@ require 'erb'
 require 'yaml'
 require 'ostruct'
 
-DEFAULT_PARALLEL = `nproc`.chomp
-DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..'
+DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..' + 'artifacts'
 
 def usage
 <<-EOF
-Usage: build [-d dist] [-c <dir>] [-j <workers>] [-o <dir>]
+Usage: build [-d distros] [-c <dir>] [-j <workers>] [-o <dir>]
 
 Options:
 
   -h, --help
     Displays this message
 
-  -d, --distribution <dist>[,<dist>...]
-    Specifies what distribution(s) the package will be built for, defaults to the
-    current distribution (#{DEFAULT_DISTRIBUTION}).
-
-  -j, --parallel <workers>
-    Number of parallel workers to spawn for build commands. Defaults to #{DEFAULT_PARALLEL}.
+  -d, --distributions <dist>[,<dist>...]
+    Specifies what distribution(s) the package will be built for.
 
   -o, --output <dir>
     Output directory for generated files, defaults to #{DEFAULT_OUTDIR}.
@@ -40,7 +35,8 @@ end
 def configure_ruby(src_dir)
   ruby = OpenStruct.new
   ruby.version, ruby.patch_level = get_ruby_version(src_dir)
-  ruby.lib_version = "#{get_major_minor(ruby.version)}.0"
+  ruby.major_minor = get_major_minor(ruby.version)
+  ruby.lib_version = "#{ruby.major_minor}.0"
   ruby
 end
 
@@ -49,7 +45,7 @@ def configure_package(build, ruby)
   package.name = "ruby-shopify-#{ruby.version}"
   package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
   package.doc_name = package.name + '-doc'
-  package.provides = "ruby-shopify-any, ruby-shopify-#{ruby.major_minor}}"
+  package.provides = "ruby-shopify-any, ruby-shopify-#{ruby.major_minor}"
   package.conflicts = "shopify-ruby"
   package.prefix = Pathname.new('/usr/lib/ruby-shopify') + package.name
   package.version = build['package-version']
@@ -101,7 +97,6 @@ def setup_debian(src_dir, dist, build)
       target.chmod(template.stat.mode)
     end
 
-    FileUtils.rm_f('debian/changelog')
     run_command("dch --create --package #{package.name} -v '#{package.version}~#{dist}' --force-distribution -D #{dist} '#{package.changelog}'")
     run_command("dch -r '#{package.changelog}'")
 
@@ -110,39 +105,35 @@ def setup_debian(src_dir, dist, build)
   end
 end
 
-def pbuilder_opts(dist, base_tgz, parallel)
-  " --distribution #{dist} --basetgz #{base_tgz} --debbuildopts '-j#{parallel} -b -uc -us'"
-end
-
-def build_package(dist, build, debian_dir, cache_dir, out_dir, base_tgz, parallel)
+def build_packages(distros, build, debian_dir, cache_dir, out_dir)
   ref = build['ref']
 
-  run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
-  src_dir = Pathname.new(cache_dir) + 'src'
-  run_command("rm -rf #{src_dir}/debian")
-  run_command("cp -nr #{debian_dir} #{src_dir}")
+  distros.each do |d|
+    src_dir = Pathname.new(cache_dir) + 'src'
+    FileUtils.rm_f(src_dir)
 
-  setup_debian(src_dir, dist, build)
+    run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
 
-  Dir.chdir(src_dir) do
-    popts = pbuilder_opts(dist, base_tgz, parallel)
-    run_command("pdebuild --buildresult #{out_dir} -- #{popts}")
-    run_command("rm -rf #{cache_dir}")
+    run_command("rm -rf #{src_dir}/debian")
+    run_command("cp -nr #{debian_dir} #{src_dir}")
+    setup_debian(src_dir, d, build)
+
+    Dir.chdir(src_dir) do
+      run_command("OUTDIR='#{out_dir}/artifacts' DISTROS='#{d}' do_pbuilder_deploy.sh")
+      run_command("rm -rf #{cache_dir}")
+    end
   end
 end
 
 opts = GetoptLong.new(
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
   [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
-  [ '--distribution', '-d', GetoptLong::REQUIRED_ARGUMENT ],
-  [ '--parallel', '-j', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--distributions', '-d', GetoptLong::REQUIRED_ARGUMENT ],
 )
 
 debian_dir = Pathname.new(File.expand_path(File.dirname(__FILE__))) + 'debian'
 out_dir = DEFAULT_OUTDIR
-dist = nil
-parallel = DEFAULT_PARALLEL
-basetgz = nil
+distros = nil
 
 opts.each do |opt,arg|
   case opt
@@ -153,19 +144,14 @@ opts.each do |opt,arg|
     p = Pathname.new(Dir.pwd) + arg
     FileUtils.mkdir_p("#{p}") unless Dir.exist?(p)
     out_dir = p
-  when '--distribution'
-    dist = arg.split(',')
-  when '--parallel'
-    parallel = Integer(arg)
+  when '--distributions'
+    distros = arg.split(',')
   end
 end
 
-raise 'No distro specified' unless dist
+raise 'No distro specified' unless distros
 
 build = YAML.load_file('build.yml')
 
-cache_dir = "/Users/as3richa/Code/Shopify/ruby/tmp/" #Dir.mktmpdir('ruby-build')
-dist.each { |d|
-  basetgz = "/var/cache/pbuilder/#{d}-base.tgz"
-  build_package(d, build, debian_dir, cache_dir, out_dir, basetgz, parallel)
-}
+cache_dir = Dir.mktmpdir('ruby-build')
+build_packages(distros, build, debian_dir, cache_dir, out_dir)
