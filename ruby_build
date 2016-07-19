@@ -55,9 +55,6 @@ def configure_package(build, ruby)
   package.doc_description = "Documentation for #{package.description}"
   package.changelog = package.description
 
-  # Later versions have a higher priority than earlier versions, for easier upgrades
-  package.priority = ruby.version.split('.').map(&:to_i).inject { |v, i| 100 * v + i }
-
   package
 end
 

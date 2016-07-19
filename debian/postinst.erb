@@ -8,7 +8,7 @@ set -e
     "  --slave /usr/bin/#{name} #{name} #{prefix}/#{location}/#{name}"
   end
 
-  MASTER = "  /usr/bin/ruby #{package.prefix}/bin/ruby #{package.priority}"
+  MASTER = "  /usr/bin/ruby #{package.prefix}/bin/ruby 1"
 
   BIN_SLAVES = %w(irb gem ri rdoc erb).map { |bin|
     slave(bin, package.prefix)
