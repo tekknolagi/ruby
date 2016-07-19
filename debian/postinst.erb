@@ -14,7 +14,7 @@ set -e
     slave(bin, package.prefix)
   }.join(" \\\n")
 
-  SHIM_SLAVES = %w(shopify-ruby bundle).map { |shim|
+  SHIM_SLAVES = %w(shopify-ruby ruby-shopify bundle).map { |shim|
     slave(shim, package.prefix, location: 'shims')
   }.join(" \\\n")
 %>
