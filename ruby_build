@@ -105,12 +105,12 @@ def setup_debian(src_dir, dist, build)
   end
 end
 
-def build_packages(distros, build, debian_dir, cache_dir, out_dir)
+def build_packages(distros, build, debian_dir, out_dir)
   ref = build['ref']
 
   distros.each do |d|
+    cache_dir = Dir.mktmpdir('ruby-build')
     src_dir = Pathname.new(cache_dir) + 'src'
-    FileUtils.rm_f(src_dir)
 
     run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
 
@@ -120,8 +120,9 @@ def build_packages(distros, build, debian_dir, cache_dir, out_dir)
 
     Dir.chdir(src_dir) do
       run_command("OUTDIR='#{out_dir}/artifacts' DISTROS='#{d}' do_pbuilder_deploy.sh")
-      run_command("rm -rf #{cache_dir}")
     end
+
+    run_command("rm -rf #{cache_dir}")
   end
 end
 
@@ -153,5 +154,4 @@ raise 'No distro specified' unless distros
 
 build = YAML.load_file('build.yml')
 
-cache_dir = Dir.mktmpdir('ruby-build')
-build_packages(distros, build, debian_dir, cache_dir, out_dir)
+build_packages(distros, build, debian_dir, out_dir)
