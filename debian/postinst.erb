@@ -3,9 +3,23 @@
 
 set -e
 
-for name in default; do
-	if [ ! -L /usr/lib/shopify-ruby/$name ]; then
-		echo "Setting $name shopify-ruby: <%= version %>"
-		ln -s "<%= prefix %>" /usr/lib/shopify-ruby/$name || true
-	fi
-done
+<%
+  def slave(name, prefix, location: 'bin')
+    "  --slave /usr/bin/#{name} #{name} #{prefix}/#{location}/#{name}"
+  end
+
+  MASTER = "  /usr/bin/ruby ruby #{package.prefix}/bin/ruby 1"
+
+  BIN_SLAVES = %w(irb gem ri rdoc erb).map { |bin|
+    slave(bin, package.prefix)
+  }.join(" \\\n")
+
+  SHIM_SLAVES = %w(shopify-ruby ruby-shopify bundle).map { |shim|
+    slave(shim, package.prefix, location: 'shims')
+  }.join(" \\\n")
+%>
+
+update-alternatives --install \
+<%= MASTER %> \
+<%= BIN_SLAVES %> \
+<%= SHIM_SLAVES %>

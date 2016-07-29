@@ -3,19 +3,4 @@
 
 set -e
 
-fail=0
-if [ "$1" = "remove" ]; then
-	for name in default; do
-		if [ "`readlink /usr/lib/shopify-ruby/$name`" = "<%= prefix %>" ]; then
-			echo
-			echo "**********************************"
-			echo "Cannot uninstall the $name Ruby! (<%= version %>)"
-			echo "If you really want this, remove /usr/lib/shopify-ruby/$name and try again."
-			echo "**********************************"
-			echo
-			fail=1
-		fi
-	done
-fi
-
-exit $fail
+update-alternatives --remove ruby <%= package.prefix %>/bin/ruby

@@ -9,8 +9,8 @@ export DH_OPTIONS
 
 ROOT=$(shell pwd)
 DESTDIR=$(ROOT)/debian/tmp
-PREFIX=<%= prefix %>
-RUBY_LIB_DIR=$(DESTDIR)/$(PREFIX)/lib/ruby/<%= ruby_lib_version %>
+PREFIX=<%= package.prefix %>
+RUBY_LIB_DIR=$(DESTDIR)/$(PREFIX)/lib/ruby/<%= ruby.lib_version %>
 RUBYLIB="$(RUBY_LIB_DIR):$(RUBY_LIB_DIR)/$(shell uname -m)-linux"
 DH_FLAGS=-O--parallel
 
@@ -23,7 +23,11 @@ override_dh_auto_configure:
 
 override_dh_auto_install:
 	dh_auto_install $(DH_FLAGS) --destdir "$(DESTDIR)"
-	RUBYLIB="$(RUBYLIB)" "$(DESTDIR)$(PREFIX)/bin/ruby" debian/gem install $(ROOT)/debian/gems/*.gem
+	RUBYLIB="$(RUBYLIB)" "$(DESTDIR)/$(PREFIX)/bin/ruby" debian/gem install $(ROOT)/debian/gems/*.gem
+	mkdir "$(DESTDIR)/$(PREFIX)/shims"
+	install -m 0755 $(ROOT)/debian/shims/bundle "$(DESTDIR)/$(PREFIX)/shims/"
+	install -m 0755 $(ROOT)/debian/shims/shopify-ruby "$(DESTDIR)/$(PREFIX)/shims/"
+	install -m 0755 $(ROOT)/debian/shims/shopify-ruby "$(DESTDIR)/$(PREFIX)/shims/ruby-shopify"
 
 override_dh_strip:
 	dh_strip $(DH_FLAGS) -X bin/ruby

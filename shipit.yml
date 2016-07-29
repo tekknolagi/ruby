@@ -1,10 +1,6 @@
-machine:
-  environment:
-    MAKEFILE: ./Makefile.pbuilder
-
 deploy:
   override:
-    - do_pbuilder_deploy.sh
+    - ./ruby_build --distributions 'trusty,precise'
 
 ci:
   hide:
