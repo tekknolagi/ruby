@@ -871,6 +871,23 @@ rb_tracearg_object(rb_trace_arg_t *trace_arg)
     return trace_arg->data;
 }
 
+#if VESTIGE_STATS
+rb_vestige_stats_t *
+rb_tracearg_gc_stats(rb_trace_arg_t *trace_arg)
+{
+    if (trace_arg->event & (RUBY_INTERNAL_EVENT_GC_ENTER | RUBY_INTERNAL_EVENT_GC_EXIT)) {
+	/* ok */
+    }
+    else {
+	rb_raise(rb_eRuntimeError, "not supported by this event");
+    }
+    if (trace_arg->data == NULL) {
+	rb_bug("tp_attr_gc_stats: unreachable");
+    }
+    return (rb_vestige_stats_t *) trace_arg->data;
+}
+#endif /* VESTIGE_STATS */
+
 /*
  * Type of event
  *

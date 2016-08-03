@@ -28,6 +28,10 @@ extern "C" {
 
 #include "defines.h"
 
+#if VESTIGE_STATS
+#include "vestige_stats.h"
+#endif /* VESTIGE_STATS */
+
 #define NORETURN_STYLE_NEW 1
 #ifndef NORETURN
 # define NORETURN(x) x

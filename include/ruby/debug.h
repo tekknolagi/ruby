@@ -82,6 +82,10 @@ VALUE rb_tracearg_return_value(rb_trace_arg_t *trace_arg);
 VALUE rb_tracearg_raised_exception(rb_trace_arg_t *trace_arg);
 VALUE rb_tracearg_object(rb_trace_arg_t *trace_arg);
 
+#if VESTIGE_STATS
+rb_vestige_stats_t * rb_tracearg_gc_stats(rb_trace_arg_t *trace_arg);
+#endif /* VESTIGE_STATS */
+
 /* Postponed Job API */
 typedef void (*rb_postponed_job_func_t)(void *arg);
 int rb_postponed_job_register(unsigned int flags, rb_postponed_job_func_t func, void *data);
