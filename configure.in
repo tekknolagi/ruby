@@ -4185,6 +4185,18 @@ else
 fi
 AC_SUBST(USE_RUBYGEMS)
 
+AC_ARG_ENABLE(vestige,
+  AS_HELP_STRING([--enable-vestige], [enable vestige instrumentation]),
+  [enable_vestige="$enableval"], [enable_vestige=no])
+if test x"$enable_vestige" = xno; then
+    AC_DEFINE(VESTIGE_STATS, 0)
+    USE_VESTIGE=NO
+else
+    AC_DEFINE(VESTIGE_STATS, 1)
+    USE_VESTIGE=YES
+fi
+AC_SUBST(USE_VESTIGE)
+
 arch_hdrdir="${EXTOUT}/include/${arch}/ruby"
 AS_MKDIR_P("${arch_hdrdir}")
 config_h="${arch_hdrdir}/config.h"
