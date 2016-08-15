@@ -12,7 +12,7 @@ DEFAULT_OUTDIR = Pathname.new(Dir.pwd) + '..' + 'artifacts'
 
 def usage
 <<-EOF
-Usage: build [-d distros] [-c <dir>] [-j <workers>] [-o <dir>]
+Usage: build [-d distros] [-c <dir>] [-j <workers>] [-o <dir>] [-n <name>] [-v <version>]
 
 Options:
 
@@ -24,6 +24,13 @@ Options:
 
   -o, --output <dir>
     Output directory for generated files, defaults to #{DEFAULT_OUTDIR}.
+
+  -n, --name <name>
+    Build a particular package by name rather than building the topmost in build.yml.
+    Requires -v
+
+  -v, --version <version>
+    Build a particular version of a particular named package. Only useful with -n
 EOF
 end
 
@@ -40,18 +47,17 @@ def configure_ruby(src_dir)
   ruby
 end
 
-def configure_package(build, ruby)
+def configure_package(name, version, ruby, ref)
   package = OpenStruct.new
-  package.name = "ruby-shopify-#{ruby.version}"
-  package.name += "-#{build['package-suffix']}" if build['package-suffix'] && !build['package-suffix'].empty?
+  package.name = name
   package.doc_name = package.name + '-doc'
   package.provides = "ruby-shopify-any, ruby-shopify-#{ruby.major_minor}"
   package.conflicts = "shopify-ruby"
   package.prefix = Pathname.new('/usr/lib/ruby-shopify') + package.name
-  package.version = build['package-version']
+  package.version = version
   package.description =
     "#{package.name}, providing Ruby #{ruby.version}p#{ruby.patch_level}, possibly with Shopify-specific modifications. " \
-    "Built via pbuilder at #{Time.now} from ref #{build['ref']}. Memo: #{build['memo']}"
+    "Built via pbuilder at #{Time.now} from ref #{ref}"
   package.doc_description = "Documentation for #{package.description}"
   package.changelog = package.description
 
@@ -80,9 +86,13 @@ def generate_debian_install_files(target, prefix, files)
   end
 end
 
-def setup_debian(src_dir, dist, build)
+def setup_debian(src_dir, dist, name, package_version, ruby_version, ref)
   ruby = configure_ruby(src_dir)
-  package = configure_package(build, ruby)
+  package = configure_package(name, package_version, ruby, ref)
+
+  raise "Interpolated Ruby version from `version.h` #{ruby.version} doesn't match package name #{package.name}" unless
+    ruby.version == ruby_version
+
   b = binding
 
   Dir.chdir(src_dir) do
@@ -102,8 +112,20 @@ def setup_debian(src_dir, dist, build)
   end
 end
 
-def build_packages(distros, build, debian_dir, out_dir)
-  ref = build['ref']
+def ruby_version_from_package_name(name)
+  m = /^ruby-shopify-(?<rv>\d+\.\d+\.\d+)(-[A-Za-z0-9\-]+)?$/.match(name)
+  m && m['rv']
+end
+
+def build_packages(distros, name, version, debian_dir, out_dir)
+  raise "Package name #{name} not valid; must be of the form ruby-shopify-$RUBY_VERSION(-$OPTIONAL_SUFFIX)" unless
+    ruby_version = ruby_version_from_package_name(name)
+
+  raise "Package version #{version} not valid; must be a positive integer" unless /^\d+$/ =~ version && version.to_i > 0
+
+  tag = "#{name}_#{version}"
+  ref = `git rev-parse #{tag}`.chomp
+  puts "Building from tag #{tag} (= revision #{ref})"
 
   distros.each do |d|
     cache_dir = Dir.mktmpdir('ruby-build')
@@ -113,7 +135,7 @@ def build_packages(distros, build, debian_dir, out_dir)
 
     run_command("rm -rf #{src_dir}/debian")
     run_command("cp -nr #{debian_dir} #{src_dir}")
-    setup_debian(src_dir, d, build)
+    setup_debian(src_dir, d, name, version, ruby_version, ref)
 
     Dir.chdir(src_dir) do
       run_command("OUTDIR='#{out_dir}/artifacts' DISTROS='#{d}' do_pbuilder_deploy.sh")
@@ -127,11 +149,15 @@ opts = GetoptLong.new(
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
   [ '--output', '-o', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--distributions', '-d', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--name', '-n', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--version', '-v', GetoptLong::REQUIRED_ARGUMENT ],
 )
 
 debian_dir = Pathname.new(File.expand_path(File.dirname(__FILE__))) + 'debian'
 out_dir = DEFAULT_OUTDIR
 distros = nil
+name = nil
+version = nil
 
 opts.each do |opt,arg|
   case opt
@@ -144,11 +170,16 @@ opts.each do |opt,arg|
     out_dir = p
   when '--distributions'
     distros = arg.split(',')
+  when '--name'
+    name = arg.strip unless arg.empty?
+  when '--version'
+    version = arg.strip
   end
 end
 
 raise 'No distro specified' unless distros
 
-build = YAML.load_file('build.yml')
+raise 'Missing name or version' unless name && version
+puts "Building #{name} version #{version}"
 
-build_packages(distros, build, debian_dir, out_dir)
+build_packages(distros, name, version, debian_dir, out_dir)
