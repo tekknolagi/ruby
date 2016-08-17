@@ -28,9 +28,9 @@ extern "C" {
 
 #include "defines.h"
 
-#if VESTIGE_STATS
-#include "vestige_stats.h"
-#endif /* VESTIGE_STATS */
+#if TRACING_STATS
+#include "tracing_stats.h"
+#endif /* TRACING_STATS */
 
 #define NORETURN_STYLE_NEW 1
 #ifndef NORETURN

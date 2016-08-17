@@ -457,9 +457,9 @@ typedef struct rb_vm_struct {
 
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
     struct rb_objspace *objspace;
-#if VESTIGE_STATS
-    rb_vestige_stats_t *gc_stats;
-#endif /* VESTIGE_STATS */
+#if TRACING_STATS
+    rb_tracing_stats_t *gc_stats;
+#endif /* TRACING_STATS */
 #endif
 
     /*

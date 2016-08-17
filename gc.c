@@ -665,9 +665,9 @@ struct heap_page {
 /* Aliases */
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 #define rb_objspace (*GET_VM()->objspace)
-#if VESTIGE_STATS
+#if TRACING_STATS
 #define rb_gc_stats (*GET_VM()->gc_stats)
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 #else
 static rb_objspace_t rb_objspace = {{GC_MALLOC_LIMIT_MIN}};
 #endif
@@ -5896,10 +5896,10 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
 #endif
     }
 
-#if !VESTIGE_STATS
+#if !TRACING_STATS
     /* We only want this event to fire when we've decided if this is a major/minor GC */
     gc_enter(objspace, "gc_start");
-#endif /* !VESTIGE_STATS */
+#endif /* !TRACING_STATS */
 
     if (ruby_gc_stressful) {
 	int flag = FIXNUM_P(ruby_gc_stress_mode) ? FIX2INT(ruby_gc_stress_mode) : 0;
@@ -5955,7 +5955,7 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
     gc_prof_setup_new_record(objspace, reason);
     gc_reset_malloc_info(objspace);
 
-#if VESTIGE_STATS
+#if TRACING_STATS
 
 #define FOREACH_STAT(S) \
     S(gc_type) \
@@ -5964,11 +5964,11 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
     S(gc_immediate_mark) \
     S(gc_immediate_sweep) \
 
-    VESTIGE_STATS_SETUP(FOREACH_STAT, rb_gc_stats);
+    TRACING_STATS_SETUP(FOREACH_STAT, rb_gc_stats);
 
-    VESTIGE_STATS_UPDATE(gc_type, do_full_mark ? "major_gc" : "minor_gc");
+    TRACING_STATS_UPDATE(gc_type, do_full_mark ? "major_gc" : "minor_gc");
 
-    VESTIGE_STATS_UPDATE(gc_major_reason, 
+    TRACING_STATS_UPDATE(gc_major_reason, 
 	(reason & GPR_FLAG_MAJOR_BY_NOFREE) ? "nofree" :
 	(reason & GPR_FLAG_MAJOR_BY_OLDGEN) ? "oldgen" :
 	(reason & GPR_FLAG_MAJOR_BY_SHADY)  ? "shady" :
@@ -5983,7 +5983,7 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
 	assert(0 == do_full_mark);
     }
 
-    VESTIGE_STATS_UPDATE(gc_kickoff_reason, 
+    TRACING_STATS_UPDATE(gc_kickoff_reason, 
 	(reason & GPR_FLAG_NEWOBJ) ? "newobj" :
 	(reason & GPR_FLAG_MALLOC) ? "malloc" :
 	(reason & GPR_FLAG_METHOD) ? "method" :
@@ -5991,8 +5991,8 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
 	(reason & GPR_FLAG_STRESS) ? "stress" :
 	NULL
     );
-    VESTIGE_STATS_UPDATE(gc_immediate_mark, immediate_mark ? "true" : "false");
-    VESTIGE_STATS_UPDATE(gc_immediate_sweep, immediate_sweep ? " true" : "false");
+    TRACING_STATS_UPDATE(gc_immediate_mark, immediate_mark ? "true" : "false");
+    TRACING_STATS_UPDATE(gc_immediate_sweep, immediate_sweep ? " true" : "false");
 
     /* TODO Add more interesting stats */
 
@@ -6000,7 +6000,7 @@ gc_start(rb_objspace_t *objspace, const int full_mark, const int immediate_mark,
 
 #undef FOREACH_STAT
 
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_GC_START, 0 /* TODO: pass minor/immediate flag? */);
     if (RGENGC_CHECK_MODE) assert(during_gc);
@@ -6023,18 +6023,18 @@ gc_rest(rb_objspace_t *objspace)
 
     if (marking || sweeping) {
 
-#if VESTIGE_STATS
+#if TRACING_STATS
 
     #define FOREACH_STAT(S) \
 	S(gc_incremental_marking)   \
 	S(gc_lazy_sweeping)  \
 
-	VESTIGE_STATS_SETUP(FOREACH_STAT, rb_gc_stats);
-	VESTIGE_STATS_UPDATE(gc_incremental_marking, marking ? "true" : "false");
-	VESTIGE_STATS_UPDATE(gc_lazy_sweeping, sweeping ? "true" : "false");
+	TRACING_STATS_SETUP(FOREACH_STAT, rb_gc_stats);
+	TRACING_STATS_UPDATE(gc_incremental_marking, marking ? "true" : "false");
+	TRACING_STATS_UPDATE(gc_lazy_sweeping, sweeping ? "true" : "false");
 
 #undef FOREACH_STAT
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 
 	gc_enter(objspace, "gc_rest");
 
@@ -6147,12 +6147,12 @@ gc_enter(rb_objspace_t *objspace, const char *event)
     during_gc = TRUE;
     gc_report(1, objspace, "gc_entr: %s [%s]\n", event, gc_current_status(objspace));
     gc_record(objspace, 0, event);
-#if VESTIGE_STATS
+#if TRACING_STATS
     rb_gc_stats.event = event;
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_GC_ENTER, (VALUE) &rb_gc_stats);
 #else
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_GC_ENTER, 0); /* TODO: which parameter should be passed? */
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 }
 
 static inline void
@@ -6160,10 +6160,10 @@ gc_exit(rb_objspace_t *objspace, const char *event)
 {
     if (RGENGC_CHECK_MODE) assert(during_gc != 0);
 
-#if VESTIGE_STATS
+#if TRACING_STATS
     /* Cleanup global event object */
     memset(&rb_gc_stats, 0, sizeof(rb_gc_stats));
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_GC_EXIT, 0); /* TODO: which parameter should be passsed? */
     gc_record(objspace, 1, event);
     gc_report(1, objspace, "gc_exit: %s [%s]\n", event, gc_current_status(objspace));
@@ -8187,9 +8187,9 @@ gc_prof_timer_stop(rb_objspace_t *objspace)
 static inline void
 gc_prof_mark_timer_start(rb_objspace_t *objspace)
 {
-#if VESTIGE_STATS
+#if TRACING_STATS
     gc_enter(objspace, "gc_mark");
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
     if (RUBY_DTRACE_GC_MARK_BEGIN_ENABLED()) {
 	RUBY_DTRACE_GC_MARK_BEGIN();
     }
@@ -8203,9 +8203,9 @@ gc_prof_mark_timer_start(rb_objspace_t *objspace)
 static inline void
 gc_prof_mark_timer_stop(rb_objspace_t *objspace)
 {
-#if VESTIGE_STATS
+#if TRACING_STATS
     gc_exit(objspace, "gc_mark");
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
     if (RUBY_DTRACE_GC_MARK_END_ENABLED()) {
 	RUBY_DTRACE_GC_MARK_END();
     }
@@ -8220,9 +8220,9 @@ gc_prof_mark_timer_stop(rb_objspace_t *objspace)
 static inline void
 gc_prof_sweep_timer_start(rb_objspace_t *objspace)
 {
-#if VESTIGE_STATS
+#if TRACING_STATS
     gc_enter(objspace, "gc_sweep");
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
     if (RUBY_DTRACE_GC_SWEEP_BEGIN_ENABLED()) {
 	RUBY_DTRACE_GC_SWEEP_BEGIN();
     }
@@ -8238,9 +8238,9 @@ gc_prof_sweep_timer_start(rb_objspace_t *objspace)
 static inline void
 gc_prof_sweep_timer_stop(rb_objspace_t *objspace)
 {
-#if VESTIGE_STATS
+#if TRACING_STATS
     gc_exit(objspace, "gc_sweep");
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
     if (RUBY_DTRACE_GC_SWEEP_END_ENABLED()) {
 	RUBY_DTRACE_GC_SWEEP_END();
     }

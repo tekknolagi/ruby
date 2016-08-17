@@ -19,20 +19,20 @@
 #include "probes.h"
 #include "probes_helper.h"
 
-#if VESTIGE_STATS
-static rb_vestige_stats_t *
-rb_vestige_stats_alloc(void)
+#if TRACING_STATS
+static rb_tracing_stats_t *
+rb_tracing_stats_alloc(void)
 {
-    rb_vestige_stats_t *stats = calloc(1, sizeof(rb_vestige_stats_t));
+    rb_tracing_stats_t *stats = calloc(1, sizeof(rb_tracing_stats_t));
     return stats;
 }
 
 static void
-rb_vestige_stats_free(rb_vestige_stats_t *stats)
+rb_tracing_stats_free(rb_tracing_stats_t *stats)
 {
     free(stats);
 }
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 
 static inline VALUE *
 VM_EP_LEP(VALUE *ep)
@@ -1847,9 +1847,9 @@ ruby_vm_destruct(rb_vm_t *vm)
 	rb_thread_t *th = vm->main_thread;
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 	struct rb_objspace *objspace = vm->objspace;
-#if VESTIGE_STATS
-	rb_vestige_stats_t *gc_stats = vm->gc_stats;
-#endif /* VESTIGE_STATS */
+#if TRACING_STATS
+	rb_tracing_stats_t *gc_stats = vm->gc_stats;
+#endif /* TRACING_STATS */
 #endif
 	vm->main_thread = 0;
 	if (th) {
@@ -1863,11 +1863,11 @@ ruby_vm_destruct(rb_vm_t *vm)
 	if (objspace) {
 	    rb_objspace_free(objspace);
 	}
-#if VESTIGE_STATS
+#if TRACING_STATS
 	if (gc_stats) {
-		rb_vestige_stats_free(gc_stats);
+		rb_tracing_stats_free(gc_stats);
 	}
-#endif /* VESTIGE_STATS */
+#endif /* TRACING_STATS */
 #endif
 	/* after freeing objspace, you *can't* use ruby_xfree() */
 	ruby_mimfree(vm);
@@ -2816,9 +2816,9 @@ Init_BareVM(void)
     vm_init2(vm);
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
     vm->objspace = rb_objspace_alloc();
-#if VESTIGE_STATS
-    vm->gc_stats = rb_vestige_stats_alloc();
-#endif /* VESTIGE_STATS */
+#if TRACING_STATS
+    vm->gc_stats = rb_tracing_stats_alloc();
+#endif /* TRACING_STATS */
 #endif
     ruby_current_vm = vm;
 
