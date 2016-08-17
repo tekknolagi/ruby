@@ -19,7 +19,7 @@ DH_FLAGS=-O--parallel
 
 override_dh_auto_configure:
 	test configure -nt configure.in || autoconf
-	./configure --prefix="$(PREFIX)"
+	./configure --prefix="$(PREFIX)" debugflags="-g3 -ggdb"
 
 override_dh_auto_install:
 	dh_auto_install $(DH_FLAGS) --destdir "$(DESTDIR)"

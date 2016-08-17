@@ -1,8 +1,23 @@
 deploy:
   override:
-    - ./ruby_build --distributions 'trusty,precise'
+    - 'true'
 
-ci:
-  hide:
-    - ci/circleci
-    - continuous-integration/travis-ci/push
+tasks:
+  build_one:
+    action: "Build Specific Version"
+    description: "Build a particular Ruby package"
+    allow_concurrency: true
+    variables:
+    - name: PACKAGE_NAME
+      title: Name of package to build
+      default: ruby-shopify-
+    - name: PACKAGE_VERSION
+      title: Debian package version to build
+      default: 1
+    - name: DISTROS
+      title: Distributions to build for
+      default: precise,trusty,xenial
+
+    steps:
+      - git fetch --all
+      - ./ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION"
