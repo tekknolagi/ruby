@@ -35,9 +35,14 @@ EOF
 end
 
 def run_command(cmd)
-  result = `#{cmd}`
+  system(cmd)
   raise "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
-  return result
+end
+
+def command_output(cmd)
+  result = `#{cmd} 2>&1`
+  raise "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
+  result
 end
 
 def configure_ruby(src_dir)
@@ -125,7 +130,7 @@ def build_packages(distros, name, version, debian_dir, out_dir)
   raise "Package version #{version} not valid; must be a positive integer" unless /^\d+$/ =~ version && version.to_i > 0
 
   tag = "#{name}_#{version}"
-  ref = run_command("git rev-parse #{tag}").chomp
+  ref = command_output("git rev-parse #{tag}").chomp
   puts "Building from tag #{tag} (= revision #{ref})"
 
   distros.each do |d|
