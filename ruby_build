@@ -26,17 +26,18 @@ Options:
     Output directory for generated files, defaults to #{DEFAULT_OUTDIR}.
 
   -n, --name <name>
-    Build a particular package by name rather than building the topmost in build.yml.
+    Build a particular package by name
     Requires -v
 
   -v, --version <version>
-    Build a particular version of a particular named package. Only useful with -n
+    Build a particular version of a particular named package
 EOF
 end
 
 def run_command(cmd)
-  system(cmd)
+  result = `#{cmd}`
   raise "command: #{cmd} failed: #{$?.exitstatus}" unless $?.success?
+  return result
 end
 
 def configure_ruby(src_dir)
@@ -124,7 +125,7 @@ def build_packages(distros, name, version, debian_dir, out_dir)
   raise "Package version #{version} not valid; must be a positive integer" unless /^\d+$/ =~ version && version.to_i > 0
 
   tag = "#{name}_#{version}"
-  ref = `git rev-parse #{tag}`.chomp
+  ref = run_command("git rev-parse #{tag}").chomp
   puts "Building from tag #{tag} (= revision #{ref})"
 
   distros.each do |d|
