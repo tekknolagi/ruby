@@ -164,7 +164,6 @@ out_dir = DEFAULT_OUTDIR
 distros = nil
 name = nil
 version = nil
-source_dir = nil
 
 opts.each do |opt,arg|
   case opt
@@ -177,8 +176,6 @@ opts.each do |opt,arg|
     out_dir = p
   when '--distributions'
     distros = arg.split(',')
-  when '--source_dir'
-    source_dir = arg.strip unless arg.empty?
   when '--name'
     name = arg.strip unless arg.empty?
   when '--version'
@@ -191,5 +188,4 @@ raise 'No distro specified' unless distros
 raise 'Missing name or version' unless name && version
 puts "Building #{name} version #{version}"
 
-Dir.chdir(source_dir) if source_dir
 build_packages(distros, name, version, debian_dir, out_dir)
