@@ -22,5 +22,5 @@ tasks:
       default: master
 
     steps:
-      - git clone --single-branch --recursive --branch "BRANCH_NAME" git@github.com:shopify/ruby.git
+      - git clone --single-branch --recursive --branch "$BRANCH_NAME" git@github.com:shopify/ruby.git
       - ./ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION" --source_dir "ruby"
