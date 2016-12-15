@@ -17,7 +17,10 @@ tasks:
     - name: DISTROS
       title: Distributions to build for
       default: precise,trusty,xenial
+    - name: BRANCH_NAME
+      title: branch to build
+      default: master
 
     steps:
-      - git fetch --all
-      - ./ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION"
+      - git clone --single-branch --recursive --branch "$BRANCH_NAME" git@github.com:shopify/ruby.git
+      - ./ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION" --source_dir "ruby"
