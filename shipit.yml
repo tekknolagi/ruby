@@ -20,4 +20,4 @@ tasks:
 
     steps:
       - git clone git@github.com:shopify/ruby.git
-      - cd ruby && ./ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION"
+      - cd ruby && ../ruby_build --distributions "$DISTROS" --name "$PACKAGE_NAME" --version "$PACKAGE_VERSION"
