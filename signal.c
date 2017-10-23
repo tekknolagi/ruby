@@ -563,7 +563,7 @@ rb_sigaltstack_size(void)
     }
 #endif
 
-    return size;
+    return size * 2;
 }
 
 /* alternate stack for SIGSEGV */
