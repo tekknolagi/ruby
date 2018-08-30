@@ -142,10 +142,11 @@ def build_packages(name, version, debian_dir, out_dir)
   setup_debian(src_dir, name, version, ruby_version, ref)
 
   Dir.chdir(src_dir) do
-    run_command("shopify-build pause")
+    run_command("mk-build-deps --install --tool='apt-get --no-install-recommends --yes' debian/control")
     run_command("debuild --preserve-env -b -uc -us -j4")
   end
 
+  FileUtils.mv(Dir.glob("#{cache_dir}/*.*"), '../artifacts')
   run_command("rm -rf #{cache_dir}")
 end
 

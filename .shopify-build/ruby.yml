@@ -10,8 +10,8 @@ shared:
     init:
     - apt-get update
     run:
-    - apt-get install -y devscripts git openssh-client
-    - git clone git@github.com:shopify/ruby.git
+    - apt-get install -y devscripts git openssh-client ruby equivs
+    - git clone git@github.com:shopify/ruby.git #TODO(DazWorrall): In lieu of history: full
     - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version ${VERSION:-1}
     artifact_paths:
     - artifacts
