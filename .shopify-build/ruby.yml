@@ -1,10 +1,19 @@
 containers:
   default:
-    docker: circleci/ruby:2.5.1-node-browsers
+    docker: ruby:2.4-stretch
+
+shared:
+  builder: &builder
+    timeout: 10m
+    run:
+    - bin/ci/setup-pbuilder-base.sh ${TARGET_DIST} /pbuilder_base
 
 steps:
-- label: Tests
-  timeout: 5m
-  run:
-  - echo "Hello World"
-
+- <<: *builder
+  label: Build trusty
+  env:
+    TARGET_DIST: trusty
+- <<: *builder
+  label: Build precise
+  env:
+    TARGET_DIST: precise
