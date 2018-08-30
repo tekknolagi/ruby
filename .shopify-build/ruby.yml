@@ -7,7 +7,7 @@ shared:
     run:
     - apt-get update && apt-get install -y pbuilder ubuntu-archive-keyring
     - git clone git@github.com:shopify/ruby.git
-    - cd ruby && ../ruby_build ${TARGET_DIST}
+    - cd ruby && ../ruby_build --distributions ${TARGET_DIST} --name "ruby-shopify-2.5.1" --version 1
     artifact_paths:
     - artifacts
     cache:
@@ -30,3 +30,5 @@ steps:
   label: Build trusty deb
   env:
     TARGET_DIST: trusty
+# - wait
+# - push to packagecloud if tagged on master
