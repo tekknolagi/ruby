@@ -2,6 +2,18 @@ containers:
   default:
     docker: ruby:2.4-stretch
 
+shared:
+  package_builder: &package_builder
+    run:
+    - apt-get update && apt-get install -y pbuilder ubuntu-archive-keyring
+    - git clone git@github.com:shopify/ruby.git
+    - cd ruby && ../ruby_build ${TARGET_DIST}
+    artifact_paths:
+    - artifacts
+    cache:
+    - path: /base_images
+      required: true
+
 steps:
 - label: Build pbuilder base images
   timeout: 20m
@@ -9,8 +21,12 @@ steps:
   - bin/ci/setup-pbuilder-base.sh precise
   - bin/ci/setup-pbuilder-base.sh trusty
   - bin/ci/setup-pbuilder-base.sh xenial
-  #- cd ruby && ../ruby_build --distributions "${TARGET_DIST}" --name
   cache:
   - /base_images
   env:
     OUTDIR: /base_images
+- wait
+- <<: *package_builder
+  label: Build trusty deb
+  env:
+    TARGET_DIST: trusty
