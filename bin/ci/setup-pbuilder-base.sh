@@ -2,7 +2,7 @@
 set -xeo pipefail
 
 TARGET_DIST=${1}
-OUTDIR=${2-/var/cache/pbuilder}
+OUTDIR=${OUTDIR:-/var/cache/pbuilder}
 
 if [[ -z "${TARGET_DIST}" ]]; then
   echo "TARGET_DIST must be provided"
