@@ -4,11 +4,11 @@ containers:
 
 steps:
 - label: Build pbuilder base images
-  timeout: 10m
+  timeout: 20m
   run:
-  - bin/ci/setup-pbuilder-base.sh precise /base_images
-  - bin/ci/setup-pbuilder-base.sh trusty /base_images
-  - bin/ci/setup-pbuilder-base.sh xenial /base_images
+  - bin/ci/setup-pbuilder-base.sh precise
+  - bin/ci/setup-pbuilder-base.sh trusty
+  - bin/ci/setup-pbuilder-base.sh xenial
   #- cd ruby && ../ruby_build --distributions "${TARGET_DIST}" --name
   cache:
   - /base_images
