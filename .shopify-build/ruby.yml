@@ -6,7 +6,7 @@ containers:
 
 shared:
   package_builder: &package_builder
-    timeout: 10m
+    timeout: 15m
     init:
     - apt-get update
     run:
