@@ -15,7 +15,7 @@ if [[ -f "${TARGET_PATH}" ]]; then
   exit 0;
 fi
 
-apt-get update && apt-get install -y pbuilder
+apt-get update && apt-get install -y pbuilder ubuntu-archive-keyring
 mkdir -p ${OUTDIR}
 pbuilder --create --distribution ${TARGET_DIST} --basetgz "${TARGET_PATH}" \
   --override-config --components 'main universe multiverse' \

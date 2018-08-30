@@ -7,6 +7,7 @@ shared:
     timeout: 10m
     run:
     - bin/ci/setup-pbuilder-base.sh ${TARGET_DIST} /pbuilder_base
+    #- cd ruby && ../ruby_build --distributions "${TARGET_DIST}" --name --version
 
 steps:
 - <<: *builder
