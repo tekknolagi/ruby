@@ -133,6 +133,7 @@ def build_packages(name, version, debian_dir, out_dir)
 
   cache_dir = Dir.mktmpdir('ruby-build')
   src_dir = Pathname.new(cache_dir) + 'src'
+  puts "src_dir = #{src_dir}"
 
   run_command("git archive --format tar --prefix=src/ #{ref} | tar xf - -C #{cache_dir}")
 
