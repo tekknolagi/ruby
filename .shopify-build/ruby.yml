@@ -1,31 +1,18 @@
 containers:
   default:
-    docker: ruby:2.4-stretch
+    docker: ubuntu:14.04
 
 shared:
   package_builder: &package_builder
+    timeout: 10m
     run:
-    - apt-get update && apt-get install -y pbuilder ubuntu-archive-keyring
+    - apt-get update && apt-get install -y devscripts git openssh-client ruby2.0
     - git clone git@github.com:shopify/ruby.git
-    - cd ruby && ../ruby_build --distributions ${TARGET_DIST} --name "ruby-shopify-2.5.1" --version 1
+    - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version 1
     artifact_paths:
     - artifacts
-    cache:
-    - path: /base_images
-      required: true
 
 steps:
-- label: Build pbuilder base images
-  timeout: 20m
-  run:
-  - bin/ci/setup-pbuilder-base.sh precise
-  - bin/ci/setup-pbuilder-base.sh trusty
-  - bin/ci/setup-pbuilder-base.sh xenial
-  cache:
-  - /base_images
-  env:
-    OUTDIR: /base_images
-- wait
 - <<: *package_builder
   label: Build trusty deb
   env:
