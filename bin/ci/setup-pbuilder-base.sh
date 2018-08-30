@@ -19,6 +19,7 @@ apt-get update && apt-get install -y pbuilder ubuntu-archive-keyring
 mkdir -p ${OUTDIR}
 pbuilder --create --distribution ${TARGET_DIST} --basetgz "${TARGET_PATH}" \
   --override-config --components 'main universe multiverse' \
+  --mirror http://archive.ubuntu.com/ubuntu/ \
   --extrapackages 'curl apt-transport-https lsb-release ca-certificates wget'
 cat <<EOF > /tmp/post-install.sh
 #!/bin/bash
