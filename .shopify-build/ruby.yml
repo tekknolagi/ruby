@@ -7,10 +7,11 @@ containers:
 shared:
   package_builder: &package_builder
     timeout: 10m
+    init:
+    - apt-get update
     run:
-    - apt-get update && apt-get install -y devscripts git openssh-client ruby2.0
+    - apt-get install -y devscripts git openssh-client
     - git clone git@github.com:shopify/ruby.git
-    - if [[ "$(lsb_release -c -s)" == "trusty" ]]; then update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10; fi
     - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version ${VERSION:-1}
     artifact_paths:
     - artifacts
@@ -19,6 +20,10 @@ steps:
 - <<: *package_builder
   label: Build trusty deb
   container: trusty
+  init:
+  - apt-get update
+  - apt-get install -y ruby2.0
+  - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
 - <<: *package_builder
   label: Build xenial deb
   container: xenial
