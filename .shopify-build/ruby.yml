@@ -2,21 +2,15 @@ containers:
   default:
     docker: ruby:2.4-stretch
 
-shared:
-  builder: &builder
-    timeout: 10m
-    run:
-    - bin/ci/setup-pbuilder-base.sh ${TARGET_DIST}
-    #- cd ruby && ../ruby_build --distributions "${TARGET_DIST}" --name
-    cache:
-    - /var/cache/pbuilder
-
 steps:
-- <<: *builder
-  label: Build trusty
+- label: Build pbuilder base images
+  timeout: 10m
+  run:
+  - bin/ci/setup-pbuilder-base.sh precise /base_images
+  - bin/ci/setup-pbuilder-base.sh trusty /base_images
+  - bin/ci/setup-pbuilder-base.sh xenial /base_images
+  #- cd ruby && ../ruby_build --distributions "${TARGET_DIST}" --name
+  cache:
+  - /base_images
   env:
-    TARGET_DIST: trusty
-- <<: *builder
-  label: Build precise
-  env:
-    TARGET_DIST: precise
+    OUTDIR: /base_images
