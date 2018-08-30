@@ -107,8 +107,8 @@ def setup_debian(src_dir, name, package_version, ruby_version, ref)
       target.chmod(template.stat.mode)
     end
 
-    run_command("dch --create --package #{package.name} -v '#{package.version}~$(lsb_release -c -s)' '#{package.changelog}'")
-    run_command("shopify-build pause")
+    release = `lsb_release -c -s`.strip
+    run_command("dch --create --package #{package.name} -v '#{package.version}~#{release}' '#{package.changelog}'")
     run_command("dch -r '#{package.changelog}'")
 
     generate_debian_install_files("debian/#{package.name}.install", package.prefix, %w( bin include lib shims ))

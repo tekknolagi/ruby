@@ -1,6 +1,8 @@
 containers:
-  default:
+  trusty:
     docker: ubuntu:14.04
+  xenial:
+    docker: ubuntu:16.04
 
 shared:
   package_builder: &package_builder
@@ -8,15 +10,17 @@ shared:
     run:
     - apt-get update && apt-get install -y devscripts git openssh-client ruby2.0
     - git clone git@github.com:shopify/ruby.git
-    - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
-    - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version 1
+    - if [[ "$(lsb_release -c -s)" == "trusty" ]]; then update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10; fi
+    - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version ${VERSION:-1}
     artifact_paths:
     - artifacts
 
 steps:
 - <<: *package_builder
   label: Build trusty deb
-  env:
-    TARGET_DIST: trusty
+  container: trusty
+- <<: *package_builder
+  label: Build xenial deb
+  container: xenial
 # - wait
 # - push to packagecloud if tagged on master
