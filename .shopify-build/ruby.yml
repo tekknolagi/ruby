@@ -3,6 +3,8 @@ containers:
     docker: ubuntu:14.04
   xenial:
     docker: ubuntu:16.04
+  packagecloud:
+    docker: gcr.io/shopify-docker-images/ci-branches/ci/packagecloud:565f316336bd1b0982eb212b90f412ce33a12d5b
 
 shared:
   package_builder: &package_builder
@@ -27,5 +29,15 @@ steps:
 - <<: *package_builder
   label: Build xenial deb
   container: xenial
-# - wait
-# - push to packagecloud if tagged on master
+
+- block: "Publish debs"
+
+- label: Publish to Packagecloud
+  timeout: 5m
+  container: packagecloud
+  run:
+  - ls -l debs
+  - publish_debs debs
+  import_artifacts:
+  - pattern: '*.deb'
+    into: debs
