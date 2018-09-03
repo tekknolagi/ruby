@@ -21,18 +21,22 @@ shared:
     container: packagecloud
     run:
     - ls -l debs
-    #- publish_debs debs ${DIST}
+    - publish_debs debs ${DIST}
+    import_artifacts:
+    - pattern: '*.deb'
+      into: debs
+      job_id: Build ${DIST} debs
 
 steps:
 - <<: *package_builder
-  label: Build trusty deb
+  label: Build trusty debs
   container: trusty
   init:
   - apt-get update
   - apt-get install -y ruby2.0
   - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
 - <<: *package_builder
-  label: Build xenial deb
+  label: Build xenial debs
   container: xenial
 
 - block: "Publish debs"
@@ -41,16 +45,7 @@ steps:
   label: Publish trusty debs
   env:
     DIST: trusty
-  import_artifacts:
-  - pattern: '*.deb'
-    into: debs
-    job_id: Build trusty deb
-
 - <<: *publish
   label: Publish xenial debs
   env:
     DIST: xenial
-  import_artifacts:
-  - pattern: '*.deb'
-    into: debs
-    job_id: Build trusty deb
