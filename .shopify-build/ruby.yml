@@ -13,16 +13,15 @@ shared:
     - apt-get update
     run:
     - apt-get install -y devscripts git openssh-client ruby equivs
-    - git clone git@github.com:shopify/ruby.git #TODO(DazWorrall): In lieu of history: full
-    - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version ${VERSION:-1}
+    - ./bin/ci/build.sh
     artifact_paths:
     - artifacts
-  publish:
+  publish: &publish
     timeout: 5m
     container: packagecloud
     run:
     - ls -l debs
-    - publish_debs debs ${DIST}
+    #- publish_debs debs ${DIST}
 
 steps:
 - <<: *package_builder
