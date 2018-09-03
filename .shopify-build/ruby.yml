@@ -4,7 +4,7 @@ containers:
   xenial:
     docker: ubuntu:16.04
   packagecloud:
-    docker: gcr.io/shopify-docker-images/ci-branches/ci/packagecloud:565f316336bd1b0982eb212b90f412ce33a12d5b
+    docker: gcr.io/shopify-docker-images/ci/packagecloud:0.1
 
 shared:
   package_builder: &package_builder
@@ -17,6 +17,12 @@ shared:
     - cd ruby && ../ruby_build --name "ruby-shopify-2.5.1" --version ${VERSION:-1}
     artifact_paths:
     - artifacts
+  publish:
+    timeout: 5m
+    container: packagecloud
+    run:
+    - ls -l debs
+    - publish_debs debs ${DIST}
 
 steps:
 - <<: *package_builder
@@ -32,12 +38,20 @@ steps:
 
 - block: "Publish debs"
 
-- label: Publish to Packagecloud
-  timeout: 5m
-  container: packagecloud
-  run:
-  - ls -l debs
-  - publish_debs debs
+- <<: *publish
+  label: Publish trusty debs
+  env:
+    DIST: trusty
   import_artifacts:
   - pattern: '*.deb'
     into: debs
+    job_id: Build trusty deb
+
+- <<: *publish
+  label: Publish xenial debs
+  env:
+    DIST: xenial
+  import_artifacts:
+  - pattern: '*.deb'
+    into: debs
+    job_id: Build trusty deb
