@@ -1,0 +1,51 @@
+containers:
+  trusty:
+    docker: ubuntu:14.04
+  xenial:
+    docker: ubuntu:16.04
+  packagecloud:
+    docker: gcr.io/shopify-docker-images/ci/packagecloud:0.1
+
+shared:
+  package_builder: &package_builder
+    timeout: 15m
+    init:
+    - apt-get update
+    run:
+    - apt-get install -y devscripts git openssh-client ruby equivs
+    - ./bin/ci/build.sh
+    artifact_paths:
+    - artifacts
+  publish: &publish
+    timeout: 5m
+    container: packagecloud
+    run:
+    - ls -l debs
+    - publish_debs debs ${DIST}
+    import_artifacts:
+    - pattern: '*.deb'
+      into: debs
+      job_id: Build ${DIST} debs
+
+steps:
+- <<: *package_builder
+  label: Build trusty debs
+  container: trusty
+  init:
+  - apt-get update
+  - apt-get install -y ruby2.0
+  - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
+- <<: *package_builder
+  label: Build xenial debs
+  container: xenial
+
+- block: "Publish debs"
+
+- <<: *publish
+  label: Publish trusty debs
+  env:
+    DIST: trusty
+- <<: *publish
+  label: Publish xenial debs
+  env:
+    DIST: xenial
