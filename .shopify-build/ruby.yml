@@ -38,6 +38,20 @@ steps:
 - <<: *package_builder
   label: Build xenial debs
   container: xenial
+- label: Build source tarbal
+  container: trusty
+  timeout: 15m
+  run:
+  - apt-get update
+  - apt-get install -y systemtap-sdt-dev # needed for --enable-dtrace to work
+  - git clone git@github.com:shopify/ruby.git
+  - cd ruby
+  - autoconf
+  - ./configure --enable-dtrace
+  - make
+  - make install
+  artifact_paths:
+  - artifacts
 
 - block: "Publish debs"
 
