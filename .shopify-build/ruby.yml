@@ -38,6 +38,29 @@ steps:
 - <<: *package_builder
   label: Build xenial debs
   container: xenial
+- label: Build source tarball for buildpacks # similar to https://github.com/hone/docker-heroku-ruby-builder/blob/master/build.rb
+  container: trusty # to build for cedar, see https://github.com/heroku/heroku-buildpack-ruby/blob/f16fbb6cdd08b52af1149140b14619c5f14262c7/lib/language_pack/base.rb#L20
+  timeout: 15m
+  run:
+  - apt-get update
+  - apt-get install -y git openssh-client
+  - apt-get install -y autoconf bison build-essential equivs devscripts libreadline-dev libssl-dev libyaml-dev zlib1g-dev libffi-dev libgdbm3 libgdbm-dev # lifted from debian control file
+  - apt-get install -y systemtap-sdt-dev # needed for --enable-dtrace to work, which is (currently) the main point of doing this build
+  - apt-get install -y ruby2.0
+  - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
+  - git clone git@github.com:shopify/ruby.git
+  - cd ruby
+  - git fetch --tags
+  - git checkout v2_5_1
+  - autoconf
+  - mkdir -p /tmp/rubybuild /artifacts
+  - ./configure --enable-dtrace debugflags="-g3 -ggdb" --prefix=/tmp/rubybuild
+  - make -j$(nproc)
+  - make install
+  - cd /tmp/rubybuild
+  - tar -czf /artifacts/ruby-2.5.1.tar.gz *
+  artifact_paths:
+  - /artifacts
 
 - block: "Publish debs"
 
