@@ -18,6 +18,15 @@ Provides: <%= package.provides %>
 Suggests: <%= package.doc_name %>
 Description: <%= package.description %>
 
+Package: <%= package.name %>-dbg
+Section: debug
+Architecture: any
+Depends:
+  <%= package.name %> (= ${binary:Version}),
+  ${misc:Depends}
+Description: debugging symbols for <%= package.name %>
+  <%= package.description %>
+
 Package: <%= package.doc_name %>
 Architecture: any
 Description: <%= package.doc_description %>
