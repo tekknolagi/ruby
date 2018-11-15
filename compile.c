@@ -2661,7 +2661,7 @@ optimize_checktype(rb_iseq_t *iseq, INSN *iobj)
 }
 
 static int
-iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcallopt)
+iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcallopt, TRACE *last_trace)
 {
     INSN *const iobj = (INSN *)list;
 
@@ -3072,7 +3072,7 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
 		    }
 		}
 		ELEM_INSERT_NEXT(next, &label->link);
-		CHECK(iseq_peephole_optimize(iseq, get_next_insn(jump), do_tailcallopt));
+		CHECK(iseq_peephole_optimize(iseq, get_next_insn(jump), do_tailcallopt, last_trace));
 	    }
 	    else {
 		if (freeze) ELEM_REMOVE(freeze);
@@ -3149,6 +3149,10 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
 	    }
 	    else {
 		ci->flag |= VM_CALL_TAILCALL;
+	    }
+	    if (last_trace && (ci->flag & VM_CALL_TAILCALL)) {
+	        ELEM_INSERT_NEXT((LINK_ELEMENT *) last_trace,
+	            (LINK_ELEMENT *)new_trace_body(iseq, RUBY_EVENT_TAILCALL, 0));
 	    }
 	}
     }
@@ -3313,6 +3317,7 @@ static int
 iseq_optimize(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 {
     LINK_ELEMENT *list;
+    TRACE *last_trace = NULL;
     const int do_peepholeopt = ISEQ_COMPILE_DATA(iseq)->option->peephole_optimization;
     const int do_tailcallopt = tailcallable_p(iseq) &&
 	ISEQ_COMPILE_DATA(iseq)->option->tailcall_optimization;
@@ -3326,7 +3331,7 @@ iseq_optimize(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
     while (list) {
 	if (IS_INSN(list)) {
 	    if (do_peepholeopt) {
-		iseq_peephole_optimize(iseq, list, tailcallopt);
+		iseq_peephole_optimize(iseq, list, tailcallopt, last_trace);
 	    }
 	    if (do_si) {
 		iseq_specialized_instruction(iseq, (INSN *)list);
@@ -3345,6 +3350,9 @@ iseq_optimize(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 		if (!--rescue_level) tailcallopt = do_tailcallopt;
 		break;
 	    }
+	}
+	if (IS_TRACE(list)) {
+	    last_trace = (TRACE *) list;
 	}
 	list = list->next;
     }
@@ -6440,6 +6448,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, in
 	  fcall: func(...)
 	  vcall: func
 	*/
+
 	DECL_ANCHOR(recv);
 	DECL_ANCHOR(args);
 	LABEL *else_label = 0;

@@ -25,7 +25,7 @@
 #json/parser
 #nkf
 #objspace
-#openssl
+openssl
 #pathname
 #psych
 #pty

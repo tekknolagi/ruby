@@ -76,7 +76,8 @@ ISEQ_ORIGINAL_ISEQ_ALLOC(const rb_iseq_t *iseq, long size)
 			   RUBY_EVENT_B_CALL| \
 			   RUBY_EVENT_B_RETURN| \
                            RUBY_EVENT_COVERAGE_LINE| \
-                           RUBY_EVENT_COVERAGE_BRANCH)
+                           RUBY_EVENT_COVERAGE_BRANCH| \
+			   RUBY_EVENT_TAILCALL)
 
 #define ISEQ_NOT_LOADED_YET   IMEMO_FL_USER1
 #define ISEQ_USE_COMPILE_DATA IMEMO_FL_USER2
