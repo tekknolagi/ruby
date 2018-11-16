@@ -3151,8 +3151,7 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
 		ci->flag |= VM_CALL_TAILCALL;
 	    }
 	    if (last_trace && (ci->flag & VM_CALL_TAILCALL)) {
-	        ELEM_INSERT_NEXT((LINK_ELEMENT *) last_trace,
-	            (LINK_ELEMENT *)new_trace_body(iseq, RUBY_EVENT_TAILCALL, 0));
+	    	last_trace->event |= RUBY_EVENT_TAILCALL;
 	    }
 	}
     }
@@ -3352,7 +3351,10 @@ iseq_optimize(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 	    }
 	}
 	if (IS_TRACE(list)) {
-	    last_trace = (TRACE *) list;
+	    TRACE *trace = (TRACE*) list;
+	    if (trace->event & RUBY_EVENT_CALL) {
+	    	last_trace = trace;
+	    }
 	}
 	list = list->next;
     }

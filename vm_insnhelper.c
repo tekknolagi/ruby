@@ -1719,7 +1719,7 @@ vm_call_iseq_setup_tailcall(rb_execution_context_t *ec, rb_control_frame_t *cfp,
 	*sp++ = src_argv[i];
     }
 
-    vm_push_frame(ec, iseq, VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL | finish_flag,
+    vm_push_frame(ec, iseq, VM_FRAME_MAGIC_METHOD | VM_FRAME_FLAG_TAILCALLED | VM_ENV_FLAG_LOCAL | finish_flag,
 		  calling->recv, calling->block_handler, (VALUE)me,
 		  iseq->body->iseq_encoded + opt_pc, sp,
 		  iseq->body->local_table_size - iseq->body->param.size,
@@ -3867,14 +3867,18 @@ vm_trace(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *p
 	VM_ASSERT(vm_event_flags & events);
 
 	/* increment PC because source line is calculated with PC-1 */
-        if ((event = (events & (RUBY_EVENT_CLASS | RUBY_EVENT_CALL | RUBY_EVENT_TAILCALL | RUBY_EVENT_B_CALL))) != 0) {
-	    VM_ASSERT(event == RUBY_EVENT_CLASS  ||
-		      event == RUBY_EVENT_CALL   ||
-		      event == RUBY_EVENT_B_CALL ||
-		      event == (RUBY_EVENT_CALL | RUBY_EVENT_TAILCALL));
+        if ((event = (events & (RUBY_EVENT_CLASS | RUBY_EVENT_B_CALL))) != 0) {
+	    VM_ASSERT(event == RUBY_EVENT_CLASS || event == RUBY_EVENT_B_CALL);
 	    reg_cfp->pc++;
 	    vm_dtrace(event, ec);
 	    EXEC_EVENT_HOOK(ec, event, GET_SELF(), 0, 0, 0, Qundef);
+	    reg_cfp->pc--;
+	}
+	if (events & RUBY_EVENT_CALL) {
+	    reg_cfp->pc++;
+	    vm_dtrace(RUBY_EVENT_CALL, ec);
+	    VALUE is_tailcall = (reg_cfp->ep[VM_ENV_DATA_INDEX_FLAGS] & VM_FRAME_FLAG_TAILCALLED) ? Qtrue : Qfalse;
+	    EXEC_EVENT_HOOK(ec, RUBY_EVENT_CALL, GET_SELF(), 0, 0, 0, is_tailcall);
 	    reg_cfp->pc--;
 	}
 	if (events & RUBY_EVENT_LINE) {

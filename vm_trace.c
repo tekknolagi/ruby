@@ -940,9 +940,8 @@ rb_tracearg_object(rb_trace_arg_t *trace_arg)
 VALUE
 rb_tracearg_is_tailcall(const rb_trace_arg_t *trace_arg)
 {
-    rb_event_flag_t events = trace_arg->event;
-    if ((events & RUBY_EVENT_CALL) && (events & RUBY_EVENT_TAILCALL)) {
-    	return Qtrue;
+    if (trace_arg->event == RUBY_EVENT_CALL) {
+    	return trace_arg->data;
     } else {
     	return Qfalse;
     }
@@ -1085,7 +1084,7 @@ tracepoint_attr_raised_exception(VALUE tpval)
 
 
 static VALUE
-tracepoint_att_tailcall(VALUE tpval)
+tracepoint_attr_tailcall(VALUE tpval)
 {
     return rb_tracearg_is_tailcall(get_trace_arg());
 }
@@ -1582,7 +1581,7 @@ Init_vm_trace(void)
     rb_define_method(rb_cTracePoint, "self", tracepoint_attr_self, 0);
     rb_define_method(rb_cTracePoint, "return_value", tracepoint_attr_return_value, 0);
     rb_define_method(rb_cTracePoint, "raised_exception", tracepoint_attr_raised_exception, 0);
-    rb_define_method(rb_cTracePoint, "tailcall?", tracepoint_att_tailcall, 0);
+    rb_define_method(rb_cTracePoint, "tailcall?", tracepoint_attr_tailcall, 0);
 
     rb_define_singleton_method(rb_cTracePoint, "stat", tracepoint_stat_s, 0);
 }
