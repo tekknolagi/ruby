@@ -13,8 +13,8 @@ shared:
     - apt-get update
     run:
     - apt-get install -y devscripts git openssh-client ruby equivs
-    - ./bin/ci/build.sh
     - shopify-build pause
+    - ./bin/ci/build.sh
     artifact_paths:
     - artifacts
   publish: &publish
