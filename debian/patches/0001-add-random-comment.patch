@@ -1,0 +1,25 @@
+From ba1a9f09d1574e9138a28faa7625744f7a5ffd45 Mon Sep 17 00:00:00 2001
+From: Alan Wu <XrXr@users.noreply.github.com>
+Date: Tue, 27 Nov 2018 15:02:16 -0500
+Subject: [PATCH] add random comment
+
+---
+ ruby.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/ruby.c b/ruby.c
+index 5a7032ab7b..00752c4482 100644
+--- a/ruby.c
++++ b/ruby.c
+@@ -11,6 +11,8 @@
+ 
+ **********************************************************************/
+ 
++/* hey whatup. my boy alan's got a patch for you my mate */
++
+ #ifdef __CYGWIN__
+ #include <windows.h>
+ #include <sys/cygwin.h>
+-- 
+2.19.1
+

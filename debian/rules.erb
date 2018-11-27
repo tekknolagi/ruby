@@ -15,7 +15,7 @@ RUBYLIB="$(RUBY_LIB_DIR):$(RUBY_LIB_DIR)/$(shell uname -m)-linux"
 DH_FLAGS=-O--parallel
 
 %:
-	dh $@ --parallel --no-act
+	dh $@ --parallel
 
 override_dh_auto_configure:
 	test configure -nt configure.in || autoconf
