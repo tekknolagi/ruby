@@ -14,6 +14,7 @@ shared:
     run:
     - apt-get install -y devscripts git openssh-client ruby equivs
     - ./bin/ci/build.sh
+    - shopify-build pause
     artifact_paths:
     - artifacts
   publish: &publish
@@ -28,13 +29,6 @@ shared:
       job_id: Build ${DIST} debs
 
 steps:
-- <<: *package_builder
-  label: Build trusty debs
-  container: trusty
-  init:
-  - apt-get update
-  - apt-get install -y ruby2.0
-  - update-alternatives --install /usr/bin/ruby ruby2.0 /usr/bin/ruby2.0 10
 - <<: *package_builder
   label: Build xenial debs
   container: xenial
