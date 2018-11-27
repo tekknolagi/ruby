@@ -16,7 +16,7 @@ index 5a7032ab7b..00752c4482 100644
  **********************************************************************/
  
 +/* hey whatup. my boy alan's got a patch for you my mate */
-+
++ fail to compile on purpose so we know that this patch applied.
  #ifdef __CYGWIN__
  #include <windows.h>
  #include <sys/cygwin.h>
