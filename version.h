@@ -65,7 +65,8 @@
     RUBY_PATCHLEVEL_STR		    \
     " ("RUBY_RELEASE_DATE	    \
     RUBY_REVISION_STR") "	    \
-    "["RUBY_PLATFORM"]"
+    "["RUBY_PLATFORM"]"             \
+    " 2.5.3-alans-special-1"
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \
     RUBY_BIRTH_YEAR_STR"-"   \

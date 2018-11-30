@@ -92,7 +92,7 @@ class TestRubyOptions < Test::Unit::TestCase
       /^jruby #{q[RUBY_ENGINE_VERSION]} \(#{q[RUBY_VERSION]}\).*? \[#{
         q[RbConfig::CONFIG["host_os"]]}-#{q[RbConfig::CONFIG["host_cpu"]]}\]$/
     else
-      /^ruby #{q[RUBY_VERSION]}(?:[p ]|dev|rc).*? \[#{q[RUBY_PLATFORM]}\]$/
+      /^ruby #{q[RUBY_VERSION]}(?:[p ]|dev|rc).*? \[#{q[RUBY_PLATFORM]}\]/
     end
   private_constant :VERSION_PATTERN
 
