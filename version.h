@@ -1,6 +1,7 @@
 #define RUBY_VERSION "2.6.0"
 #define RUBY_RELEASE_DATE RUBY_RELEASE_YEAR_STR"-"RUBY_RELEASE_MONTH_STR"-"RUBY_RELEASE_DAY_STR
 #define RUBY_PATCHLEVEL -1
+#define RUBY_SHOPIFY_SUFFIX "ruby-builder-development"
 
 #define RUBY_RELEASE_YEAR 2018
 #define RUBY_RELEASE_MONTH 11
@@ -65,7 +66,8 @@
     RUBY_PATCHLEVEL_STR		    \
     " ("RUBY_RELEASE_DATE	    \
     RUBY_REVISION_STR")"opt" "	    \
-    "["RUBY_PLATFORM"]"
+    "["RUBY_PLATFORM"] "            \
+    RUBY_VERSION"-"RUBY_SHOPIFY_SUFFIX
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \
     RUBY_BIRTH_YEAR_STR"-"   \
