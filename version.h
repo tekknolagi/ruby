@@ -1,6 +1,7 @@
 #define RUBY_VERSION "2.5.3"
 #define RUBY_RELEASE_DATE "2018-10-18"
 #define RUBY_PATCHLEVEL 105
+#define RUBY_SHOPIFY_SUFFIX "alans-special-1"
 
 #define RUBY_RELEASE_YEAR 2018
 #define RUBY_RELEASE_MONTH 10
@@ -66,7 +67,7 @@
     " ("RUBY_RELEASE_DATE	    \
     RUBY_REVISION_STR") "	    \
     "["RUBY_PLATFORM"]"             \
-    " 2.5.3-alans-special-1"
+    " 2.5.3-alans-special-1 2.5.3alansspecial1"
 # define RUBY_COPYRIGHT		    \
     "ruby - Copyright (C) "	    \
     RUBY_BIRTH_YEAR_STR"-"   \
