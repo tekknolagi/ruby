@@ -2257,7 +2257,7 @@ rb_const_get_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
 }
 
 static VALUE
-rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
+rb_const_search_const_entry(VALUE klass, ID id, int exclude, int recurse, int visibility, rb_const_entry_t **ce)
 {
     VALUE value, tmp, av;
     rb_const_flag_t flag;
@@ -2267,16 +2267,18 @@ rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
   retry:
     while (RTEST(tmp)) {
 	VALUE am = 0;
-	rb_const_entry_t *ce;
+	rb_const_entry_t *loop_ce;
 
-	while ((ce = rb_const_lookup(tmp, id))) {
-	    if (visibility && RB_CONST_PRIVATE_P(ce)) {
+	while ((loop_ce = rb_const_lookup(tmp, id))) {
+	    if (visibility && RB_CONST_PRIVATE_P(loop_ce)) {
 		if (BUILTIN_TYPE(tmp) == T_ICLASS) tmp = RBASIC(tmp)->klass;
 		rb_name_err_raise("private constant %2$s::%1$s referenced",
 				  tmp, ID2SYM(id));
 	    }
-	    rb_const_warn_if_deprecated(ce, tmp, id);
-	    value = ce->value;
+	    rb_const_warn_if_deprecated(loop_ce, tmp, id);
+	    value = loop_ce->value;
+		*ce = loop_ce;
+
 	    if (value == Qundef) {
 		if (am == tmp) break;
 		am = tmp;
@@ -2304,6 +2306,13 @@ rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
     }
 
     return Qundef;
+}
+
+static VALUE
+rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
+{
+	rb_const_entry_t *ce;
+	return rb_const_search_const_entry(klass, id, exclude, recurse, visibility, &ce);
 }
 
 VALUE
