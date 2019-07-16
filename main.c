@@ -24,10 +24,16 @@
 #ifdef RUBY_DEBUG_ENV
 #include <stdlib.h>
 #endif
+#ifdef __APPLE__
+#include <os/log.h>
+#endif
 
 int
 main(int argc, char **argv)
 {
+#ifdef __APPLE__
+    os_log_create("com.shopify.cruby", "Debug");
+#endif
 #ifdef RUBY_DEBUG_ENV
     ruby_set_debug_option(getenv("RUBY_DEBUG"));
 #endif
