@@ -1,9 +1,9 @@
-#define RUBY_VERSION "2.6.3"
+#define RUBY_VERSION "2.6.4"
 #define RUBY_RELEASE_DATE RUBY_RELEASE_YEAR_STR"-"RUBY_RELEASE_MONTH_STR"-"RUBY_RELEASE_DAY_STR
-#define RUBY_PATCHLEVEL 65
+#define RUBY_PATCHLEVEL 66
 
 #define RUBY_RELEASE_YEAR 2019
-#define RUBY_RELEASE_MONTH 6
+#define RUBY_RELEASE_MONTH 7
 #define RUBY_RELEASE_DAY 22
 
 #include "ruby/version.h"
@@ -63,6 +63,7 @@
 # define RUBY_DESCRIPTION_WITH(opt) \
     "ruby "RUBY_VERSION		    \
     RUBY_PATCHLEVEL_STR		    \
+    "-shopify-unoffical-1"      \
     " ("RUBY_RELEASE_DATE	    \
     RUBY_REVISION_STR")"opt" "	    \
     "["RUBY_PLATFORM"]"
