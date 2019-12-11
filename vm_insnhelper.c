@@ -2249,7 +2249,6 @@ static inline VALUE
 vm_call_iseq_setup_2(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd,
 		     int opt_pc, int param_size, int local_size)
 {
-    const struct rb_call_info *ci = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
 
     if (LIKELY(!(cc->flag & VM_CALL_TAILCALL))) {
