@@ -4009,7 +4009,6 @@ vm_sendish(
         struct rb_call_data *cd,
         VALUE recv))
 {
-    const CALL_INFO ci = &cd->ci;
     const CALL_CACHE cc = &cd->cc;
     VALUE val;
     int argc = cc->orig_argc;

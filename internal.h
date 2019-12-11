@@ -2359,6 +2359,7 @@ struct rb_call_cache {
                   struct rb_control_frame_struct *cfp,
                   struct rb_calling_info *calling,
                   struct rb_call_data *cd);
+    /* cache call info argc and flags in the 4 byte cache line padding */
     short int orig_argc;
     short int flag;
     union {
