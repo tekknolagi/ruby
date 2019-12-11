@@ -4012,10 +4012,6 @@ vm_sendish(
     const CALL_INFO ci = &cd->ci;
     const CALL_CACHE cc = &cd->cc;
     VALUE val;
-    if (UNLIKELY(cc->me == NULL)) {
-        cc->orig_argc = ci->orig_argc;
-        cc->flag = ci->flag;
-    }
     int argc = cc->orig_argc;
     VALUE recv = TOPN(argc);
     struct rb_calling_info calling;

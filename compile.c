@@ -2213,11 +2213,15 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
                                 struct rb_kwarg_call_data *cd_kw = &kw_calls[ISEQ_COMPILE_DATA(iseq)->ci_kw_index++];
                                 cd_kw->ci_kw = *((struct rb_call_info_with_kwarg *)source_ci);
                                 cd = (struct rb_call_data *)cd_kw;
+                                cd->cc.orig_argc = cd->ci.orig_argc;
+                                cd->cc.flag = cd->ci.flag;
                                 assert(ISEQ_COMPILE_DATA(iseq)->ci_kw_index <= body->ci_kw_size);
                             }
                             else {
                                 cd = &body->call_data[ISEQ_COMPILE_DATA(iseq)->ci_index++];
                                 cd->ci = *source_ci;
+                                cd->cc.orig_argc = cd->ci.orig_argc;
+                                cd->cc.flag = cd->ci.flag;
                                 assert(ISEQ_COMPILE_DATA(iseq)->ci_index <= body->ci_size);
                             }
 
@@ -10320,6 +10324,8 @@ ibf_load_ci_entries(const struct ibf_load *load,
         calls[i].ci.mid = ibf_load_id(load, mid_index);
         calls[i].ci.flag = (unsigned int)ibf_load_small_value(load, &reading_pos);
         calls[i].ci.orig_argc = (int)ibf_load_small_value(load, &reading_pos);
+        calls[i].cc.flag = calls[i].ci.flag;
+        calls[i].cc.orig_argc = calls[i].ci.orig_argc;
     }
 
     for (i = 0; i < ci_kw_size; i++) {
@@ -10328,6 +10334,8 @@ ibf_load_ci_entries(const struct ibf_load *load,
         kw_calls[i].ci_kw.ci.mid = ibf_load_id(load, mid_index);
         kw_calls[i].ci_kw.ci.flag = (unsigned int)ibf_load_small_value(load, &reading_pos);
         kw_calls[i].ci_kw.ci.orig_argc = (int)ibf_load_small_value(load, &reading_pos);
+        kw_calls[i].ci_kw.ci.flag = kw_calls[i].ci_kw.ci.flag;
+        kw_calls[i].ci_kw.ci.orig_argc = kw_calls[i].ci_kw.ci.orig_argc;
 
         int keyword_len = (int)ibf_load_small_value(load, &reading_pos);
 
