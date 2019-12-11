@@ -1513,6 +1513,7 @@ RUBY_DECL_ATTRIBUTE([__nonnull__(n)], [RUBY_FUNC_NONNULL(n,x)], [rb_cv_func_nonn
 @%:@define n 1
 ])
 
+RUBY_APPEND_OPTION(XCFLAGS, -msse4.1)
 RUBY_APPEND_OPTION(XCFLAGS, -DRUBY_EXPORT)
 
 AC_ARG_ENABLE(mathn,
