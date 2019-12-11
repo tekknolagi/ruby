@@ -1432,7 +1432,6 @@ __attribute__((__artificial__))
 static inline vm_call_handler
 calccall(const struct rb_call_data *cd, const rb_callable_method_entry_t *me)
 {
-    const struct rb_call_info *ci = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
 
     if (UNLIKELY(!me)) {
