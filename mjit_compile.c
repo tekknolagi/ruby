@@ -100,7 +100,7 @@ fastpath_applied_iseq_p(const CALL_INFO ci, const CALL_CACHE cc, const rb_iseq_t
     return iseq != NULL
         && !(ci->flag & VM_CALL_KW_SPLAT) && rb_simple_iseq_p(iseq) // Top of vm_callee_setup_arg. In this case, opt_pc is 0.
         && ci->orig_argc == iseq->body->param.lead_num // exclude argument_arity_error (assumption: `calling->argc == ci->orig_argc` in send insns)
-        && vm_call_iseq_optimizable_p(ci, cc); // CC_SET_FASTPATH condition
+        && vm_call_iseq_optimizable_p(cc); // CC_SET_FASTPATH condition
 }
 
 static int

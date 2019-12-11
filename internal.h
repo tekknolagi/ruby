@@ -2359,7 +2359,8 @@ struct rb_call_cache {
                   struct rb_control_frame_struct *cfp,
                   struct rb_calling_info *calling,
                   struct rb_call_data *cd);
-
+    short int orig_argc;
+    short int flag;
     union {
         unsigned int index; /* used by ivar */
         enum method_missing_reason method_missing_reason; /* used by method_missing */
@@ -2369,8 +2370,8 @@ STATIC_ASSERT(cachelined, sizeof(struct rb_call_cache) <= CACHELINE);
 struct rb_call_info {
     /* fixed at compile time */
     ID mid;
-    unsigned int flag;
-    int orig_argc;
+    unsigned short int flag;
+    short int orig_argc;
 };
 struct rb_call_data {
     struct rb_call_cache cc;

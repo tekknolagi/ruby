@@ -250,8 +250,8 @@ struct rb_call_info_with_kwarg {
 struct rb_calling_info {
     VALUE block_handler;
     VALUE recv;
-    int argc;
-    int kw_splat;
+    short int argc;
+    short int kw_splat;
 };
 
 struct rb_kwarg_call_data {

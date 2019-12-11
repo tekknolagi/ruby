@@ -1452,7 +1452,7 @@ calccall(const struct rb_call_data *cd, const rb_callable_method_entry_t *me)
      * formerly-private method now publicised is an absolutely safe thing.
      * Calling a private method without specifying a receiver is also safe. */
     else if ((METHOD_ENTRY_VISI(cc->me) != METHOD_VISI_PUBLIC) &&
-             !(ci->flag & VM_CALL_FCALL)) {
+             !(cc->flag & VM_CALL_FCALL)) {
         RB_DEBUG_COUNTER_INC(mc_miss_by_visi);
         return vm_call_general;
     }
@@ -1476,6 +1476,9 @@ rb_vm_search_method_slowpath(struct rb_call_data *cd, VALUE klass)
         me,
         me ? me->def : NULL,
         call,
+        // Cached on rb_call_cache to fit into the same cache line
+        ci->orig_argc,
+        ci->flag
     };
     if (call != vm_call_general) {
         for (int i = 0; i < numberof(cc->class_serial) - 1; i++) {
@@ -1498,6 +1501,8 @@ rb_vm_search_method_slowpath(struct rb_call_data *cd, VALUE klass)
  *       rb_callable_method_entry_t *me;
  *       rb_method_definition_struct *def;
  *       vm_call_handler call;
+ *       short int orig_argc;
+ *       short int flag;
  *       union { ... snip ... } aux;
  *   };
  *   ```
@@ -2112,7 +2117,7 @@ vm_call_iseq_setup_kwparm_nokwarg(rb_execution_context_t *ec, rb_control_frame_t
     const struct rb_call_info *MAYBE_UNUSED(ci) = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
 
-    VM_ASSERT((ci->flag & VM_CALL_KWARG) == 0);
+    VM_ASSERT((cc->flag & VM_CALL_KWARG) == 0);
     RB_DEBUG_COUNTER_INC(ccf_iseq_kw2);
 
     const rb_iseq_t *iseq = def_iseq_ptr(cc->me->def);
@@ -2141,7 +2146,7 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
     const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
 
-    if (LIKELY(!(ci->flag & VM_CALL_KW_SPLAT))) {
+    if (LIKELY(!(cc->flag & VM_CALL_KW_SPLAT))) {
         if (LIKELY(rb_simple_iseq_p(iseq))) {
             rb_control_frame_t *cfp = ec->cfp;
             CALLER_SETUP_ARG(cfp, calling, ci);
@@ -2151,7 +2156,7 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
                 argument_arity_error(ec, iseq, calling->argc, iseq->body->param.lead_num, iseq->body->param.lead_num);
             }
 
-            CC_SET_FASTPATH(cc, vm_call_iseq_setup_func(ci, param_size, local_size), vm_call_iseq_optimizable_p(&cd->ci, &cd->cc));
+            CC_SET_FASTPATH(cc, vm_call_iseq_setup_func(ci, param_size, local_size), vm_call_iseq_optimizable_p(&cd->cc));
             return 0;
         }
         else if (rb_iseq_only_optparam_p(iseq)) {
@@ -2168,14 +2173,14 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
                 argument_arity_error(ec, iseq, argc, lead_num, lead_num + opt_num);
             }
 
-            if (LIKELY(!(ci->flag & VM_CALL_TAILCALL))) {
+            if (LIKELY(!(cc->flag & VM_CALL_TAILCALL))) {
                 CC_SET_FASTPATH(cc, vm_call_iseq_setup_normal_opt_start,
-                                !IS_ARGS_SPLAT(ci) && !IS_ARGS_KEYWORD(ci) &&
+                                !IS_ARGS_SPLAT(cc) && !IS_ARGS_KEYWORD(cc) &&
                                 !(METHOD_ENTRY_VISI(cc->me) == METHOD_VISI_PROTECTED));
             }
             else {
                 CC_SET_FASTPATH(cc, vm_call_iseq_setup_tailcall_opt_start,
-                                !IS_ARGS_SPLAT(ci) && !IS_ARGS_KEYWORD(ci) &&
+                                !IS_ARGS_SPLAT(cc) && !IS_ARGS_KEYWORD(cc) &&
                                 !(METHOD_ENTRY_VISI(cc->me) == METHOD_VISI_PROTECTED));
             }
 
@@ -2186,12 +2191,12 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
             }
             return (int)iseq->body->param.opt_table[opt];
         }
-        else if (rb_iseq_only_kwparam_p(iseq) && !IS_ARGS_SPLAT(ci)) {
+        else if (rb_iseq_only_kwparam_p(iseq) && !IS_ARGS_SPLAT(cc)) {
             const int lead_num = iseq->body->param.lead_num;
             const int argc = calling->argc;
             const struct rb_iseq_param_keyword *kw_param = iseq->body->param.keyword;
 
-            if (ci->flag & VM_CALL_KWARG) {
+            if (cc->flag & VM_CALL_KWARG) {
                 const struct rb_call_info_kw_arg *kw_arg = ((struct rb_call_info_with_kwarg *)ci)->kw_arg;
 
                 if (argc - kw_arg->keyword_len == lead_num) {
@@ -2248,7 +2253,7 @@ vm_call_iseq_setup_2(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct
     const struct rb_call_info *ci = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
 
-    if (LIKELY(!(ci->flag & VM_CALL_TAILCALL))) {
+    if (LIKELY(!(cc->flag & VM_CALL_TAILCALL))) {
         return vm_call_iseq_setup_normal(ec, cfp, calling, cc->me, opt_pc, param_size, local_size);
     }
     else {
@@ -2590,12 +2595,12 @@ vm_call_bmethod(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_c
 }
 
 static enum method_missing_reason
-ci_missing_reason(const struct rb_call_info *ci)
+cc_missing_reason(const struct rb_call_cache *cc)
 {
     enum method_missing_reason stat = MISSING_NOENTRY;
-    if (ci->flag & VM_CALL_VCALL) stat |= MISSING_VCALL;
-    if (ci->flag & VM_CALL_FCALL) stat |= MISSING_FCALL;
-    if (ci->flag & VM_CALL_SUPER) stat |= MISSING_SUPER;
+    if (cc->flag & VM_CALL_VCALL) stat |= MISSING_VCALL;
+    if (cc->flag & VM_CALL_FCALL) stat |= MISSING_FCALL;
+    if (cc->flag & VM_CALL_SUPER) stat |= MISSING_SUPER;
     return stat;
 }
 
@@ -2644,7 +2649,7 @@ vm_call_opt_send(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
 	}
 	TOPN(i) = rb_str_intern(sym);
 	ci->mid = idMethodMissing;
-	ec->method_missing_reason = cc->aux.method_missing_reason = ci_missing_reason(ci);
+	ec->method_missing_reason = cc->aux.method_missing_reason = cc_missing_reason(cc);
     }
     else {
 	/* shift arguments */
@@ -2656,7 +2661,7 @@ vm_call_opt_send(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
     }
 
     cc->me = rb_callable_method_entry_with_refinements(CLASS_OF(calling->recv), ci->mid, NULL);
-    ci->flag = VM_CALL_FCALL | VM_CALL_OPT_SEND | (calling->kw_splat ? VM_CALL_KW_SPLAT : 0);
+    cc->flag = ci->flag = VM_CALL_FCALL | VM_CALL_OPT_SEND | (calling->kw_splat ? VM_CALL_KW_SPLAT : 0);
     return vm_call_method(ec, reg_cfp, calling, (CALL_DATA)&cd);
 }
 
@@ -2727,6 +2732,9 @@ vm_call_method_missing(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, 
     cd.cc.me =
 	rb_callable_method_entry_without_refinements(CLASS_OF(calling->recv),
 						     idMethodMissing, NULL);
+    // Cached on rb_call_cache to fit into the same cache line
+    cd.cc.flag = cd.ci.flag;
+    cd.cc.orig_argc = argc;
 
     calling->argc = argc;
 
@@ -2934,7 +2942,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
 
 	rb_check_arity(calling->argc, 1, 1);
 	cc->aux.index = 0;
-        CC_SET_FASTPATH(cc, vm_call_attrset, !((ci->flag & VM_CALL_ARGS_SPLAT) || (ci->flag & VM_CALL_KWARG)));
+        CC_SET_FASTPATH(cc, vm_call_attrset, !((cc->flag & VM_CALL_ARGS_SPLAT) || (cc->flag & VM_CALL_KWARG)));
         return vm_call_attrset(ec, cfp, calling, cd);
 
       case VM_METHOD_TYPE_IVAR:
@@ -2942,7 +2950,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
         CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
 	rb_check_arity(calling->argc, 0, 0);
 	cc->aux.index = 0;
-        CC_SET_FASTPATH(cc, vm_call_ivar, !(ci->flag & VM_CALL_ARGS_SPLAT));
+        CC_SET_FASTPATH(cc, vm_call_ivar, !(cc->flag & VM_CALL_ARGS_SPLAT));
         return vm_call_ivar(ec, cfp, calling, cd);
 
       case VM_METHOD_TYPE_MISSING:
@@ -2999,7 +3007,7 @@ vm_call_method_nome(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct 
     /* method missing */
     const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
-    const int stat = ci_missing_reason(ci);
+    const int stat = cc_missing_reason(cc);
 
     if (ci->mid == idMethodMissing) {
 	rb_control_frame_t *reg_cfp = cfp;
@@ -3027,9 +3035,9 @@ vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_ca
             return vm_call_method_each_type(ec, cfp, calling, cd);
 
 	  case METHOD_VISI_PRIVATE:
-	    if (!(ci->flag & VM_CALL_FCALL)) {
+	    if (!(cc->flag & VM_CALL_FCALL)) {
 		enum method_missing_reason stat = MISSING_PRIVATE;
-		if (ci->flag & VM_CALL_VCALL) stat |= MISSING_VCALL;
+		if (cc->flag & VM_CALL_VCALL) stat |= MISSING_VCALL;
 
 		cc->aux.method_missing_reason = stat;
                 CC_SET_FASTPATH(cc, vm_call_method_missing, TRUE);
@@ -3038,7 +3046,7 @@ vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_ca
             return vm_call_method_each_type(ec, cfp, calling, cd);
 
 	  case METHOD_VISI_PROTECTED:
-	    if (!(ci->flag & VM_CALL_OPT_SEND)) {
+	    if (!(cc->flag & VM_CALL_OPT_SEND)) {
 		if (!rb_obj_is_kind_of(cfp->self, cc->me->defined_class)) {
 		    cc->aux.method_missing_reason = MISSING_PROTECTED;
                     return vm_call_method_missing(ec, cfp, calling, cd);
@@ -3046,7 +3054,7 @@ vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_ca
 		else {
 		    /* caching method info to dummy cc */
 		    VM_ASSERT(cc->me != NULL);
-                    if (ci->flag & VM_CALL_KWARG) {
+                    if (cc->flag & VM_CALL_KWARG) {
                         struct rb_kwarg_call_data *kcd = (void *)cd;
                         struct rb_kwarg_call_data cd_entry = *kcd;
                         return vm_call_method_each_type(ec, cfp, calling, (void *)&cd_entry);
@@ -3138,7 +3146,7 @@ vm_search_super_method(const rb_control_frame_t *reg_cfp, struct rb_call_data *c
                  rb_obj_class(recv), m);
     }
 
-    if (me->def->type == VM_METHOD_TYPE_BMETHOD && (ci->flag & VM_CALL_ZSUPER)) {
+    if (me->def->type == VM_METHOD_TYPE_BMETHOD && (cc->flag & VM_CALL_ZSUPER)) {
 	rb_raise(rb_eRuntimeError,
 		 "implicit argument passing of super from method defined"
 		 " by define_method() is not supported."
@@ -4004,15 +4012,19 @@ vm_sendish(
         struct rb_call_data *cd,
         VALUE recv))
 {
-    CALL_INFO ci = &cd->ci;
-    CALL_CACHE cc = &cd->cc;
+    const CALL_INFO ci = &cd->ci;
+    const CALL_CACHE cc = &cd->cc;
     VALUE val;
-    int argc = ci->orig_argc;
+    if (UNLIKELY(cc->me == NULL)) {
+        cc->orig_argc = ci->orig_argc;
+        cc->flag = ci->flag;
+    }
+    int argc = cc->orig_argc;
     VALUE recv = TOPN(argc);
     struct rb_calling_info calling;
 
     calling.block_handler = block_handler;
-    calling.kw_splat = IS_ARGS_KW_SPLAT(ci) > 0;
+    calling.kw_splat = IS_ARGS_KW_SPLAT(cc) > 0;
     calling.recv = recv;
     calling.argc = argc;
 
