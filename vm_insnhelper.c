@@ -3022,7 +3022,6 @@ vm_call_method_nome(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct 
 static inline VALUE
 vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
 {
-    const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
 
     VM_ASSERT(callable_method_entry_p(cc->me));
