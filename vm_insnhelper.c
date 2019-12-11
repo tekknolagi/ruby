@@ -1451,8 +1451,8 @@ calccall(const struct rb_call_data *cd, const rb_callable_method_entry_t *me)
      * explicit receiver" is the only situation we have to check here.  A
      * formerly-private method now publicised is an absolutely safe thing.
      * Calling a private method without specifying a receiver is also safe. */
-    else if ((METHOD_ENTRY_VISI(cc->me) != METHOD_VISI_PUBLIC) &&
-             !(cc->flag & VM_CALL_FCALL)) {
+    else if (UNLIKELY((METHOD_ENTRY_VISI(cc->me) != METHOD_VISI_PUBLIC) &&
+             !(cc->flag & VM_CALL_FCALL))) {
         RB_DEBUG_COUNTER_INC(mc_miss_by_visi);
         return vm_call_general;
     }
