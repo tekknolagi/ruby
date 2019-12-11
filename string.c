@@ -21,6 +21,7 @@
 #include "id.h"
 #include "debug_counter.h"
 #include "ruby/util.h"
+#include "simdasciicheck.h"
 
 #define BEG(no) (regs->beg[(no)])
 #define END(no) (regs->end[(no)])
@@ -535,13 +536,19 @@ coderange_scan(const char *p, long len, rb_encoding *enc)
 {
     const char *e = p + len;
 
-    if (rb_enc_to_index(enc) == rb_ascii8bit_encindex()) {
+    switch (rb_enc_to_index(enc)) {
+      case ENCINDEX_ASCII:
         /* enc is ASCII-8BIT.  ASCII-8BIT string never be broken. */
-        p = search_nonascii(p, e);
-        return p ? ENC_CODERANGE_VALID : ENC_CODERANGE_7BIT;
+        return validate_ascii_fast(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID;
+      case ENCINDEX_US_ASCII:
+        return validate_ascii_fast(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_BROKEN;
     }
 
     if (rb_enc_asciicompat(enc)) {
+        if (validate_ascii_fast(p, len)) {
+            return ENC_CODERANGE_7BIT;
+        }
+
         p = search_nonascii(p, e);
         if (!p) return ENC_CODERANGE_7BIT;
         for (;;) {
