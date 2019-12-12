@@ -9,10 +9,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <x86intrin.h>
 #endif
 
 #ifdef __AVX2__
-#include <x86intrin.h>
 
 // The function returns true (1) if all chars passed in src are
 // 7-bit values (0x00..0x7F). Otherwise, it returns false (0).
