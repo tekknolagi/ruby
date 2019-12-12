@@ -552,7 +552,7 @@ is_valid_utf8(const char *p, long len)
     p = search_nonascii(p, e);
     if (!p) return true;
     for (;;) {
-        int ret = rb_enc_precise_mbclen(p, e, enc);
+        int ret = rb_enc_precise_mbclen(p, e, rb_utf8_encoding());
         if (!MBCLEN_CHARFOUND_P(ret)) return false;
         p += MBCLEN_CHARFOUND_LEN(ret);
         if (p == e) break;
