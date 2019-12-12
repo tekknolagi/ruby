@@ -540,17 +540,17 @@ coderange_scan(const char *p, long len, rb_encoding *enc)
     switch (rb_enc_to_index(enc)) {
         case ENCINDEX_ASCII:
             /* enc is ASCII-8BIT.  ASCII-8BIT string never be broken. */
-            return validate_ascii_fast(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID;
+            return validate_ascii_fast_avx(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID;
         case ENCINDEX_US_ASCII:
-            return validate_ascii_fast(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_BROKEN;
+            return validate_ascii_fast_avx(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_BROKEN;
         case RUBY_ENCINDEX_UTF_8:
-            if (validate_ascii_fast(p, len)) return ENC_CODERANGE_7BIT;
-            if (validate_utf8_fast(p, len)) return ENC_CODERANGE_VALID;
+            if (validate_ascii_fast_avx(p, len)) return ENC_CODERANGE_7BIT;
+            if (validate_utf8_fast_avx(p, len)) return ENC_CODERANGE_VALID;
             return ENC_CODERANGE_BROKEN;
     }
 
     if (rb_enc_asciicompat(enc)) {
-        if (validate_ascii_fast(p, len)) {
+        if (validate_ascii_fast_avx(p, len)) {
             return ENC_CODERANGE_7BIT;
         }
 
