@@ -21,8 +21,7 @@
 #include "id.h"
 #include "debug_counter.h"
 #include "ruby/util.h"
-#include "simdasciicheck.h"
-#include "simdutf8check.h"
+#include "simd_encoding_check.h"
 
 #define BEG(no) (regs->beg[(no)])
 #define END(no) (regs->end[(no)])
@@ -532,6 +531,38 @@ search_nonascii(const char *p, const char *e)
     }
 }
 
+static inline bool
+is_valid_ascii(const char *p, long len)
+{
+#ifdef SIMD_ENCODING_CHECK
+    return validate_ascii_fast(p, len);
+#else
+    return !search_nonascii(p, p + len);
+#endif
+}
+
+static inline bool
+is_valid_utf8(const char *p, long len)
+{
+#ifdef SIMD_ENCODING_CHECK
+    return validate_utf8_fast(p, len);
+#else
+    const char *e;
+    e = p + len;
+    p = search_nonascii(p, e);
+    if (!p) return true;
+    for (;;) {
+        int ret = rb_enc_precise_mbclen(p, e, enc);
+        if (!MBCLEN_CHARFOUND_P(ret)) return false;
+        p += MBCLEN_CHARFOUND_LEN(ret);
+        if (p == e) break;
+        p = search_nonascii(p, e);
+        if (!p) break;
+    }
+    return true;
+#endif
+}
+
 static int
 coderange_scan(const char *p, long len, rb_encoding *enc)
 {
@@ -540,19 +571,23 @@ coderange_scan(const char *p, long len, rb_encoding *enc)
     switch (rb_enc_to_index(enc)) {
         case ENCINDEX_ASCII:
             /* enc is ASCII-8BIT.  ASCII-8BIT string never be broken. */
-            return validate_ascii_fast_avx(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID;
+            return is_valid_ascii(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID;
         case ENCINDEX_US_ASCII:
-            return validate_ascii_fast_avx(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_BROKEN;
+            return is_valid_ascii(p, len) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_BROKEN;
+        #ifdef SIMD_ENCODING_CHECK
         case RUBY_ENCINDEX_UTF_8:
-            if (validate_ascii_fast_avx(p, len)) return ENC_CODERANGE_7BIT;
-            if (validate_utf8_fast_avx(p, len)) return ENC_CODERANGE_VALID;
+            if (is_valid_ascii(p, len)) return ENC_CODERANGE_7BIT;
+            if (is_valid_utf8(p, len)) return ENC_CODERANGE_VALID;
             return ENC_CODERANGE_BROKEN;
+        #endif
     }
 
     if (rb_enc_asciicompat(enc)) {
-        if (validate_ascii_fast_avx(p, len)) {
+        #ifdef SIMD_ENCODING_CHECK
+        if (is_valid_ascii(p, len)) {
             return ENC_CODERANGE_7BIT;
         }
+        #endif
 
         e = p + len;
         p = search_nonascii(p, e);
