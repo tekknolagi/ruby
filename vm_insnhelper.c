@@ -1442,9 +1442,9 @@ calccall(struct rb_call_data *cd, const rb_callable_method_entry_t *me)
         RB_DEBUG_COUNTER_INC(mc_miss_by_distinct);
         return vm_call_general; /* normal cases */
     }
-    else if (UNLIKELY(cc->flag & VM_CALL_REFINED)) {
+    else if (UNLIKELY(cc->flag & VM_CALL_UNREFINED && cc->me->def->type == VM_METHOD_TYPE_REFINED)) {
         RB_DEBUG_COUNTER_INC(mc_miss_by_refine);
-        cc->flag &= ~VM_CALL_REFINED;
+        cc->flag &= ~VM_CALL_UNREFINED;
         return vm_call_general;  /* cc->me was refined elsewhere */
     }
     /* "Calling a formerly-public method, which is now privatised, with an
@@ -1476,10 +1476,10 @@ rb_vm_search_method_slowpath(struct rb_call_data *cd, VALUE klass)
         me,
         ci->mid,
         call,
-        // Cached on rb_call_cache to fit into the same cache line
         ci->orig_argc,
         ci->flag
     };
+    if (LIKELY(me && me->def->type != VM_METHOD_TYPE_REFINED)) buf.flag |= VM_CALL_UNREFINED;
     if (call != vm_call_general) {
         for (int i = 0; i < numberof(cc->class_serial) - 1; i++) {
             buf.class_serial[i + 1] = cc->class_serial[i];
@@ -2483,7 +2483,6 @@ vm_method_cfunc_entry(const rb_callable_method_entry_t *me)
 static VALUE
 vm_call_cfunc_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd, int empty_kw_splat)
 {
-    const struct rb_call_info *ci = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
     VALUE val;
     const rb_callable_method_entry_t *me = cc->me;
@@ -2504,7 +2503,7 @@ vm_call_cfunc_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp
     }
 
     RUBY_DTRACE_CMETHOD_ENTRY_HOOK(ec, me->owner, me->def->original_id);
-    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, recv, me->def->original_id, ci->mid, me->owner, Qundef);
+    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, recv, me->def->original_id, cc->mid, me->owner, Qundef);
 
     vm_push_frame(ec, NULL, frame_type, recv,
 		  block_handler, (VALUE)me,
@@ -2519,7 +2518,7 @@ vm_call_cfunc_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp
 
     rb_vm_pop_frame(ec);
 
-    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_RETURN, recv, me->def->original_id, ci->mid, me->owner, val);
+    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_RETURN, recv, me->def->original_id, cc->mid, me->owner, val);
     RUBY_DTRACE_CMETHOD_RETURN_HOOK(ec, me->owner, me->def->original_id);
 
     return val;
@@ -2660,6 +2659,7 @@ vm_call_opt_send(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
 
     cc->me = rb_callable_method_entry_with_refinements(CLASS_OF(calling->recv), ci->mid, NULL);
     cc->flag = ci->flag = VM_CALL_FCALL | VM_CALL_OPT_SEND | (calling->kw_splat ? VM_CALL_KW_SPLAT : 0);
+    cc->mid = ci->mid;
     return vm_call_method(ec, reg_cfp, calling, (CALL_DATA)&cd);
 }
 
@@ -2733,6 +2733,7 @@ vm_call_method_missing(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, 
     // Cached on rb_call_cache to fit into the same cache line
     cd.cc.flag = cd.ci.flag;
     cd.cc.orig_argc = argc;
+    cd.cc.mid = cd.ci.mid;
 
     calling->argc = argc;
 
@@ -2755,12 +2756,11 @@ vm_call_zsuper(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_ca
 {
     RB_DEBUG_COUNTER_INC(ccf_method_missing);
 
-    const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
     klass = RCLASS_SUPER(klass);
-    cc->me = klass ? rb_callable_method_entry(klass, ci->mid) : NULL;
+    cc->me = klass ? rb_callable_method_entry(klass, cc->mid) : NULL;
 
-    if (!cc->me) {
+    if (UNLIKELY(!cc->me)) {
         return vm_call_method_nome(ec, cfp, calling, cd);
     }
     if (cc->me->def->type == VM_METHOD_TYPE_REFINED &&
@@ -2988,7 +2988,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
         return vm_call_zsuper(ec, cfp, calling, cd, RCLASS_ORIGIN(cc->me->defined_class));
 
       case VM_METHOD_TYPE_REFINED:
-        if (search_refined_method(ec, cfp, ci->mid, cc))
+        if (search_refined_method(ec, cfp, cc->mid, cc))
             return vm_call_method(ec, cfp, calling, cd);
         else
             return vm_call_method_nome(ec, cfp, calling, cd);
@@ -3003,11 +3003,10 @@ static VALUE
 vm_call_method_nome(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
 {
     /* method missing */
-    const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
     const int stat = cc_missing_reason(cc);
 
-    if (ci->mid == idMethodMissing) {
+    if (cc->mid == idMethodMissing) {
 	rb_control_frame_t *reg_cfp = cfp;
 	VALUE *argv = STACK_ADDR_FROM_TOP(calling->argc);
 	vm_raise_method_missing(ec, calling->argc, argv, calling->recv, stat);
@@ -3150,7 +3149,7 @@ vm_search_super_method(const rb_control_frame_t *reg_cfp, struct rb_call_data *c
 		 " Specify all arguments explicitly.");
     }
 
-    ci->mid = me->def->original_id;
+    ci->mid = cc->mid = me->def->original_id;
     klass = vm_search_normal_superclass(me->defined_class);
 
     if (!klass) {
@@ -3160,7 +3159,7 @@ vm_search_super_method(const rb_control_frame_t *reg_cfp, struct rb_call_data *c
     }
     else {
         /* TODO: use inline cache */
-	cc->me = rb_callable_method_entry(klass, ci->mid);
+	cc->me = rb_callable_method_entry(klass, cc->mid);
         CC_SET_FASTPATH(cc, vm_call_super_method, TRUE);
     }
 }
