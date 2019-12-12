@@ -1095,6 +1095,7 @@ enum vm_call_flag_bits {
     VM_CALL_SUPER_bit,          /* super */
     VM_CALL_ZSUPER_bit,         /* zsuper */
     VM_CALL_OPT_SEND_bit,       /* internal flag */
+    VM_CALL_REFINED_bit,        /* refined */
     VM_CALL__END
 };
 
@@ -1110,6 +1111,7 @@ enum vm_call_flag_bits {
 #define VM_CALL_SUPER           (0x01 << VM_CALL_SUPER_bit)
 #define VM_CALL_ZSUPER          (0x01 << VM_CALL_ZSUPER_bit)
 #define VM_CALL_OPT_SEND        (0x01 << VM_CALL_OPT_SEND_bit)
+#define VM_CALL_REFINED         (0x01 << VM_CALL_REFINED_bit)
 
 enum vm_special_object_type {
     VM_SPECIAL_OBJECT_VMCORE = 1,

@@ -47,7 +47,7 @@ rb_vm_call0(rb_execution_context_t *ec, VALUE recv, ID id, int argc, const VALUE
 {
     struct rb_calling_info calling = { Qundef, recv, argc, kw_splat, };
     struct rb_call_info ci = { id, (kw_splat ? VM_CALL_KW_SPLAT : 0), argc, };
-    struct rb_call_cache cc = { 0, { 0, }, me, me->def, vm_call_general, argc, ci.flag, { 0, }, };
+    struct rb_call_cache cc = { 0, { 0, }, me, id, vm_call_general, argc, ci.flag, { 0, }, };
     struct rb_call_data cd = { cc, ci, };
     return vm_call0_body(ec, &calling, &cd, argv);
 }
@@ -180,7 +180,8 @@ vm_call0_body(rb_execution_context_t *ec, struct rb_calling_info *calling, struc
 	    }
 	    else if (cc->me->def->body.refined.orig_me) {
 		cc->me = refined_method_callable_without_refinement(cc->me);
-		goto again;
+		cc->flag |= VM_CALL_REFINED;
+        goto again;
 	    }
 
 	    super_class = RCLASS_SUPER(super_class);

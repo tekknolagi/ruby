@@ -1430,9 +1430,9 @@ __attribute__((__artificial__))
 #endif
 #endif
 static inline vm_call_handler
-calccall(const struct rb_call_data *cd, const rb_callable_method_entry_t *me)
+calccall(struct rb_call_data *cd, const rb_callable_method_entry_t *me)
 {
-    const struct rb_call_cache *cc = &cd->cc;
+    struct rb_call_cache *cc = &cd->cc;
 
     if (UNLIKELY(!me)) {
         RB_DEBUG_COUNTER_INC(mc_miss_by_nome);
@@ -1442,8 +1442,9 @@ calccall(const struct rb_call_data *cd, const rb_callable_method_entry_t *me)
         RB_DEBUG_COUNTER_INC(mc_miss_by_distinct);
         return vm_call_general; /* normal cases */
     }
-    else if (UNLIKELY(cc->def != me->def)) {
+    else if (UNLIKELY(cc->flag & VM_CALL_REFINED)) {
         RB_DEBUG_COUNTER_INC(mc_miss_by_refine);
+        cc->flag &= ~VM_CALL_REFINED;
         return vm_call_general;  /* cc->me was refined elsewhere */
     }
     /* "Calling a formerly-public method, which is now privatised, with an
@@ -1473,7 +1474,7 @@ rb_vm_search_method_slowpath(struct rb_call_data *cd, VALUE klass)
         GET_GLOBAL_METHOD_STATE(),
         { RCLASS_SERIAL(klass) },
         me,
-        me ? me->def : NULL,
+        ci->mid,
         call,
         // Cached on rb_call_cache to fit into the same cache line
         ci->orig_argc,
