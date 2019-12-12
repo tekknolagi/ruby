@@ -2113,7 +2113,6 @@ vm_call_iseq_setup_kwparm_nokwarg(rb_execution_context_t *ec, rb_control_frame_t
                                   struct rb_calling_info *calling,
                                   struct rb_call_data *cd)
 {
-    const struct rb_call_info *MAYBE_UNUSED(ci) = &cd->ci;
     const struct rb_call_cache *cc = &cd->cc;
 
     VM_ASSERT((cc->flag & VM_CALL_KWARG) == 0);
