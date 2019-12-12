@@ -684,11 +684,10 @@ rb_enc_cr_str_copy_for_substr(VALUE dest, VALUE src)
 	ENC_CODERANGE_SET(dest, ENC_CODERANGE_7BIT);
 	break;
       case ENC_CODERANGE_VALID:
-	if (!rb_enc_asciicompat(STR_ENC_GET(src)) ||
-	    search_nonascii(RSTRING_PTR(dest), RSTRING_END(dest)))
-	    ENC_CODERANGE_SET(dest, ENC_CODERANGE_VALID);
-	else
+	if (rb_enc_asciicompat(STR_ENC_GET(src)) && is_valid_ascii(RSTRING_PTR(dest), RSTRING_LEN(dest)))
 	    ENC_CODERANGE_SET(dest, ENC_CODERANGE_7BIT);
+	else
+	    ENC_CODERANGE_SET(dest, ENC_CODERANGE_VALID);
 	break;
       default:
 	break;
@@ -1094,7 +1093,7 @@ rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *eenc)
 
     /* ASCII-8BIT case, no conversion */
     if ((eidx == rb_ascii8bit_encindex()) ||
-	(eidx == rb_usascii_encindex() && search_nonascii(ptr, ptr + len))) {
+        (eidx == rb_usascii_encindex() && !is_valid_ascii(ptr, len))) {
         return rb_str_new(ptr, len);
     }
     /* no default_internal or same encoding, no conversion */
@@ -1105,8 +1104,8 @@ rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *eenc)
     /* ASCII compatible, and ASCII only string, no conversion in
      * default_internal */
     if ((eidx == rb_ascii8bit_encindex()) ||
-	(eidx == rb_usascii_encindex()) ||
-	(rb_enc_asciicompat(eenc) && !search_nonascii(ptr, ptr + len))) {
+        (eidx == rb_usascii_encindex()) ||
+        (rb_enc_asciicompat(eenc) && is_valid_ascii(ptr, len))) {
         return rb_enc_str_new(ptr, len, ienc);
     }
     /* convert from the given encoding to default_internal */
@@ -1114,7 +1113,7 @@ rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *eenc)
     /* when the conversion failed for some reason, just ignore the
      * default_internal and result in the given encoding as-is. */
     if (NIL_P(rb_str_cat_conv_enc_opts(str, 0, ptr, len, eenc, 0, Qnil))) {
-	rb_str_initialize(str, ptr, len, eenc);
+        rb_str_initialize(str, ptr, len, eenc);
     }
     return str;
 }
