@@ -59,7 +59,7 @@
                 fprintf(f, "    {\n");
                 fprintf(f, "        struct rb_calling_info calling;\n");
 % if insn.name == 'send'
-                fprintf(f, "        calling.block_handler = vm_caller_setup_arg_block(ec, reg_cfp, (CALL_INFO)0x%"PRIxVALUE", (rb_iseq_t *)0x%"PRIxVALUE", FALSE);\n", (VALUE)ci, (VALUE)blockiseq);
+                fprintf(f, "        calling.block_handler = vm_caller_setup_arg_block(ec, reg_cfp, (CALL_CACHE)0x%"PRIxVALUE", (rb_iseq_t *)0x%"PRIxVALUE", FALSE);\n", (VALUE)cc_copy, (VALUE)blockiseq);
 % else
                 fprintf(f, "        calling.block_handler = VM_BLOCK_HANDLER_NONE;\n");
 % end

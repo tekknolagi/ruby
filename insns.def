@@ -778,7 +778,7 @@ send
 // attr rb_snum_t sp_inc = sp_inc_of_sendish(&cd->ci);
 // attr rb_snum_t comptime_sp_inc = sp_inc_of_sendish(ci);
 {
-    VALUE bh = vm_caller_setup_arg_block(ec, GET_CFP(), &cd->ci, blockiseq, false);
+    VALUE bh = vm_caller_setup_arg_block(ec, GET_CFP(), &cd->cc, blockiseq, false);
     val = vm_sendish(ec, GET_CFP(), cd, bh, vm_search_method_wrap);
 
     if (val == Qundef) {
@@ -884,7 +884,7 @@ invokesuper
 // attr rb_snum_t sp_inc = sp_inc_of_sendish(&cd->ci);
 // attr rb_snum_t comptime_sp_inc = sp_inc_of_sendish(ci);
 {
-    VALUE bh = vm_caller_setup_arg_block(ec, GET_CFP(), &cd->ci, blockiseq, true);
+    VALUE bh = vm_caller_setup_arg_block(ec, GET_CFP(), &cd->cc, blockiseq, true);
     val = vm_sendish(ec, GET_CFP(), cd, bh, vm_search_super_method);
 
     if (val == Qundef) {
