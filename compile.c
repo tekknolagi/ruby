@@ -2215,6 +2215,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
                                 cd = (struct rb_call_data *)cd_kw;
                                 cd->cc.orig_argc = cd->ci.orig_argc;
                                 cd->cc.flag = cd->ci.flag;
+                                cd->cc.mid = cd->ci.mid;
                                 assert(ISEQ_COMPILE_DATA(iseq)->ci_kw_index <= body->ci_kw_size);
                             }
                             else {
@@ -2222,6 +2223,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
                                 cd->ci = *source_ci;
                                 cd->cc.orig_argc = cd->ci.orig_argc;
                                 cd->cc.flag = cd->ci.flag;
+                                cd->cc.mid = cd->ci.mid;
                                 assert(ISEQ_COMPILE_DATA(iseq)->ci_index <= body->ci_size);
                             }
 
@@ -10326,6 +10328,7 @@ ibf_load_ci_entries(const struct ibf_load *load,
         calls[i].ci.orig_argc = (int)ibf_load_small_value(load, &reading_pos);
         calls[i].cc.flag = calls[i].ci.flag;
         calls[i].cc.orig_argc = calls[i].ci.orig_argc;
+        calls[i].cc.mid = calls[i].ci.mid;
     }
 
     for (i = 0; i < ci_kw_size; i++) {
@@ -10334,8 +10337,9 @@ ibf_load_ci_entries(const struct ibf_load *load,
         kw_calls[i].ci_kw.ci.mid = ibf_load_id(load, mid_index);
         kw_calls[i].ci_kw.ci.flag = (unsigned int)ibf_load_small_value(load, &reading_pos);
         kw_calls[i].ci_kw.ci.orig_argc = (int)ibf_load_small_value(load, &reading_pos);
-        kw_calls[i].ci_kw.ci.flag = kw_calls[i].ci_kw.ci.flag;
-        kw_calls[i].ci_kw.ci.orig_argc = kw_calls[i].ci_kw.ci.orig_argc;
+        kw_calls[i].cc.flag = kw_calls[i].ci_kw.ci.flag;
+        kw_calls[i].cc.orig_argc = kw_calls[i].ci_kw.ci.orig_argc;
+        kw_calls[i].cc.mid = kw_calls[i].ci_kw.ci.mid;
 
         int keyword_len = (int)ibf_load_small_value(load, &reading_pos);
 
