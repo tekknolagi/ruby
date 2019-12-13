@@ -1985,8 +1985,7 @@ CALLER_SETUP_ARG(struct rb_control_frame_struct *restrict cfp,
 
 static inline void
 CALLER_REMOVE_EMPTY_KW_SPLAT(struct rb_control_frame_struct *restrict cfp,
-                             struct rb_calling_info *restrict calling,
-                             const struct rb_call_info *restrict ci)
+                             struct rb_calling_info *restrict calling)
 {
     if (UNLIKELY(calling->kw_splat)) {
         /* This removes the last Hash object if it is empty.
@@ -2149,7 +2148,7 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
         if (LIKELY(rb_simple_iseq_p(iseq))) {
             rb_control_frame_t *cfp = ec->cfp;
             CALLER_SETUP_ARG(cfp, calling, ci);
-            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
+            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling);
 
             if (calling->argc != iseq->body->param.lead_num) {
                 argument_arity_error(ec, iseq, calling->argc, iseq->body->param.lead_num, iseq->body->param.lead_num);
@@ -2161,7 +2160,7 @@ vm_callee_setup_arg(rb_execution_context_t *ec, struct rb_calling_info *calling,
         else if (rb_iseq_only_optparam_p(iseq)) {
             rb_control_frame_t *cfp = ec->cfp;
             CALLER_SETUP_ARG(cfp, calling, ci);
-            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
+            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling);
 
             const int lead_num = iseq->body->param.lead_num;
             const int opt_num = iseq->body->param.opt_num;
@@ -2533,7 +2532,7 @@ vm_call_cfunc(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb
 
     CALLER_SETUP_ARG(reg_cfp, calling, ci);
     empty_kw_splat = calling->kw_splat;
-    CALLER_REMOVE_EMPTY_KW_SPLAT(reg_cfp, calling, ci);
+    CALLER_REMOVE_EMPTY_KW_SPLAT(reg_cfp, calling);
     if (empty_kw_splat && calling->kw_splat) {
         empty_kw_splat = 0;
     }
@@ -2935,7 +2934,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
             rb_warn_keyword_to_last_hash(ec, calling, ci, NULL);
         }
         else {
-            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
+            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling);
         }
 
 	rb_check_arity(calling->argc, 1, 1);
@@ -2945,7 +2944,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
 
       case VM_METHOD_TYPE_IVAR:
         CALLER_SETUP_ARG(cfp, calling, ci);
-        CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
+        CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling);
 	rb_check_arity(calling->argc, 0, 0);
 	cc->aux.index = 0;
         CC_SET_FASTPATH(cc, vm_call_ivar, !(cc->flag & VM_CALL_ARGS_SPLAT));
@@ -3271,7 +3270,7 @@ vm_callee_setup_block_arg(rb_execution_context_t *ec, struct rb_calling_info *ca
             rb_warn_keyword_to_last_hash(ec, calling, ci, iseq);
         }
         else {
-            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
+            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling);
         }
 
 	if (arg_setup_type == arg_setup_block &&
@@ -3372,7 +3371,7 @@ vm_invoke_ifunc_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
     int argc;
     int kw_splat = calling->kw_splat;
     CALLER_SETUP_ARG(ec->cfp, calling, ci);
-    CALLER_REMOVE_EMPTY_KW_SPLAT(ec->cfp, calling, ci);
+    CALLER_REMOVE_EMPTY_KW_SPLAT(ec->cfp, calling);
     if (kw_splat && !calling->kw_splat) {
         kw_splat = 2;
     }
