@@ -23,17 +23,19 @@ static bool validate_ascii_fast(const char *src, size_t len) {
     for (; i <= len - 32; i += 32) {
       __m256i current_bytes = _mm256_loadu_si256((const __m256i *)(src + i));
       has_error = _mm256_or_si256(has_error, current_bytes);
+      if (_mm256_movemask_epi8(has_error)) {
+          return false;
+      }
     }
   }
-  int error_mask = _mm256_movemask_epi8(has_error);
 
-  char tail_has_error = 0;
   for (; i < len; i++) {
-    tail_has_error |= src[i];
+    if (src[i] & 0x80) {
+      return false;
+    }
   }
-  error_mask |= (tail_has_error & 0x80);
 
-  return !error_mask;
+  return true;
 }
 
 
@@ -170,8 +172,6 @@ static inline void avx_count_nibbles(__m256i bytes,
       _mm256_and_si256(_mm256_srli_epi16(bytes, 4), _mm256_set1_epi8(0x0F));
 }
 
-// check whether the current bytes are valid UTF-8
-// at the end of the function, previous gets updated
 static struct avx_processed_utf_bytes
 avxcheckUTF8Bytes(__m256i current_bytes,
                   struct avx_processed_utf_bytes *previous,
@@ -208,6 +208,9 @@ static bool validate_utf8_fast(const char *src, size_t len) {
     for (; i <= len - 32; i += 32) {
       __m256i current_bytes = _mm256_loadu_si256((const __m256i *)(src + i));
       previous = avxcheckUTF8Bytes(current_bytes, &previous, &has_error);
+      if (_mm256_movemask_epi8(has_error)) {
+        return false;
+      }
     }
   }
 
@@ -242,17 +245,19 @@ static bool validate_ascii_fast(const char *src, size_t len) {
     for (; i <= len - 16; i += 16) {
       __m128i current_bytes = _mm_loadu_si128((const __m128i *)(src + i));
       has_error = _mm_or_si128(has_error, current_bytes);
+      if (_mm_movemask_epi8(has_error)) {
+        return false;
+      }
     }
   }
-  int error_mask = _mm_movemask_epi8(has_error);
 
-  char tail_has_error = 0;
   for (; i < len; i++) {
-    tail_has_error |= src[i];
+    if (src[i] & 0x80) {
+      return false;
+    }
   }
-  error_mask |= (tail_has_error & 0x80);
 
-  return !error_mask;
+  return true;
 }
 
 /*

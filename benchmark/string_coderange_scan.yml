@@ -1,0 +1,26 @@
+prelude: |
+  ascii1 = [*"a".."m",*"N".."Z",*"0".."9"].join("")
+  ascii10 = ascii1 * 10
+  ascii100 = ascii10 * 10
+  ascii1000 = ascii100 * 10
+
+  utf81 = [*"a".."m",*"N".."Z", "éà€‹›Ç☃"].join("")
+  utf810 = utf81 * 10
+  utf8100 = utf810 * 10
+  utf81000 = utf8100 * 10
+
+  invalid_ascii_last = ascii1000 + "☃"
+  invalid_ascii_first = "☃" + ascii1000
+benchmark:
+  ascii-coderange-scan-1: ascii1.force_encoding(Encoding::UTF_8).valid_encoding?
+  ascii-coderange-scan-10: ascii10.force_encoding(Encoding::UTF_8).valid_encoding?
+  ascii-coderange-scan-100: ascii100.force_encoding(Encoding::UTF_8).valid_encoding?
+  ascii-coderange-scan-1000: ascii1000.force_encoding(Encoding::UTF_8).valid_encoding?
+  
+  utf8-coderange-scan-1: utf81.force_encoding(Encoding::UTF_8).valid_encoding?
+  utf8-coderange-scan-10: utf810.force_encoding(Encoding::UTF_8).valid_encoding?
+  utf8-coderange-scan-100: utf8100.force_encoding(Encoding::UTF_8).valid_encoding?
+  utf8-coderange-scan-1000: utf81000.force_encoding(Encoding::UTF_8).valid_encoding?
+
+  ascii-coderange-scan-first-1: invalid_ascii_first.force_encoding(Encoding::ASCII).valid_encoding?
+  ascii-coderange-scan-last-1: invalid_ascii_last.force_encoding(Encoding::ASCII).valid_encoding?
