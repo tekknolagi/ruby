@@ -38,6 +38,7 @@
 #include "internal/array.h"
 #include "internal/compar.h"
 #include "internal/compilers.h"
+#include "internal/cpuinfo.h"
 #include "internal/encoding.h"
 #include "internal/error.h"
 #include "internal/gc.h"
@@ -546,7 +547,10 @@ search_nonascii(const char *p, const char *e)
 }
 
 static int
-coderange_scan(const char *p, long len, rb_encoding *enc)
+(*coderange_scan)(const char *p, long len, rb_encoding *enc);
+
+static int
+coderange_scan_fallback(const char *p, long len, rb_encoding *enc)
 {
     const char *e = p + len;
 
@@ -11217,11 +11221,18 @@ sym_all_symbols(VALUE _)
  *
  */
 
+
 void
 Init_String(void)
 {
 #undef rb_intern
 #define rb_intern(str) rb_intern_const(str)
+    if (rb_get_cpu_features().SSE2) {
+        printf("SSE2 Enabled\n");
+        coderange_scan = coderange_scan_fallback;
+    } else {
+        coderange_scan = coderange_scan_fallback;
+    }
 
     rb_cString  = rb_define_class("String", rb_cObject);
     assert(rb_vm_fstring_table());

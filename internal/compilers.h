@@ -49,6 +49,7 @@
 # define __has_attribute_returns_nonnull            GCC_VERSION_SINCE(4, 9, 0)
 # define __has_attribute_returns_twice              GCC_VERSION_SINCE(4, 1, 0)
 # define __has_attribute_stdcall                    GCC_VERSION_SINCE(0, 0, 0)
+# define __has_attribute_target                     GCC_VERSION_SINCE(3, 4, 0)
 # define __has_attribute_unused                     GCC_VERSION_SINCE(0, 0, 0)
 # define __has_attribute_visibility                 GCC_VERSION_SINCE(3, 3, 0)
 # define __has_attribute_visibility                 GCC_VERSION_SINCE(3, 3, 0)
