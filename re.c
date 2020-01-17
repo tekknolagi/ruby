@@ -19,6 +19,7 @@
 #include "internal/hash.h"
 #include "internal/imemo.h"
 #include "internal/re.h"
+#include "internal/vm.h"
 #include "regint.h"
 #include "ruby/encoding.h"
 #include "ruby/re.h"
@@ -2959,16 +2960,27 @@ rb_reg_new(const char *s, long len, int options)
 VALUE
 rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline)
 {
-    VALUE re = rb_reg_alloc();
+    VALUE re;
     onig_errmsg_buffer err = "";
+    st_table *regexp_literals = rb_vm_regexp_literals_table();
 
     if (!str) str = rb_str_new(0,0);
+    str = rb_fstring(str);
+
+    if (st_lookup(regexp_literals, (st_data_t)str, &re)) {
+        return re;
+    }
+
+    re = rb_reg_alloc();
     if (rb_reg_initialize_str(re, str, options, err, sourcefile, sourceline) != 0) {
-	rb_set_errinfo(rb_reg_error_desc(str, options, err));
-	return Qnil;
+        rb_set_errinfo(rb_reg_error_desc(str, options, err));
+        return Qnil;
     }
     FL_SET(re, REG_LITERAL);
     rb_obj_freeze(re);
+
+    st_insert(regexp_literals, str, re);
+
     return re;
 }
 
