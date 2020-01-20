@@ -2961,14 +2961,21 @@ VALUE
 rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline)
 {
     VALUE re;
+    st_data_t data;
     onig_errmsg_buffer err = "";
     st_table *regexp_literals = rb_vm_regexp_literals_table();
 
     if (!str) str = rb_str_new(0,0);
     str = rb_fstring(str);
 
-    if (st_lookup(regexp_literals, (st_data_t)str, &re)) {
-        return re;
+    
+    if (st_lookup(regexp_literals, (st_data_t)str, &data)) {
+        re = (VALUE)data;
+        if (RBASIC_CLASS(re) != rb_cRegexp) {
+            printf("[WTF] class: %s, %s, key: %s\n", RSTRING_PTR(rb_mod_name(RBASIC_CLASS(re))), RSTRING_PTR(rb_funcall(re, rb_intern("inspect"), 0)), RSTRING_PTR(str));
+        } else {
+            return re;
+        }
     }
 
     re = rb_reg_alloc();
@@ -2979,7 +2986,16 @@ rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline)
     FL_SET(re, REG_LITERAL);
     rb_obj_freeze(re);
 
+    assert(RBASIC_CLASS(re) == rb_cRegexp);
     st_insert(regexp_literals, str, re);
+
+    st_lookup(regexp_literals, (st_data_t)str, &data);
+
+    re = (VALUE)data;
+    if (RBASIC_CLASS(re) != rb_cRegexp) {
+        printf("class: %s, %s\n", RSTRING_PTR(rb_mod_name(RBASIC_CLASS(re))), RSTRING_PTR(rb_funcall(re, rb_intern("inspect"), 0)));
+    }
+    assert(RBASIC_CLASS(re) == rb_cRegexp);
 
     return re;
 }
