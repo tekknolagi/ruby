@@ -2980,7 +2980,8 @@ reg_lit_update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int exi
         FL_SET(re, REG_LITERAL);
         rb_obj_freeze(re);
 
-        *key = *value = *new_re = re;
+        *key = *new_re = re;
+        *value = RREGEXP_SRC(re);
         return ST_CONTINUE;
     }
 }
