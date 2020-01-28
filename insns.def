@@ -820,6 +820,20 @@ opt_str_freeze
     }
 }
 
+DEFINE_INSN
+opt_ary_freeze
+(VALUE ary)
+()
+(VALUE val)
+{
+    val = vm_opt_ary_freeze(ary, BOP_FREEZE, idFreeze);
+
+    if (val == Qundef) {
+        PUSH(rb_ary_resurrect(ary));
+        CALL_SIMPLE_METHOD();
+    }
+}
+
 /* optimized nil? */
 DEFINE_INSN
 opt_nil_p

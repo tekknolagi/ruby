@@ -6750,6 +6750,7 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
         }
         return TRUE;
     }
+
     /* optimization shortcut
      *   obj["literal"] -> opt_aref_with(obj, "literal")
      */
