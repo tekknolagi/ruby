@@ -202,6 +202,7 @@ tests = [
     end
   },
 
+  [ 'opt_ary_freeze', %q{ [].freeze.equal?([].freeze) }, ],
   [ 'opt_str_freeze', %q{ 'true'.freeze }, ],
   [ 'opt_nil_p',      %q{ nil.nil? }, ],
   [ 'opt_nil_p',      %q{ !Object.nil? }, ],

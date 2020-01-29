@@ -6750,6 +6750,23 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
         }
         return TRUE;
     }
+
+   /* optimization shortcut
+    *   [].freeze -> opt_ary_freeze([])
+    */
+    if (node->nd_recv && nd_type(node->nd_recv) == NODE_ZLIST &&
+       node->nd_mid == idFreeze &&
+       node->nd_args == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
+       ADD_INSN2(ret, line, opt_ary_freeze, rb_ary_empty_const(),
+                 new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
+       if (popped) {
+           ADD_INSN(ret, line, pop);
+       }
+       return TRUE;
+   }
+
     /* optimization shortcut
      *   obj["literal"] -> opt_aref_with(obj, "literal")
      */

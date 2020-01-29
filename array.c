@@ -37,6 +37,7 @@
 #include "ruby_assert.h"
 
 VALUE rb_cArray;
+VALUE rb_cArray_empty;
 
 /* for OPTIMIZED_CMP: */
 #define id_cmp idCmp
@@ -6614,6 +6615,11 @@ rb_ary_deconstruct(VALUE ary)
     return ary;
 }
 
+VALUE
+rb_ary_empty_const(void) {
+    return rb_cArray_empty;
+}
+
 /*
  *  Arrays are ordered, integer-indexed collections of any object.
  *
@@ -6867,6 +6873,7 @@ Init_Array(void)
     rb_define_method(rb_cArray, "initialize", rb_ary_initialize, -1);
     rb_define_method(rb_cArray, "initialize_copy", rb_ary_replace, 1);
 
+    rb_define_method(rb_cArray, "freeze", rb_ary_freeze, 0);
     rb_define_method(rb_cArray, "inspect", rb_ary_inspect, 0);
     rb_define_alias(rb_cArray,  "to_s", "inspect");
     rb_define_method(rb_cArray, "to_a", rb_ary_to_a, 0);
@@ -6980,6 +6987,9 @@ Init_Array(void)
     rb_define_method(rb_cArray, "sum", rb_ary_sum, -1);
 
     rb_define_method(rb_cArray, "deconstruct", rb_ary_deconstruct, 0);
+
+    rb_cArray_empty = rb_ary_freeze(rb_ary_new_capa(0));
+    rb_gc_register_mark_object(rb_cArray_empty);
 }
 
 #include "array.rbinc"
