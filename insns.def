@@ -830,7 +830,7 @@ opt_ary_freeze
     val = vm_opt_ary_freeze(ary, BOP_FREEZE, idFreeze);
 
     if (val == Qundef) {
-        PUSH(rb_ary_resurrect(ary));
+        PUSH(rb_ary_dup(ary));
         CALL_SIMPLE_METHOD();
     }
 }

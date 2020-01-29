@@ -4048,7 +4048,6 @@ static VALUE
 vm_opt_ary_freeze(VALUE ary, int bop, ID id)
 {
     if (BASIC_OP_UNREDEFINED_P(bop, ARRAY_REDEFINED_OP_FLAG)) {
-        rb_obj_reveal(ary, rb_cArray);
         return ary;
     }
     return Qundef;

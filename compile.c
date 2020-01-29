@@ -6783,8 +6783,7 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
            node_tmp = node_tmp->nd_next;
        }
 
-       /* Create a hidden array */
-       VALUE ary = rb_ary_tmp_new(count);
+       VALUE ary = rb_ary_new_capa(count);
        node_tmp = node->nd_recv;
         for (; count; count--) {
            rb_ary_push(ary, static_literal_value(node_tmp, iseq));
