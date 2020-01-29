@@ -822,7 +822,7 @@ opt_str_freeze
 
 DEFINE_INSN
 opt_ary_freeze
-(VALUE ary)
+(VALUE ary, CALL_DATA cd)
 ()
 (VALUE val)
 {

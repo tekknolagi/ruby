@@ -6756,17 +6756,31 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
        node->nd_args == NULL &&
        ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
        ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
-           printf("===potential optim===\n");
-       // VALUE ary = node->nd_recv->nd_lit;
-       // rb_obj_reveal(ary, rb_cArray);
-       // // ADD_INSN2(ret, line, duparray, ary,
-       // //           new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
-       // RB_OBJ_WRITTEN(iseq, Qundef, ary);
-       // if (popped) {
-       //     ADD_INSN(ret, line, pop);
-       // }
-       // return TRUE;
-       return FALSE;
+       const NODE *node_tmp = node->nd_recv;
+       const int max_stack_len = 0x100;
+       int count = 0;
+       while (node_tmp) {
+           count++;
+           if (!static_literal_node_p(node_tmp, iseq)) return FALSE;
+           if (count > max_stack_len) return FALSE;
+           node_tmp = node_tmp->nd_next;
+       }
+
+       /* Create a hidden array */
+       VALUE ary = rb_ary_tmp_new(count);
+       node_tmp = node->nd_recv;
+        for (; count; count--) {
+           rb_ary_push(ary, static_literal_value(node_tmp, iseq));
+           node_tmp = node_tmp->nd_next;
+       }
+       OBJ_FREEZE(ary);
+   
+       ADD_INSN2(ret, line, opt_ary_freeze, ary,
+             new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
+       if (popped) {
+           ADD_INSN(ret, line, pop);
+       }
+       return TRUE;
    }
 
     /* optimization shortcut
