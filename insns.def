@@ -820,6 +820,21 @@ opt_str_freeze
     }
 }
 
+DEFINE_INSN
+opt_ary_freeze
+(VALUE ary, CALL_DATA cd)
+()
+(VALUE val)
+{
+    RUBY_DTRACE_CREATE_HOOK(ARRAY, RARRAY_LEN(ary));
+    val = vm_opt_ary_freeze(ary, BOP_FREEZE, idFreeze);
+
+    if (val == Qundef) {
+        PUSH(rb_ary_dup(ary));
+        CALL_SIMPLE_METHOD();
+    }
+}
+
 /* optimized nil? */
 DEFINE_INSN
 opt_nil_p

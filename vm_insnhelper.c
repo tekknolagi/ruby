@@ -4044,6 +4044,15 @@ vm_opt_str_freeze(VALUE str, int bop, ID id)
     }
 }
 
+static VALUE
+vm_opt_ary_freeze(VALUE ary, int bop, ID id)
+{
+    if (BASIC_OP_UNREDEFINED_P(bop, ARRAY_REDEFINED_OP_FLAG)) {
+        return ary;
+    }
+    return Qundef;
+}
+
 /* this macro is mandatory to use OPTIMIZED_CMP. What a design! */
 #define id_cmp idCmp
 

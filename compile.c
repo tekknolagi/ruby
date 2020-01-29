@@ -6750,6 +6750,55 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
         }
         return TRUE;
     }
+
+    if (node->nd_recv && nd_type(node->nd_recv) == NODE_ZLIST &&
+       node->nd_mid == idFreeze &&
+       node->nd_args == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
+
+       // TODO: [].freeze is common enough that it would make sense to have a unique, shared, frozen empty array.
+       VALUE ary = rb_ary_new_capa(0);
+       OBJ_FREEZE(ary);
+       ADD_INSN2(ret, line, opt_ary_freeze, ary,
+                 new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
+       if (popped) {
+           ADD_INSN(ret, line, pop);
+       }
+       return TRUE;
+   }
+
+    if (node->nd_recv && nd_type(node->nd_recv) == NODE_LIST &&
+       node->nd_mid == idFreeze &&
+       node->nd_args == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
+       const NODE *node_tmp = node->nd_recv;
+       const int max_stack_len = 0x100;
+       int count = 0;
+       while (node_tmp) {
+           count++;
+           if (!static_literal_node_p(node_tmp, iseq)) return FALSE;
+           if (count > max_stack_len) return FALSE;
+           node_tmp = node_tmp->nd_next;
+       }
+
+       VALUE ary = rb_ary_new_capa(count);
+       node_tmp = node->nd_recv;
+        for (; count; count--) {
+           rb_ary_push(ary, static_literal_value(node_tmp, iseq));
+           node_tmp = node_tmp->nd_next;
+       }
+       OBJ_FREEZE(ary);
+   
+       ADD_INSN2(ret, line, opt_ary_freeze, ary,
+             new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
+       if (popped) {
+           ADD_INSN(ret, line, pop);
+       }
+       return TRUE;
+   }
+
     /* optimization shortcut
      *   obj["literal"] -> opt_aref_with(obj, "literal")
      */
