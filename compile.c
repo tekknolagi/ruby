@@ -6751,6 +6751,24 @@ compile_call_precheck_freeze(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE
         return TRUE;
     }
 
+    if (node->nd_recv && nd_type(node->nd_recv) == NODE_LIST &&
+       node->nd_mid == idFreeze &&
+       node->nd_args == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
+       ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
+           printf("===potential optim===\n");
+       // VALUE ary = node->nd_recv->nd_lit;
+       // rb_obj_reveal(ary, rb_cArray);
+       // // ADD_INSN2(ret, line, duparray, ary,
+       // //           new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE));
+       // RB_OBJ_WRITTEN(iseq, Qundef, ary);
+       // if (popped) {
+       //     ADD_INSN(ret, line, pop);
+       // }
+       // return TRUE;
+       return FALSE;
+   }
+
     /* optimization shortcut
      *   obj["literal"] -> opt_aref_with(obj, "literal")
      */

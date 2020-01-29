@@ -826,6 +826,7 @@ opt_ary_freeze
 ()
 (VALUE val)
 {
+    RUBY_DTRACE_CREATE_HOOK(ARRAY, RARRAY_LEN(ary));
     val = vm_opt_ary_freeze(ary, BOP_FREEZE, idFreeze);
 
     if (val == Qundef) {
