@@ -910,12 +910,12 @@ rb_check_typeddata(VALUE obj, const rb_data_type_t *data_type)
       wrong_type:
 	etype = builtin_class_name(obj);
 	if (!etype)
-                printf("wrong argument type %"PRIsVALUE" (expected %s)",
+                printf("wrong_type: wrong argument type %"PRIsVALUE" (expected %s)",
 		     rb_obj_class(obj), data_type->wrap_struct_name);
 	    rb_raise(rb_eTypeError, "wrong argument type %"PRIsVALUE" (expected %s)",
 		     rb_obj_class(obj), data_type->wrap_struct_name);
       wrong_datatype:
-      printf("wrong argument type %s (expected %s)",
+      printf("wrong_datatype: wrong argument type %s (expected %s)",
 		 etype, data_type->wrap_struct_name);
 	rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
 		 etype, data_type->wrap_struct_name);
