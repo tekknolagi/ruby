@@ -569,8 +569,9 @@ darwin_sigtramp:
     return n;
 }
 # elif defined(BROKEN_BACKTRACE)
-#  undef HAVE_BACKTRACE
-#  define HAVE_BACKTRACE 0
+// #  undef HAVE_BACKTRACE
+// #  define HAVE_BACKTRACE 0
+// try to print backtrace anyways
 # endif
 #else
 # define HAVE_BACKTRACE 0
