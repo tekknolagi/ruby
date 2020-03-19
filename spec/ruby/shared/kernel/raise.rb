@@ -82,4 +82,17 @@ describe :kernel_raise, shared: true do
       @object.raise(ArgumentError, "message", caller)
     end.should raise_error(ArgumentError, "message")
   end
+
+  it "allow message to be any type if the exception accepts it" do
+    exception_class = Class.new(StandardError) do
+      def initialize(object)
+        @object = object
+        super("Actual string")
+      end
+    end
+
+    -> do
+      @object.raise(exception_class, Object.new, caller)
+    end.should raise_error(exception_class, "Actual string")
+  end
 end

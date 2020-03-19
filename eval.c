@@ -759,11 +759,11 @@ rb_f_raise(int argc, VALUE *argv)
 /*
  *  call-seq:
  *     raise
- *     raise(string, cause: $!)
- *     raise(exception [, string [, array]], cause: $!)
+ *     raise(message, cause: $!)
+ *     raise(exception [, message [, backtrace]], cause: $!)
  *     fail
- *     fail(string, cause: $!)
- *     fail(exception [, string [, array]], cause: $!)
+ *     fail(message, cause: $!)
+ *     fail(exception [, message [, backtrace]], cause: $!)
  *
  *  With no arguments, raises the exception in <code>$!</code> or raises
  *  a RuntimeError if <code>$!</code> is +nil+.  With a single +String+
