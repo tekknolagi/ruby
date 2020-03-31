@@ -42,6 +42,8 @@
 #define RUBY_PATCHLEVEL_STR "p-shopify-"STRINGIZE(RUBY_PATCHLEVEL)
 #endif
 
+#define RUBY_SHOPIFY_SUFFIX "shopify-1"
+
 #ifndef RUBY_REVISION
 # include "revision.h"
 #endif
