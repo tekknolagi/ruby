@@ -841,6 +841,11 @@ struct heap_page {
     bits_t pinned_bits[HEAP_PAGE_BITMAP_LIMIT];
 };
 
+struct sorted_heap_page {
+    struct list_node page_node;
+    struct heap_page *page;
+};
+
 #define GET_PAGE_BODY(x)   ((struct heap_page_body *)((bits_t)(x) & ~(HEAP_PAGE_ALIGN_MASK)))
 #define GET_PAGE_HEADER(x) (&GET_PAGE_BODY(x)->header)
 #define GET_HEAP_PAGE(x)   (GET_PAGE_HEADER(x)->page)
@@ -7826,16 +7831,18 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free, VALUE moved_list)
 struct heap_cursor {
     RVALUE *slot;
     size_t index;
+    struct sorted_heap_page *sorted_page;
     struct heap_page *page;
     rb_objspace_t * objspace;
 };
 
 static void
-advance_cursor(struct heap_cursor *free, struct heap_page **page_list)
+advance_cursor(struct heap_cursor *free, struct list_head * head)
 {
     if (free->slot == free->page->start + free->page->total_slots - 1) {
         free->index++;
-        free->page = page_list[free->index];
+        free->sorted_page = list_next(head, free->sorted_page, page_node);
+        free->page = free->sorted_page->page;
         free->slot = free->page->start;
     }
     else {
@@ -7844,11 +7851,12 @@ advance_cursor(struct heap_cursor *free, struct heap_page **page_list)
 }
 
 static void
-retreat_cursor(struct heap_cursor *scan, struct heap_page **page_list)
+retreat_cursor(struct heap_cursor *scan, struct list_head *head)
 {
     if (scan->slot == scan->page->start) {
         scan->index--;
-        scan->page = page_list[scan->index];
+        scan->sorted_page = list_prev(head, scan->sorted_page, page_node);
+        scan->page = scan->sorted_page->page;
         scan->slot = scan->page->start + scan->page->total_slots - 1;
     }
     else {
@@ -7869,21 +7877,23 @@ not_met(struct heap_cursor *free, struct heap_cursor *scan)
 }
 
 static void
-init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_cursor *scan, struct heap_page **page_list)
+init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_cursor *scan, struct list_head *head)
 {
-    struct heap_page *page;
+    struct sorted_heap_page *sorted_page;
     size_t total_pages = heap_eden->total_pages;
-    page = page_list[0];
+    sorted_page = list_top(head, struct sorted_heap_page, page_node);
 
     free->index = 0;
-    free->page = page;
-    free->slot = page->start;
+    free->sorted_page = sorted_page;
+    free->page = sorted_page->page;
+    free->slot = sorted_page->page->start;
     free->objspace = objspace;
 
-    page = page_list[total_pages - 1];
+    sorted_page = list_tail(head, struct sorted_heap_page, page_node);
     scan->index = total_pages - 1;
-    scan->page = page;
-    scan->slot = page->start + page->total_slots - 1;
+    scan->sorted_page = sorted_page;
+    scan->page = sorted_page->page;
+    scan->slot = sorted_page->page->start + sorted_page->page->total_slots - 1;
     scan->objspace = objspace;
 }
 
@@ -7903,48 +7913,58 @@ count_pinned(struct heap_page *page)
 static int
 compare_pinned(const void *left, const void *right, void *dummy)
 {
-    struct heap_page *left_page;
-    struct heap_page *right_page;
+    struct sorted_heap_page * left_page;
+    struct sorted_heap_page * right_page;
 
-    left_page = *(struct heap_page * const *)left;
-    right_page = *(struct heap_page * const *)right;
+    left_page = (struct sorted_heap_page *)left;
+    right_page = (struct sorted_heap_page *)right;
 
-    return right_page->pinned_slots - left_page->pinned_slots;
+    return right_page->page->pinned_slots - left_page->page->pinned_slots;
 }
 
 static int
 compare_free_slots(const void *left, const void *right, void *dummy)
 {
-    struct heap_page *left_page;
-    struct heap_page *right_page;
+    struct sorted_heap_page * left_page;
+    struct sorted_heap_page * right_page;
 
-    left_page = *(struct heap_page * const *)left;
-    right_page = *(struct heap_page * const *)right;
+    left_page = (struct sorted_heap_page *)left;
+    right_page = (struct sorted_heap_page *)right;
 
-    return right_page->free_slots - left_page->free_slots;
+    return right_page->page->free_slots - left_page->page->free_slots;
 }
 
 typedef int page_compare_func_t(const void *, const void *, void *);
 
-static struct heap_page **
+static struct list_head *
 allocate_page_list(rb_objspace_t *objspace, page_compare_func_t *comparator)
 {
     size_t total_pages = heap_eden->total_pages;
-    size_t size = size_mul_or_raise(total_pages, sizeof(struct heap_page *), rb_eRuntimeError);
-    struct heap_page *page = 0, **page_list = malloc(size);
-    int i = 0;
+    size_t size = size_mul_add_or_raise(total_pages, sizeof(struct sorted_heap_page), sizeof(struct list_head), rb_eRuntimeError);
+    struct heap_page *page = 0;
+    size_t i = 0;
+
+    uint8_t * linked_list_buffer = (uint8_t *)calloc(size, sizeof(uint8_t));
+
+    struct sorted_heap_page *page_list = (struct sorted_heap_page *)(linked_list_buffer + sizeof(struct list_head));
+    struct list_head *head = (struct list_head *)linked_list_buffer;
 
     list_for_each(&heap_eden->pages, page, page_node) {
-        page_list[i++] = page;
+        page_list[i++].page = page;
         page->pinned_slots = count_pinned(page);
         GC_ASSERT(page != NULL);
     }
     GC_ASSERT(total_pages > 0);
     GC_ASSERT((size_t)i == total_pages);
 
-    ruby_qsort(page_list, total_pages, sizeof(struct heap_page *), comparator, NULL);
+    ruby_qsort(page_list, total_pages, sizeof(struct sorted_heap_page), comparator, NULL);
+    list_head_init(head);
 
-    return page_list;
+    for (i = 0; i < total_pages; i++) {
+        list_add_tail(head, &page_list[i].page_node);
+    }
+
+    return head;
 }
 
 static VALUE
@@ -7952,7 +7972,7 @@ gc_compact_heap(rb_objspace_t *objspace, page_compare_func_t *comparator)
 {
     struct heap_cursor free_cursor;
     struct heap_cursor scan_cursor;
-    struct heap_page **page_list;
+    struct list_head *page_list;
     VALUE moved_list;
 
     moved_list = Qfalse;
