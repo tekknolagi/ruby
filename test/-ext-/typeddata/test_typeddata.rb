@@ -22,7 +22,7 @@ class Test_TypedData < Test::Unit::TestCase
     assert_ruby_status([], "#{<<-"begin;"}\n#{<<-"end;"}")
     require "-test-/typeddata"
     begin;
-      n = 1 << 20
+      n = 1 << 18
       Bug::TypedData.make(n)
     end;
   end

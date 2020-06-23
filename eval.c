@@ -90,8 +90,10 @@ ruby_setup(void)
 
     EC_PUSH_TAG(GET_EC());
     if ((state = EC_EXEC_TAG()) == TAG_NONE) {
+        rb_gc_disable();
 	rb_call_inits();
 	ruby_prog_init();
+        rb_gc_enable();
 	GET_VM()->running = 1;
     }
     EC_POP_TAG();
