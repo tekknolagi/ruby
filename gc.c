@@ -536,6 +536,10 @@ struct RMoved {
     } as;
 };
 
+struct RGarbage {
+    VALUE flags;
+};
+
 #if defined(_MSC_VER) || defined(__CYGWIN__)
 #pragma pack(push, 1) /* magic for reducing sizeof(RVALUE): 24 -> 20 */
 #endif
@@ -547,6 +551,7 @@ typedef struct RVALUE {
 	    struct RVALUE *next;
 	} free;
         struct RMoved  moved;
+        struct RGarbage garbage;
 	struct RBasic  basic;
 	struct RObject object;
 	struct RClass  klass;
@@ -844,7 +849,7 @@ struct heap_page {
 #define GET_PAGE_HEADER(x) (&GET_PAGE_BODY(x)->header)
 #define GET_HEAP_PAGE(x)   (GET_PAGE_HEADER(x)->page)
 
-#define NUM_IN_PAGE(p)   (((bits_t)(p) & HEAP_PAGE_ALIGN_MASK)/sizeof(RVALUE))
+#define NUM_IN_PAGE(p)   ((((bits_t)(p) - sizeof(struct heap_page_header)) & HEAP_PAGE_ALIGN_MASK)/sizeof(RVALUE))
 #define BITMAP_INDEX(p)  (NUM_IN_PAGE(p) / BITS_BITLENGTH )
 #define BITMAP_OFFSET(p) (NUM_IN_PAGE(p) & (BITS_BITLENGTH-1))
 #define BITMAP_BIT(p)    ((bits_t)1 << BITMAP_OFFSET(p))
@@ -1200,6 +1205,7 @@ RVALUE_FLAGS_AGE(VALUE flags)
 static int
 check_rvalue_consistency_force(const VALUE obj, int terminate)
 {
+    GC_ASSERT(BUILTIN_TYPE(obj) != T_GARBAGE);
     rb_objspace_t *objspace = &rb_objspace;
     int err = 0;
 
@@ -1647,6 +1653,8 @@ heap_allocatable_pages_set(rb_objspace_t *objspace, size_t s)
 static inline void
 heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 {
+    GC_ASSERT(NUM_IN_PAGE(obj) % 2 == 0);
+
     RVALUE *p = (RVALUE *)obj;
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
@@ -1658,7 +1666,7 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
     if (RGENGC_CHECK_MODE &&
         /* obj should belong to page */
         !(&page->start[0] <= (RVALUE *)obj &&
-          (RVALUE *)obj   <  &page->start[page->total_slots] &&
+          (RVALUE *)obj   <  &page->start[page->total_slots * 2] &&
           obj % sizeof(RVALUE) == 0)) {
         rb_bug("heap_page_add_freeobj: %p is not rvalue.", (void *)p);
     }
@@ -1773,7 +1781,10 @@ heap_page_allocate(rb_objspace_t *objspace)
 	start = (RVALUE*)((VALUE)start + delta);
 	limit = (HEAP_PAGE_SIZE - (int)((VALUE)start - (VALUE)page_body))/(int)sizeof(RVALUE);
     }
+    if (limit % 2 == 1) limit--;
     end = start + limit;
+
+    GC_ASSERT(NUM_IN_PAGE(start) == 0);
 
     /* setup heap_pages_sorted */
     lo = 0;
@@ -1817,14 +1828,18 @@ heap_page_allocate(rb_objspace_t *objspace)
     if (heap_pages_himem < end) heap_pages_himem = end;
 
     page->start = start;
-    page->total_slots = limit;
+    page->total_slots = limit / 2;
     page_body->header.page = page;
 
-    for (p = start; p != end; p++) {
+    for (p = start; p < end - 1; p += 2) {
 	gc_report(3, objspace, "assign_heap_page: %p is added to freelist\n", (void *)p);
 	heap_page_add_freeobj(objspace, page, (VALUE)p);
+
+        // Clear out garbage slot
+        RVALUE *garbage = p + 1;
+        garbage->as.free.flags = 0;
     }
-    page->free_slots = limit;
+    page->free_slots = limit / 2;
 
     asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
     return page;
@@ -2154,6 +2169,27 @@ newobj_init(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_prote
 }
 
 static inline VALUE
+newobj_init_garbage(rb_objspace_t *objspace, VALUE obj)
+{
+    VALUE garbage = obj + sizeof(RVALUE);
+
+    asan_unpoison_object(garbage, true);
+
+    GC_ASSERT(NUM_IN_PAGE(garbage) % 2 == 1);
+
+    struct RVALUE buf = {
+        .as = {
+            .values =  {
+                .basic = {
+                    .flags = T_GARBAGE,
+                },
+            },
+        },
+    };
+    MEMCPY(RANY(garbage), &buf, RVALUE, 1);
+}
+
+static inline VALUE
 newobj_slowpath(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, rb_objspace_t *objspace, int wb_protected)
 {
     VALUE obj;
@@ -2173,7 +2209,9 @@ newobj_slowpath(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, rb_objsp
     }
 
     obj = heap_get_freeobj(objspace, heap_eden);
+    GC_ASSERT(NUM_IN_PAGE(obj) % 2 == 0);
     newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
+    newobj_init_garbage(objspace, obj);
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj);
     return obj;
 }
@@ -2214,7 +2252,9 @@ newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protect
 	  ruby_gc_stressful ||
 	  gc_event_hook_available_p(objspace)) &&
 	(obj = heap_get_freeobj_head(objspace, heap_eden)) != Qfalse) {
-	return newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
+        newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
+        newobj_init_garbage(objspace, obj);
+        return obj;
     }
     else {
         RB_DEBUG_COUNTER_INC(obj_newobj_slowpath);
@@ -2408,7 +2448,7 @@ is_pointer_to_heap(rb_objspace_t *objspace, void *ptr)
 	mid = (lo + hi) / 2;
 	page = heap_pages_sorted[mid];
 	if (page->start <= p) {
-	    if (p < page->start + page->total_slots) {
+	    if (p < page->start + page->total_slots * 2) {
                 RB_DEBUG_COUNTER_INC(gc_isptr_maybe);
 
                 if (page->flags.in_tomb) {
@@ -2816,6 +2856,8 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         break;
       case T_MOVED:
 	break;
+        case T_GARBAGE:
+            break;
       case T_ICLASS:
 	/* Basically , T_ICLASS shares table with the module */
         if (FL_TEST(obj, RICLASS_IS_ORIGIN) &&
@@ -3028,9 +3070,9 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 	page = heap_pages_sorted[i];
 
 	pstart = page->start;
-	pend = pstart + page->total_slots;
+	pend = pstart + page->total_slots * 2;
 
-        if ((*callback)(pstart, pend, sizeof(RVALUE), data)) {
+        if ((*callback)(pstart, pend, sizeof(RVALUE) * 2, data)) {
 	    break;
 	}
     }
@@ -3993,6 +4035,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
 
       case T_ZOMBIE:
       case T_MOVED:
+      case T_GARBAGE:
 	break;
 
       default:
@@ -4183,6 +4226,17 @@ gc_setup_mark_bits(struct heap_page *page)
 }
 
 static inline int
+gc_sweep_garbage(VALUE obj)
+{
+    VALUE garbage = obj + sizeof(RVALUE);
+
+    GC_ASSERT(BUILTIN_TYPE(garbage) == T_GARBAGE);
+
+    RBASIC(garbage)->flags = 0;
+    asan_poison_object(garbage);
+}
+
+static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
     int i;
@@ -4194,7 +4248,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 
     sweep_page->flags.before_sweep = FALSE;
 
-    p = sweep_page->start; pend = p + sweep_page->total_slots;
+    p = sweep_page->start; pend = p + sweep_page->total_slots * 2;
     offset = p - NUM_IN_PAGE(p);
     bits = sweep_page->mark_bits;
 
@@ -4218,14 +4272,18 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                             if (RVALUE_OLD_P(vp)) rb_bug("page_sweep: %p - old while minor GC.", (void *)p);
                             if (rgengc_remembered_sweep(objspace, vp)) rb_bug("page_sweep: %p - remembered.", (void *)p);
                         }
+
+                        GC_ASSERT(BUILTIN_TYPE(vp) != T_GARBAGE);
 #endif
                         if (obj_free(objspace, vp)) {
                             final_slots++;
                         }
                         else {
+                            GC_ASSERT((p - offset) % 2 == 0);
                             (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
                             heap_page_add_freeobj(objspace, sweep_page, vp);
                             gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
+                            gc_sweep_garbage(vp);
                             freed_slots++;
                             asan_poison_object(vp);
                         }
@@ -4240,8 +4298,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 			break;
 		    }
 		}
-		p++;
-		bitset >>= 1;
+                p += 2;
+                bitset >>= 2;
 	    } while (bitset);
 	}
     }
@@ -5107,6 +5165,7 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
         /* Garbage can live on the stack, so do not mark or pin */
         switch (BUILTIN_TYPE(obj)) {
           case T_MOVED:
+          case T_GARBAGE:
           case T_ZOMBIE:
           case T_NONE:
             break;
