@@ -61,6 +61,7 @@
 #define T_FILE     RUBY_T_FILE
 #define T_FIXNUM   RUBY_T_FIXNUM
 #define T_FLOAT    RUBY_T_FLOAT
+#define T_PAYLOAD  RUBY_T_PAYLOAD
 #define T_HASH     RUBY_T_HASH
 #define T_ICLASS   RUBY_T_ICLASS
 #define T_IMEMO    RUBY_T_IMEMO
@@ -138,6 +139,7 @@ ruby_value_type {
     RUBY_T_ICLASS   = 0x1c, /**< Hidden classes known as IClasses. */
     RUBY_T_ZOMBIE   = 0x1d, /**< @see struct ::RZombie */
     RUBY_T_MOVED    = 0x1e, /**< @see struct ::RMoved */
+    RUBY_T_PAYLOAD  = 0x17, /**< @see struct ::RPayload */
 
     RUBY_T_MASK     = 0x1f
 };
