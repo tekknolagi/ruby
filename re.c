@@ -23,6 +23,7 @@
 #include "ruby/encoding.h"
 #include "ruby/re.h"
 #include "ruby/util.h"
+#include "vm_core.h"
 
 VALUE rb_eRegexpError;
 
@@ -2956,19 +2957,50 @@ rb_reg_new(const char *s, long len, int options)
     return rb_enc_reg_new(s, len, rb_ascii8bit_encoding(), options);
 }
 
+static VALUE
+rb_reg_lookup_literal(VALUE str, int options)
+{
+    VALUE cache = GET_VM()->regexp_literals_cache;
+    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
+    if (RTEST(options_cache)) {
+        return rb_hash_lookup(options_cache, str);
+    }
+    return Qnil;
+}
+
+static void
+rb_reg_cache_literal(VALUE str, int options, VALUE re)
+{
+    VALUE cache = GET_VM()->regexp_literals_cache;
+    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
+    if (!RTEST(options_cache)) {
+        options_cache = rb_ident_hash_new();
+        rb_hash_aset(cache, INT2FIX(options), options_cache);
+    }
+    rb_hash_aset(options_cache, str, re);
+}
+
 VALUE
 rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline)
 {
-    VALUE re = rb_reg_alloc();
-    onig_errmsg_buffer err = "";
-
     if (!str) str = rb_str_new(0,0);
+    str = rb_fstring(str);
+
+    VALUE re = rb_reg_lookup_literal(str, options);
+    if (RTEST(re)) {
+        return re;
+    }
+
+    re = rb_reg_alloc();
+    onig_errmsg_buffer err = "";
     if (rb_reg_initialize_str(re, str, options, err, sourcefile, sourceline) != 0) {
-	rb_set_errinfo(rb_reg_error_desc(str, options, err));
-	return Qnil;
+        rb_set_errinfo(rb_reg_error_desc(str, options, err));
+        return Qnil;
     }
     FL_SET(re, REG_LITERAL);
     rb_obj_freeze(re);
+    rb_reg_cache_literal(str, options, re);
+
     return re;
 }
 
@@ -4111,4 +4143,6 @@ Init_Regexp(void)
     rb_define_method(rb_cMatch, "hash", match_hash, 0);
     rb_define_method(rb_cMatch, "eql?", match_equal, 1);
     rb_define_method(rb_cMatch, "==", match_equal, 1);
+
+    rb_gc_register_mark_object(GET_VM()->regexp_literals_cache = rb_hash_new());
 }

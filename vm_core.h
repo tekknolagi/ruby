@@ -634,6 +634,7 @@ typedef struct rb_vm_struct {
 
     VALUE *defined_strings;
     st_table *frozen_strings;
+    VALUE regexp_literals_cache;
 
     const struct rb_builtin_function *builtin_function_table;
     int builtin_inline_index;
