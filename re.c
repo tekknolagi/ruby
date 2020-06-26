@@ -282,6 +282,7 @@ rb_memsearch(const void *x0, long m, const void *y0, long n, rb_encoding *enc)
 
 #define REG_LITERAL FL_USER5
 #define REG_ENCODING_NONE FL_USER6
+#define REG_SHARED FL_USER7
 
 #define KCODE_FIXED FL_USER4
 
@@ -2905,15 +2906,55 @@ rb_reg_new_str(VALUE s, int options)
     return rb_reg_init_str(rb_reg_alloc(), s, options);
 }
 
+static VALUE
+rb_reg_lookup_literal(VALUE str, int options)
+{
+    VALUE cache = GET_VM()->regexp_literals_cache;
+    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
+    if (RTEST(options_cache)) {
+        return rb_hash_lookup(options_cache, str);
+    }
+    return Qnil;
+}
+
+static void
+rb_reg_cache_literal(VALUE str, int options, VALUE re)
+{
+    VALUE cache = GET_VM()->regexp_literals_cache;
+    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
+    if (!RTEST(options_cache)) {
+        options_cache = rb_ident_hash_new();
+        rb_hash_aset(cache, INT2FIX(options), options_cache);
+    }
+    rb_hash_aset(options_cache, str, re);
+}
+
+static bool
+rb_reg_init_shared(VALUE re, VALUE str, int options)
+{
+    VALUE re_literal = rb_reg_lookup_literal(str, options);
+    if (!RTEST(re_literal)) return FALSE;
+
+    FL_SET(re, REG_SHARED);
+    ENCODING_SET(re, ENCODING_GET(re_literal));
+    if (FL_TEST(re_literal, KCODE_FIXED)) FL_SET(re, KCODE_FIXED);
+    RB_OBJ_WRITE(re, &RREGEXP(re)->ptr, RREGEXP(re_literal)->ptr);
+    RB_OBJ_WRITE(re, &RREGEXP(re)->src, RREGEXP(re_literal)->src);
+    RREGEXP(re)->usecnt = 1; // HACK
+    return TRUE;
+}
+
 VALUE
 rb_reg_init_str(VALUE re, VALUE s, int options)
 {
-    onig_errmsg_buffer err = "";
+    s = rb_fstring(s);
+    if (!rb_reg_init_shared(re, s, options)) {
+        onig_errmsg_buffer err = "";
 
-    if (rb_reg_initialize_str(re, s, options, err, NULL, 0) != 0) {
-	rb_reg_raise_str(s, options, err);
+        if (rb_reg_initialize_str(re, s, options, err, NULL, 0) != 0) {
+            rb_reg_raise_str(s, options, err);
+        }
     }
-
     return re;
 }
 
@@ -2955,29 +2996,6 @@ VALUE
 rb_reg_new(const char *s, long len, int options)
 {
     return rb_enc_reg_new(s, len, rb_ascii8bit_encoding(), options);
-}
-
-static VALUE
-rb_reg_lookup_literal(VALUE str, int options)
-{
-    VALUE cache = GET_VM()->regexp_literals_cache;
-    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
-    if (RTEST(options_cache)) {
-        return rb_hash_lookup(options_cache, str);
-    }
-    return Qnil;
-}
-
-static void
-rb_reg_cache_literal(VALUE str, int options, VALUE re)
-{
-    VALUE cache = GET_VM()->regexp_literals_cache;
-    VALUE options_cache = rb_hash_lookup(cache, INT2FIX(options));
-    if (!RTEST(options_cache)) {
-        options_cache = rb_ident_hash_new();
-        rb_hash_aset(cache, INT2FIX(options), options_cache);
-    }
-    rb_hash_aset(options_cache, str, re);
 }
 
 VALUE

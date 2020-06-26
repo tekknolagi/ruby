@@ -13,6 +13,8 @@
 #include "ruby/ruby.h"          /* for VALUE */
 
 /* re.c */
+#define REG_SHARED FL_USER7
+
 VALUE rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline);
 VALUE rb_reg_check_preprocess(VALUE);
 long rb_reg_search0(VALUE, VALUE, long, int, int);

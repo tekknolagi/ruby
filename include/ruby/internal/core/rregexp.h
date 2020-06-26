@@ -42,7 +42,7 @@ struct re_patter_buffer; /* a.k.a. OnigRegexType, defined in onigmo.h */
 struct RRegexp {
     struct RBasic basic;
     struct re_pattern_buffer *ptr;
-    const VALUE src;
+    VALUE src;
     unsigned long usecnt;
 };
 

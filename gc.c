@@ -81,6 +81,7 @@
 #include "internal/object.h"
 #include "internal/proc.h"
 #include "internal/rational.h"
+#include "internal/re.h"
 #include "internal/sanitizers.h"
 #include "internal/struct.h"
 #include "internal/symbol.h"
@@ -2736,7 +2737,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         }
 	break;
       case T_REGEXP:
-	if (RANY(obj)->as.regexp.ptr) {
+	if (!FL_TEST(obj, REG_SHARED) && RANY(obj)->as.regexp.ptr) {
 	    onig_free(RANY(obj)->as.regexp.ptr);
             RB_DEBUG_COUNTER_INC(obj_regexp_ptr);
 	}
@@ -3943,7 +3944,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
         }
 	break;
       case T_REGEXP:
-	if (RREGEXP_PTR(obj)) {
+	if (RREGEXP_PTR(obj) && !FL_TEST(obj, REG_SHARED)) {
 	    size += onig_memsize(RREGEXP_PTR(obj));
 	}
 	break;
