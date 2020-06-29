@@ -6161,7 +6161,7 @@ gc_verify_heap_page(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
     int free_objects = 0;
     int zombie_objects = 0;
 
-    for (i=0; i<page->total_slots; i++) {
+    for (i = 0; i < page->total_slots * 2; i += 2) {
 	VALUE val = (VALUE)&page->start[i];
         void *poisoned = asan_poisoned_object_p(val);
         asan_unpoison_object(val, false);
@@ -7770,13 +7770,13 @@ struct heap_cursor {
 static void
 advance_cursor(struct heap_cursor *free, struct heap_page **page_list)
 {
-    if (free->slot == free->page->start + free->page->total_slots - 1) {
-        free->index++;
+    if (free->slot == free->page->start + free->page->total_slots * 2 - 2) {
+        free->index += 2;
         free->page = page_list[free->index];
         free->slot = free->page->start;
     }
     else {
-        free->slot++;
+        free->slot += 2;
     }
 }
 
@@ -7784,12 +7784,12 @@ static void
 retreat_cursor(struct heap_cursor *scan, struct heap_page **page_list)
 {
     if (scan->slot == scan->page->start) {
-        scan->index--;
+        scan->index -= 2;
         scan->page = page_list[scan->index];
-        scan->slot = scan->page->start + scan->page->total_slots - 1;
+        scan->slot = scan->page->start + scan->page->total_slots * 2 - 2;
     }
     else {
-        scan->slot--;
+        scan->slot -= 2;
     }
 }
 
@@ -7820,7 +7820,7 @@ init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_curs
     page = page_list[total_pages - 1];
     scan->index = total_pages - 1;
     scan->page = page;
-    scan->slot = page->start + page->total_slots - 1;
+    scan->slot = page->start + page->total_slots * 2 - 2;
     scan->objspace = objspace;
 }
 
