@@ -4157,8 +4157,8 @@ count_objects(int argc, VALUE *argv, VALUE os)
 	struct heap_page *page = heap_pages_sorted[i];
 	RVALUE *p, *pend;
 
-	p = page->start; pend = p + page->total_slots;
-	for (;p < pend; p++) {
+        p = page->start; pend = p + page->total_slots * 2;
+        for (;p < pend; p += 2) {
             VALUE vp = (VALUE)p;
             void *poisoned = asan_poisoned_object_p(vp);
             asan_unpoison_object(vp, false);
