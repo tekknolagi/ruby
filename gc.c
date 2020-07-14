@@ -4230,7 +4230,7 @@ gc_sweep_garbage(VALUE obj)
 {
     VALUE garbage = obj + sizeof(RVALUE);
 
-    GC_ASSERT(BUILTIN_TYPE(garbage) == T_GARBAGE);
+    // GC_ASSERT(BUILTIN_TYPE(garbage) == T_GARBAGE);
 
     RBASIC(garbage)->flags = 0;
     asan_poison_object(garbage);
