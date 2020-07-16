@@ -2199,7 +2199,7 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
     }
 }
 
-static inline VALUE
+static void
 newobj_init_garbage(rb_objspace_t *objspace, VALUE obj)
 {
     VALUE garbage = obj + sizeof(RVALUE);
@@ -2219,11 +2219,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj)
             },
         };
         MEMCPY(RANY(garbage), &buf, RVALUE, 1);
-    } else {
-        garbage = NULL;
     }
-
-    return garbage;
 }
 
 static inline VALUE
