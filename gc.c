@@ -5625,6 +5625,9 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 	gc_mark(objspace, any->as.rational.num);
 	gc_mark(objspace, any->as.rational.den);
 	break;
+    case T_GARBAGE:
+        gc_mark(objspace, obj);
+        break;
 
       case T_COMPLEX:
 	gc_mark(objspace, any->as.complex.real);
