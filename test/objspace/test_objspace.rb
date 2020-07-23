@@ -1,6 +1,7 @@
 # frozen_string_literal: false
 require "test/unit"
 require "objspace"
+require "tempfile"
 begin
   require "json"
 rescue LoadError
@@ -507,5 +508,36 @@ class TestObjSpace < Test::Unit::TestCase
   def test_anonymous_class_name
     assert_not_include ObjectSpace.dump(Class.new), '"name"'
     assert_not_include ObjectSpace.dump(Module.new), '"name"'
+  end
+
+  def test_dump_all_idempotency
+    Tempfile.create do |file1|
+      Tempfile.create do |file2|
+        GC.disable
+        ObjectSpace.dump_all(output: file1)
+        ObjectSpace.dump_all(output: file2)
+        GC.enable
+        file1.close
+        file2.close
+
+        heap1 = File.readlines(file1.path).map { |l|JSON.parse(l) }.to_h { |o| [o['address']&.to_i(16), o] }
+        heap2 = File.readlines(file2.path).map { |l|JSON.parse(l) }.to_h { |o| [o['address']&.to_i(16), o] }
+
+        allocated = (heap2.keys - heap1.keys).map { |k| heap2[k] }
+        assert_equal [
+          "FILE", # file1
+          "HASH", # dump_all rb_scan_args call
+          "HASH", # ???
+          "IMEMO", # "imemo_type"=>"callcache"
+        ], allocated.map { |o| o['type'] }.sort
+
+        freed = (heap1.keys - heap2.keys).map { |k| heap1[k] }
+        assert_equal [
+          'FILE', # file2
+        ], freed.map { |o| o['type'] }.sort
+      end
+    end
+  ensure
+    GC.enable
   end
 end
