@@ -2219,6 +2219,8 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj)
             },
         };
         MEMCPY(RANY(garbage), &buf, RVALUE, 1);
+
+        objspace->total_allocated_objects++;
     }
 }
 
