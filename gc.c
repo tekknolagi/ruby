@@ -2226,7 +2226,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
 
     VALUE next = obj + sizeof(RVALUE);
 
-    GC_ASSERT(BUILTIN_TYPE(next) != T_GARBAGE || NUM_IN_PAGE(next) >= GET_HEAP_PAGE(obj)->total_slots);
+    GC_ASSERT(length > 0);
 
     if (has_empty_slots(next, length)) {
         for (int i = 0; i < length; i++) {
@@ -3159,11 +3159,15 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 
         RVALUE *slot = pstart;
         while (slot < pend) {
-            if ((*callback)(slot, slot + 1, sizeof(RVALUE), data)) {
-                return;
-            }
+            if (BUILTIN_TYPE(slot) == T_GARBAGE) {
+                slot += slot->as.garbage.length;
+            } else {
+                if ((*callback)(slot, slot + 1, sizeof(RVALUE), data)) {
+                    return;
+                }
 
-            slot += obj_slot_stride(slot);
+                slot++;
+            }
         }
     }
 }
@@ -3585,8 +3589,8 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
 
         if (LIKELY(heap_pages_final_objects)) heap_pages_final_objects--;
         page->final_objects--;
-        page->free_slots += obj_slot_stride(zombie);
-	gc_sweep_obj(objspace, GET_HEAP_PAGE(zombie), zombie);
+        page->free_slots++;
+        heap_page_add_freeobj(objspace, GET_HEAP_PAGE(zombie), zombie);
 
 	objspace->profile.total_freed_objects++;
 
@@ -4334,13 +4338,6 @@ gc_sweep_garbage_maybe(rb_objspace_t *objspace, struct heap_page *page, VALUE ob
     return num_garbage_slots;
 }
 
-static inline void
-gc_sweep_obj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
-{
-    gc_sweep_garbage_maybe(objspace, page, obj);
-    heap_page_add_freeobj(objspace, page, obj);
-}
-
 static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
@@ -4368,7 +4365,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
         RVALUE *p = offset + i;
         VALUE vp = (VALUE)p;
         asan_unpoison_object(vp, false);
-        int num_slots = obj_slot_stride(vp);
         if (bitset) {
             switch (BUILTIN_TYPE(vp)) {
               default: /* majority case */
@@ -4385,18 +4381,17 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 }
                 else {
                     (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
-                    gc_sweep_obj(objspace, sweep_page, vp);
+                    // gc_sweep_obj(objspace, sweep_page, vp);
+                    heap_page_add_freeobj(objspace, sweep_page, vp);
                     gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
                     freed_objects++;
-                    freed_slots += num_slots;
+                    freed_slots++;
                     asan_poison_object(vp);
                 }
                 break;
 
                 /* minor cases */
               case T_GARBAGE:
-                rb_bug("gc_page_sweep: cannot directly sweep T_GARBAGE");
-                break;
               case T_ZOMBIE:
                 /* already counted */
                 break;
@@ -4406,7 +4401,11 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
             }
         }
 
-        i += num_slots;
+        if (BUILTIN_TYPE(p) == T_GARBAGE) {
+            i += p->as.garbage.length;
+        } else {
+            i += 1;
+        }
     }
 
     gc_setup_mark_bits(sweep_page);
@@ -7227,39 +7226,35 @@ rb_gc_force_recycle(VALUE obj)
 
     gc_report(2, objspace, "rb_gc_force_recycle: %s\n", obj_info(obj));
 
-    int num_slots = obj_slot_stride(obj);
-    for (int i = 0; i < num_slots; i++) {
-        VALUE slot = obj + i * sizeof(RVALUE);
-        int is_old = RVALUE_OLD_P(slot);
+    int is_old = RVALUE_OLD_P(obj);
 
-        if (is_old && RVALUE_MARKED(slot) && i == 0) {
-            objspace->rgengc.old_objects--;
-        }
-        CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS(slot), slot);
-        CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(slot), slot);
-
-#if GC_ENABLE_INCREMENTAL_MARK
-        if (is_incremental_marking(objspace)) {
-            if (MARKED_IN_BITMAP(GET_HEAP_MARKING_BITS(slot), slot)) {
-                invalidate_mark_stack(&objspace->mark_stack, slot);
-                CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS(slot), slot);
-            }
-            CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS(slot), slot);
-        }
-        else {
-#endif
-            if (is_old || !GET_HEAP_PAGE(slot)->flags.before_sweep) {
-                CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS(slot), slot);
-            }
-            CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS(slot), slot);
-#if GC_ENABLE_INCREMENTAL_MARK
-        }
-#endif
+    if (is_old) {
+        objspace->rgengc.old_objects--;
     }
+    CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS(obj), obj);
+    CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), obj);
+
+#if GC_ENABLE_INCREMENTAL_MARK
+    if (is_incremental_marking(objspace)) {
+        if (MARKED_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), obj)) {
+            invalidate_mark_stack(&objspace->mark_stack, obj);
+            CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), obj);
+        }
+        CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS(obj), obj);
+    }
+    else {
+#endif
+        if (is_old || !GET_HEAP_PAGE(obj)->flags.before_sweep) {
+            CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS(obj), obj);
+        }
+        CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), obj);
+#if GC_ENABLE_INCREMENTAL_MARK
+    }
+#endif
 
     objspace->profile.total_freed_objects++;
 
-    gc_sweep_obj(objspace, GET_HEAP_PAGE(obj), obj);
+    heap_page_add_freeobj(objspace, GET_HEAP_PAGE(obj), obj);
 
     /* Disable counting swept_slots because there are no meaning.
      * if (!MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(p), p)) {
