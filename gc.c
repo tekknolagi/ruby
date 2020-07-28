@@ -4330,17 +4330,26 @@ gc_setup_mark_bits(struct heap_page *page)
 }
 
 static inline int
-gc_sweep_garbage_maybe(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
+gc_free_garbage(rb_objspace_t *objspace, VALUE garbage)
 {
-    int num_garbage_slots = obj_slot_stride(obj) - 1;
+    GC_ASSERT(BUILTIN_TYPE(garbage) == T_GARBAGE);
 
-    if (num_garbage_slots) {
-        for (int slot = 0; slot < num_garbage_slots; slot++) {
-            heap_page_add_freeobj(objspace, page, obj + (slot + 1) * sizeof(RVALUE));
-        }
+    int length = RANY(garbage)->as.garbage.length;
+    GC_ASSERT(length > 0);
+
+    struct heap_page *page = GET_HEAP_PAGE(garbage);
+
+    for (int i = 0; i < length; i++) {
+        VALUE p = garbage + i * sizeof(RVALUE);
+
+        GC_ASSERT(RANY(p) - page->start < page->total_slots);
+
+        heap_page_add_freeobj(objspace, page, p);
     }
 
-    return num_garbage_slots;
+    page->free_slots += length;
+
+    return length;
 }
 
 static inline int
@@ -4386,9 +4395,15 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 }
                 else {
                     (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
-                    // gc_sweep_obj(objspace, sweep_page, vp);
                     heap_page_add_freeobj(objspace, sweep_page, vp);
                     gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
+
+                    // Demo freeing garbage slots - remove me later
+                    if (NUM_IN_PAGE(p + 1) < GET_PAGE_HEADER(p)->page->total_slots &&
+                            BUILTIN_TYPE(p + 1) == T_GARBAGE) {
+                        freed_slots += gc_free_garbage(objspace, p + 1);
+                    }
+
                     freed_objects++;
                     freed_slots++;
                     asan_poison_object(vp);
