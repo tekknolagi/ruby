@@ -3144,6 +3144,8 @@ rb_objspace_each_objects_without_setup(each_obj_callback *callback, void *data)
 struct os_each_struct {
     size_t num;
     VALUE of;
+    uint single_generation;
+    size_t generation;
 };
 
 static int
@@ -3195,73 +3197,44 @@ os_obj_of_i(void *vstart, void *vend, size_t stride, void *data)
     RVALUE *p = (RVALUE *)vstart, *pend = (RVALUE *)vend;
 
     for (; p != pend; p++) {
-	volatile VALUE v = (VALUE)p;
-	if (!internal_object_p(v)) {
-	    if (!oes->of || rb_obj_is_kind_of(v, oes->of)) {
-		rb_yield(v);
-		oes->num++;
-	    }
-	}
+        volatile VALUE v = (VALUE)p;
+        if (internal_object_p(v)) continue;
+        if (oes->of && !rb_obj_is_kind_of(v, oes->of)) continue;
+        if (oes->single_generation) {
+            struct allocation_info *ainfo = objspace_lookup_allocation_info(v);
+            if (!ainfo || ainfo->generation != oes->generation) continue;
+        }
+
+        rb_yield(v);
+        oes->num++;
     }
 
     return 0;
 }
 
 static VALUE
-os_obj_of(VALUE of)
+os_obj_of(VALUE of, VALUE generation)
 {
     struct os_each_struct oes;
 
     oes.num = 0;
-    oes.of = of;
+    oes.of = NIL_P(of) ? 0 : of;
+    if (NIL_P(generation)) {
+        oes.single_generation = FALSE;
+    } else {
+        oes.single_generation = TRUE;
+        oes.generation = NUM2SIZET(generation);
+    }
+
     rb_objspace_each_objects(os_obj_of_i, &oes);
     return SIZET2NUM(oes.num);
 }
 
-/*
- *  call-seq:
- *     ObjectSpace.each_object([module]) {|obj| ... } -> integer
- *     ObjectSpace.each_object([module])              -> an_enumerator
- *
- *  Calls the block once for each living, nonimmediate object in this
- *  Ruby process. If <i>module</i> is specified, calls the block
- *  for only those classes or modules that match (or are a subclass of)
- *  <i>module</i>. Returns the number of objects found. Immediate
- *  objects (<code>Fixnum</code>s, <code>Symbol</code>s
- *  <code>true</code>, <code>false</code>, and <code>nil</code>) are
- *  never returned. In the example below, #each_object returns both
- *  the numbers we defined and several constants defined in the Math
- *  module.
- *
- *  If no block is given, an enumerator is returned instead.
- *
- *     a = 102.7
- *     b = 95       # Won't be returned
- *     c = 12345678987654321
- *     count = ObjectSpace.each_object(Numeric) {|x| p x }
- *     puts "Total count: #{count}"
- *
- *  <em>produces:</em>
- *
- *     12345678987654321
- *     102.7
- *     2.71828182845905
- *     3.14159265358979
- *     2.22044604925031e-16
- *     1.7976931348623157e+308
- *     2.2250738585072e-308
- *     Total count: 7
- *
- */
-
 static VALUE
-os_each_obj(int argc, VALUE *argv, VALUE os)
+os_each_obj(rb_execution_context_t *ec, VALUE os, VALUE of, VALUE generation)
 {
-    VALUE of;
-
-    of = (!rb_check_arity(argc, 0, 1) ? 0 : argv[0]);
-    RETURN_ENUMERATOR(os, 1, &of);
-    return os_obj_of(of);
+    RETURN_ENUMERATOR(os, 2, ((VALUE[]){of, generation}));
+    return os_obj_of(of, generation);
 }
 
 /*
@@ -12016,8 +11989,6 @@ Init_GC(void)
     rb_define_singleton_method(rb_mProfiler, "total_time", gc_profile_total_time, 0);
 
     rb_mObjSpace = rb_define_module("ObjectSpace");
-
-    rb_define_module_function(rb_mObjSpace, "each_object", os_each_obj, -1);
 
     rb_define_module_function(rb_mObjSpace, "define_finalizer", define_final, -1);
     rb_define_module_function(rb_mObjSpace, "undefine_finalizer", undefine_final, 1);

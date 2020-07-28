@@ -192,4 +192,40 @@ module ObjectSpace
   end
 
   module_function :garbage_collect
+
+  #  call-seq:
+  #     ObjectSpace.each_object([module]) {|obj| ... } -> integer
+  #     ObjectSpace.each_object([module])              -> an_enumerator
+  #  
+  #  Calls the block once for each living, nonimmediate object in this
+  #  Ruby process. If <i>module</i> is specified, calls the block
+  #  for only those classes or modules that match (or are a subclass of)
+  #  <i>module</i>. Returns the number of objects found. Immediate
+  #  objects (<code>Fixnum</code>s, <code>Symbol</code>s
+  #  <code>true</code>, <code>false</code>, and <code>nil</code>) are
+  #  never returned. In the example below, #each_object returns both
+  #  the numbers we defined and several constants defined in the Math
+  #  module.
+  #  
+  #  If no block is given, an enumerator is returned instead.
+  #  
+  #     a = 102.7
+  #     b = 95       # Won't be returned
+  #     c = 12345678987654321
+  #     count = ObjectSpace.each_object(Numeric) {|x| p x }
+  #     puts "Total count: #{count}"
+  #  
+  #  <em>produces:</em>
+  #  
+  #     12345678987654321
+  #     102.7
+  #     2.71828182845905
+  #     3.14159265358979
+  #     2.22044604925031e-16
+  #     1.7976931348623157e+308
+  #     2.2250738585072e-308
+  #     Total count: 7
+  def self.each_object(of = nil, generation: nil)
+    Primitive.os_each_obj(of, generation)
+  end
 end
