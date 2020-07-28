@@ -2208,7 +2208,7 @@ static inline int
 has_empty_slots(VALUE start, int length)
 {
     int curr_num_in_page = NUM_IN_PAGE(start);
-    RVALUE *p = RANY(start);    
+    RVALUE *p = RANY(start);
     for (int i = 0; i < length; i++, curr_num_in_page++, p++) {
         int num_in_page = NUM_IN_PAGE(p);
         if (num_in_page >= GET_HEAP_PAGE(start)->total_slots ||
@@ -4306,7 +4306,7 @@ objspace_available_slots(rb_objspace_t *objspace)
 }
 
 static size_t
-objspace_live_slots(rb_objspace_t *objspace)
+objspace_live_objects(rb_objspace_t *objspace)
 {
     return (objspace->total_allocated_objects - objspace->profile.total_freed_objects) - heap_pages_final_objects;
 }
@@ -4314,7 +4314,12 @@ objspace_live_slots(rb_objspace_t *objspace)
 static size_t
 objspace_free_slots(rb_objspace_t *objspace)
 {
-    return objspace_available_slots(objspace) - objspace_live_slots(objspace) - heap_pages_final_objects;
+    // this is now wrong. we need to work out how many slots each object takes up
+    //
+    // can we do this without doing another full heap walk?
+    //
+    // Do we even care about how many free slots there are anymore?
+    return objspace_available_slots(objspace) - objspace_live_objects(objspace) - heap_pages_final_objects;
 }
 
 static void
@@ -6402,10 +6407,10 @@ gc_verify_internal_consistency(rb_objspace_t *objspace)
     /* check counters */
 
     if (!is_lazy_sweeping(heap_eden) && !finalizing) {
-	if (objspace_live_slots(objspace) != data.live_object_count) {
+	if (objspace_live_objects(objspace) != data.live_object_count) {
 	    fprintf(stderr, "heap_pages_final_objects: %d, objspace->profile.total_freed_objects: %d\n",
 		    (int)heap_pages_final_objects, (int)objspace->profile.total_freed_objects);
-	    rb_bug("inconsistent live slot number: expect %"PRIuSIZE", but %"PRIuSIZE".", objspace_live_slots(objspace), data.live_object_count);
+	    rb_bug("inconsistent live object number: expect %"PRIuSIZE", but %"PRIuSIZE".", objspace_live_objects(objspace), data.live_object_count);
 	}
     }
 
@@ -9053,7 +9058,7 @@ enum gc_stat_sym {
     gc_stat_sym_heap_sorted_length,
     gc_stat_sym_heap_allocatable_pages,
     gc_stat_sym_heap_available_slots,
-    gc_stat_sym_heap_live_slots,
+    gc_stat_sym_heap_live_objects,
     gc_stat_sym_heap_free_slots,
     gc_stat_sym_heap_final_objects,
     gc_stat_sym_heap_marked_slots,
@@ -9126,7 +9131,7 @@ setup_gc_stat_symbols(void)
 	S(heap_sorted_length);
 	S(heap_allocatable_pages);
 	S(heap_available_slots);
-	S(heap_live_slots);
+	S(heap_live_objects);
 	S(heap_free_slots);
 	S(heap_final_objects);
 	S(heap_marked_slots);
@@ -9195,7 +9200,7 @@ setup_gc_stat_symbols(void)
 	    rb_hash_aset(table, OLD_SYM(heap_tomb_page_length), NEW_SYM(heap_tomb_pages));
 	    rb_hash_aset(table, OLD_SYM(heap_increment), NEW_SYM(heap_allocatable_pages));
 	    rb_hash_aset(table, OLD_SYM(heap_length), NEW_SYM(heap_sorted_length));
-	    rb_hash_aset(table, OLD_SYM(heap_live_slot), NEW_SYM(heap_live_slots));
+	    rb_hash_aset(table, OLD_SYM(heap_live_slot), NEW_SYM(heap_live_objects));
 	    rb_hash_aset(table, OLD_SYM(heap_free_slot), NEW_SYM(heap_free_slots));
 	    rb_hash_aset(table, OLD_SYM(heap_final_slot), NEW_SYM(heap_final_objects));
 	    rb_hash_aset(table, OLD_SYM(remembered_shady_object), NEW_SYM(remembered_wb_unprotected_objects));
@@ -9293,7 +9298,7 @@ gc_stat_internal(VALUE hash_or_sym)
     SET(heap_sorted_length, heap_pages_sorted_length);
     SET(heap_allocatable_pages, heap_allocatable_pages);
     SET(heap_available_slots, objspace_available_slots(objspace));
-    SET(heap_live_slots, objspace_live_slots(objspace));
+    SET(heap_live_objects, objspace_live_objects(objspace));
     SET(heap_free_slots, objspace_free_slots(objspace));
     SET(heap_final_objects, heap_pages_final_objects);
     SET(heap_marked_slots, objspace->marked_slots);
