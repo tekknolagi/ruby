@@ -835,6 +835,7 @@ struct heap_page {
     struct heap_page *free_next;
     RVALUE *start;
     RVALUE *freelist;
+    RVALUE *freelist_tail;
     struct list_node page_node;
 
     bits_t wb_unprotected_bits[HEAP_PAGE_BITMAP_LIMIT];
@@ -1658,14 +1659,16 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
     RVALUE *p = (RVALUE *)obj;
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
-    if (page->freelist) {
-        page->freelist->as.free.prev = p;
-    }
-
     p->as.free.flags = 0;
-    p->as.free.prev = NULL;
-    p->as.free.next = page->freelist;
-    page->freelist = p;
+    if (!page->freelist) {
+        page->freelist = p;
+    }
+    if (page->freelist_tail) {
+        page->freelist_tail->as.free.next = p;
+    }
+    p->as.free.prev = page->freelist_tail;
+    p->as.free.next = NULL;
+    page->freelist_tail = p;
     asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
 
     if (RGENGC_CHECK_MODE &&
@@ -1969,12 +1972,15 @@ heap_increment(rb_objspace_t *objspace, rb_heap_t *heap)
 	gc_report(1, objspace, "heap_increment: heap_pages_sorted_length: %d, heap_pages_inc: %d, heap->total_pages: %d\n",
 		  (int)heap_pages_sorted_length, (int)heap_allocatable_pages, (int)heap->total_pages);
 
+          printf("heap_increment: heap_allocatable_pages: %d\n", heap_allocatable_pages);
+
 	GC_ASSERT(heap_allocatable_pages + heap_eden->total_pages <= heap_pages_sorted_length);
 	GC_ASSERT(heap_allocated_pages <= heap_pages_sorted_length);
 
 	heap_assign_page(objspace, heap);
 	return TRUE;
     }
+    printf("HEAP ALLOCATABLE PAGES NONE\n");
     return FALSE;
 }
 
@@ -2014,6 +2020,7 @@ heap_get_freeobj_from_next_freepage(rb_objspace_t *objspace, rb_heap_t *heap)
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
     p = page->freelist;
     page->freelist = NULL;
+    page->freelist_tail = NULL;
     asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
     page->free_slots = 0;
     asan_unpoison_object((VALUE)p, true);
@@ -2033,18 +2040,17 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
         prev->as.free.next = next;
     }
 
+    if (next) {
+        next->as.free.prev = prev;
+    }
+
     if (p == heap->freelist) {
         GC_ASSERT(prev == NULL);
         heap->freelist = next;
     }
 
-    if (p == GET_HEAP_PAGE(p)->freelist) {
-        GC_ASSERT(prev == NULL);
-        GET_HEAP_PAGE(p)->freelist = next;
-    }
-
-    if (next) {
-        next->as.free.prev = prev;
+    if (p == GET_HEAP_PAGE(p)->freelist || p == GET_HEAP_PAGE(p)->freelist_tail) { // ?
+        rb_bug("NOPE");
     }
 }
 
@@ -2702,6 +2708,8 @@ obj_free_object_id(rb_objspace_t *objspace, VALUE obj)
 static int
 obj_free(rb_objspace_t *objspace, VALUE obj)
 {
+    GC_ASSERT(BUILTIN_TYPE(obj) != T_GARBAGE);
+
     RB_DEBUG_COUNTER_INC(obj_free);
 
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_FREEOBJ, obj);
@@ -4189,6 +4197,7 @@ type_sym(size_t type)
         COUNT_TYPE(T_ICLASS);
         COUNT_TYPE(T_ZOMBIE);
         COUNT_TYPE(T_MOVED);
+        COUNT_TYPE(T_GARBAGE);
 #undef COUNT_TYPE
         default:              return SIZET2NUM(type); break;
     }
@@ -4235,6 +4244,7 @@ count_objects(int argc, VALUE *argv, VALUE os)
     rb_objspace_t *objspace = &rb_objspace;
     size_t counts[T_MASK+1];
     size_t freed = 0;
+    size_t garbage = 0;
     size_t total = 0;
     size_t i;
     VALUE hash = Qnil;
@@ -4270,7 +4280,12 @@ count_objects(int argc, VALUE *argv, VALUE os)
                 asan_poison_object(vp);
             }
 
-            p += obj_slot_stride((VALUE)p);
+            if (BUILTIN_TYPE(p) == T_GARBAGE) {
+                garbage += p->as.garbage.length;
+                p += p->as.garbage.length;
+            } else {
+                p++;
+            }
         }
 	total += page->total_slots;
     }
@@ -4282,6 +4297,7 @@ count_objects(int argc, VALUE *argv, VALUE os)
         rb_hash_stlike_foreach(hash, set_zero, hash);
     }
     rb_hash_aset(hash, ID2SYM(rb_intern("TOTAL")), SIZET2NUM(total));
+    rb_hash_aset(hash, ID2SYM(rb_intern("GARBAGE")), SIZET2NUM(garbage));
     rb_hash_aset(hash, ID2SYM(rb_intern("FREE")), SIZET2NUM(freed));
 
     for (i = 0; i <= T_MASK; i++) {
@@ -4398,11 +4414,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                     heap_page_add_freeobj(objspace, sweep_page, vp);
                     gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
 
-                    // Demo freeing garbage slots - remove me later
-                    if (NUM_IN_PAGE(p + 1) < GET_PAGE_HEADER(p)->page->total_slots &&
-                            BUILTIN_TYPE(p + 1) == T_GARBAGE) {
-                        freed_slots += gc_free_garbage(objspace, p + 1);
-                    }
 
                     freed_objects++;
                     freed_slots++;
@@ -6619,6 +6630,10 @@ gc_marks_finish(rb_objspace_t *objspace)
 	/* decide full GC is needed or not */
 	rb_heap_t *heap = heap_eden;
 	size_t total_slots = heap_allocatable_pages * HEAP_PAGE_OBJ_LIMIT + heap->total_slots;
+    // FIXME: number of free slots (i.e. swept slots) is not equal to total slots - marked slots (this does not account for garbage slots).
+    // This causes the number of free slots to seem much larger than there actually are, so `heap_extend_pages` does not add more pages.
+    // When no more pages are added, GC is kicked off much more frequently which causes a lot of slowdown.
+    // Solution idea: keep track of number of free & garbage slots we encounter during sweeping.
 	size_t sweep_slots = total_slots - objspace->marked_slots; /* will be swept slots */
 	size_t max_free_slots = (size_t)(total_slots * gc_params.heap_free_slots_max_ratio);
 	size_t min_free_slots = (size_t)(total_slots * gc_params.heap_free_slots_min_ratio);
