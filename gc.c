@@ -701,6 +701,8 @@ typedef struct rb_objspace {
     mark_stack_t mark_stack;
     size_t marked_slots;
 
+    size_t garbage_slots;
+
     struct {
 	struct heap_page **sorted;
 	size_t allocated_pages;
@@ -1972,15 +1974,12 @@ heap_increment(rb_objspace_t *objspace, rb_heap_t *heap)
 	gc_report(1, objspace, "heap_increment: heap_pages_sorted_length: %d, heap_pages_inc: %d, heap->total_pages: %d\n",
 		  (int)heap_pages_sorted_length, (int)heap_allocatable_pages, (int)heap->total_pages);
 
-          printf("heap_increment: heap_allocatable_pages: %d\n", heap_allocatable_pages);
-
 	GC_ASSERT(heap_allocatable_pages + heap_eden->total_pages <= heap_pages_sorted_length);
 	GC_ASSERT(heap_allocated_pages <= heap_pages_sorted_length);
 
 	heap_assign_page(objspace, heap);
 	return TRUE;
     }
-    printf("HEAP ALLOCATABLE PAGES NONE\n");
     return FALSE;
 }
 
@@ -2047,10 +2046,6 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
     if (p == heap->freelist) {
         GC_ASSERT(prev == NULL);
         heap->freelist = next;
-    }
-
-    if (p == GET_HEAP_PAGE(p)->freelist || p == GET_HEAP_PAGE(p)->freelist_tail) { // ?
-        rb_bug("NOPE");
     }
 }
 
@@ -2250,6 +2245,8 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
             },
         };
         MEMCPY(RANY(next), &buf, RVALUE, 1);
+
+        objspace->garbage_slots += length;
 
 #if RGENGC_CHECK_MODE
         for (int i = 0; i < length; i++) {
@@ -4363,7 +4360,10 @@ gc_free_garbage(rb_objspace_t *objspace, VALUE garbage)
         heap_page_add_freeobj(objspace, page, p);
     }
 
+    GC_ASSERT(objspace->garbage_slots >= length);
+
     page->free_slots += length;
+    objspace->garbage_slots -= length;
 
     return length;
 }
@@ -6630,11 +6630,7 @@ gc_marks_finish(rb_objspace_t *objspace)
 	/* decide full GC is needed or not */
 	rb_heap_t *heap = heap_eden;
 	size_t total_slots = heap_allocatable_pages * HEAP_PAGE_OBJ_LIMIT + heap->total_slots;
-    // FIXME: number of free slots (i.e. swept slots) is not equal to total slots - marked slots (this does not account for garbage slots).
-    // This causes the number of free slots to seem much larger than there actually are, so `heap_extend_pages` does not add more pages.
-    // When no more pages are added, GC is kicked off much more frequently which causes a lot of slowdown.
-    // Solution idea: keep track of number of free & garbage slots we encounter during sweeping.
-	size_t sweep_slots = total_slots - objspace->marked_slots; /* will be swept slots */
+	size_t sweep_slots = total_slots - objspace->garbage_slots - objspace->marked_slots; /* will be swept slots */
 	size_t max_free_slots = (size_t)(total_slots * gc_params.heap_free_slots_max_ratio);
 	size_t min_free_slots = (size_t)(total_slots * gc_params.heap_free_slots_min_ratio);
 	int full_marking = is_full_marking(objspace);
