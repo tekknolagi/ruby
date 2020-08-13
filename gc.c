@@ -823,7 +823,7 @@ enum {
 };
 
 struct heap_page {
-    short total_slots;
+    unsigned short total_slots;
     short free_slots;
     short pinned_slots;
     short final_objects;
@@ -2213,7 +2213,7 @@ has_empty_slots(VALUE start, int length)
     for (int i = 0; i < length; i++, curr_num_in_page++, p++) {
         int num_in_page = NUM_IN_PAGE(p);
         if (num_in_page >= GET_HEAP_PAGE(start)->total_slots ||
-                BUILTIN_TYPE(p) != T_NONE) {
+                BUILTIN_TYPE((VALUE)p) != T_NONE) {
             return FALSE;
         }
     }
@@ -2259,7 +2259,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
         }
 #endif
     } else {
-        next = NULL;
+        next = 0;
     }
 
     return next;
@@ -3164,7 +3164,7 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 
         RVALUE *slot = pstart;
         while (slot < pend) {
-            if (BUILTIN_TYPE(slot) == T_GARBAGE) {
+            if (BUILTIN_TYPE((VALUE)slot) == T_GARBAGE) {
                 slot += slot->as.garbage.length;
             } else {
                 if ((*callback)(slot, slot + 1, sizeof(RVALUE), data)) {
@@ -4277,7 +4277,7 @@ count_objects(int argc, VALUE *argv, VALUE os)
                 asan_poison_object(vp);
             }
 
-            if (BUILTIN_TYPE(p) == T_GARBAGE) {
+            if (BUILTIN_TYPE((VALUE)p) == T_GARBAGE) {
                 garbage += p->as.garbage.length;
                 p += p->as.garbage.length;
             } else {
@@ -4366,7 +4366,7 @@ gc_free_garbage(rb_objspace_t *objspace, VALUE garbage)
 static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
-    int i, skip_count = 0;
+    int i = 0;
     int empty_slots = 0, freed_slots = 0, freed_objects = 0, final_objects = 0;
     RVALUE *pstart, *pend, *offset;
     bits_t *bits, bitset;
@@ -4427,7 +4427,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
             }
         }
 
-        if (BUILTIN_TYPE(p) == T_GARBAGE) {
+        if (BUILTIN_TYPE((VALUE)p) == T_GARBAGE) {
             i += p->as.garbage.length;
         } else {
             i += 1;
