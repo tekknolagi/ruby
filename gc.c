@@ -4327,12 +4327,7 @@ objspace_live_objects(rb_objspace_t *objspace)
 static size_t
 objspace_free_slots(rb_objspace_t *objspace)
 {
-    // this is now wrong. we need to work out how many slots each object takes up
-    //
-    // can we do this without doing another full heap walk?
-    //
-    // Do we even care about how many free slots there are anymore?
-    return objspace_available_slots(objspace) - objspace_live_objects(objspace) - heap_pages_final_objects;
+    return objspace_available_slots(objspace) - objspace_live_objects(objspace) - objspace->garbage_slots - heap_pages_final_objects;
 }
 
 static void
@@ -9101,6 +9096,7 @@ enum gc_stat_sym {
     gc_stat_sym_heap_live_objects,
     gc_stat_sym_heap_free_slots,
     gc_stat_sym_heap_final_objects,
+    gc_stat_sym_heap_garbage_slots,
     gc_stat_sym_heap_marked_slots,
     gc_stat_sym_heap_eden_pages,
     gc_stat_sym_heap_tomb_pages,
@@ -9174,6 +9170,7 @@ setup_gc_stat_symbols(void)
 	S(heap_live_objects);
 	S(heap_free_slots);
 	S(heap_final_objects);
+    S(heap_garbage_slots);
 	S(heap_marked_slots);
 	S(heap_eden_pages);
 	S(heap_tomb_pages);
@@ -9341,6 +9338,7 @@ gc_stat_internal(VALUE hash_or_sym)
     SET(heap_live_objects, objspace_live_objects(objspace));
     SET(heap_free_slots, objspace_free_slots(objspace));
     SET(heap_final_objects, heap_pages_final_objects);
+    SET(heap_garbage_slots, objspace->garbage_slots);
     SET(heap_marked_slots, objspace->marked_slots);
     SET(heap_eden_pages, heap_eden->total_pages);
     SET(heap_tomb_pages, heap_tomb->total_pages);

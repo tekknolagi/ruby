@@ -126,8 +126,8 @@ class TestGc < Test::Unit::TestCase
     stat = GC.stat
     assert_equal stat[:total_allocated_pages], stat[:heap_allocated_pages] + stat[:total_freed_pages]
     assert_operator stat[:heap_sorted_length], :>=, stat[:heap_eden_pages] + stat[:heap_allocatable_pages], "stat is: " + stat.inspect
-    assert_equal stat[:heap_available_slots], stat[:heap_live_slots] + stat[:heap_free_slots] + stat[:heap_final_objects]
-    assert_equal stat[:heap_live_slots], stat[:total_allocated_objects] - stat[:total_freed_objects] - stat[:heap_final_objects]
+    assert_equal stat[:heap_available_slots], stat[:heap_live_objects] + stat[:heap_free_slots] + stat[:heap_final_objects] + stat[:heap_garbage_slots]
+    assert_equal stat[:heap_live_objects], stat[:total_allocated_objects] - stat[:total_freed_objects] - stat[:heap_final_objects]
     assert_equal stat[:heap_allocated_pages], stat[:heap_eden_pages] + stat[:heap_tomb_pages]
 
     if use_rgengc?
