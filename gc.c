@@ -4522,11 +4522,25 @@ gc_sweep_start_heap(rb_objspace_t *objspace, rb_heap_t *heap)
         struct heap_page *page = heap->using_page;
         asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
-        RVALUE **p = &page->freelist;
-	while (*p) {
-	    p = &(*p)->as.free.next;
-	}
-	*p = heap->freelist;
+        if (page->freelist_tail) {
+            GC_ASSERT(page->freelist);
+            page->freelist_tail->as.free.next = heap->freelist;
+        } else {
+            GC_ASSERT(!page->freelist);
+            page->freelist = heap->freelist;
+        }
+
+        if (heap->freelist) {
+            heap->freelist->as.free.prev = page->freelist_tail;
+
+            RVALUE *p = heap->freelist;
+            while (p->as.free.next) {
+                p = p->as.free.next;
+            }
+            GC_ASSERT(p);
+            page->freelist_tail = p;
+        }
+
         asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
 	heap->using_page = NULL;
     }
