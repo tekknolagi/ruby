@@ -1022,7 +1022,6 @@ static void gc_sweep_finish(rb_objspace_t *objspace);
 static int  gc_sweep_step(rb_objspace_t *objspace, rb_heap_t *heap);
 static void gc_sweep_rest(rb_objspace_t *objspace);
 static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
-static inline void gc_sweep_obj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj);
 
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
@@ -4599,7 +4598,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                     heap_page_add_freeobj(objspace, sweep_page, vp);
                     gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
 
-
                     freed_objects++;
                     freed_slots++;
                     asan_poison_object(vp);
@@ -6509,7 +6507,7 @@ gc_verify_heap_page(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
     int free_objects = 0;
     int zombie_objects = 0;
 
-    for (i = 0; i < page->total_slots; i++) {
+    for (i = 0; i < page->total_slots;) {
 	VALUE val = (VALUE)&page->start[i];
         void *poisoned = asan_poisoned_object_p(val);
         asan_unpoison_object(val, false);
@@ -6527,6 +6525,12 @@ gc_verify_heap_page(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
         if (poisoned) {
             GC_ASSERT(BUILTIN_TYPE(val) == T_NONE);
             asan_poison_object(val);
+        }
+
+        if (BUILTIN_TYPE(val) == T_GARBAGE) {
+            i += RANY(val)->as.garbage.length;
+        } else {
+            i++;
         }
     }
 
