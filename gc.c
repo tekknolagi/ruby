@@ -4552,32 +4552,25 @@ gc_free_garbage(rb_objspace_t *objspace, VALUE garbage)
 static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
-    int i;
-    RVALUE *p, *offset;
+    int offset, i;
     int empty_slots = 0, freed_slots = 0, freed_objects = 0, final_objects = 0;
+    RVALUE *pstart;
     bits_t *bits, bitset;
 
     gc_report(2, objspace, "page_sweep: start.\n");
 
     sweep_page->flags.before_sweep = FALSE;
 
-    p = sweep_page->start;
-    offset = p - NUM_IN_PAGE(p);
+    pstart = sweep_page->start;
+    offset = NUM_IN_PAGE(pstart);
     bits = sweep_page->mark_bits;
 
-    /* create guard : fill 1 out-of-range */
-    bits[BITMAP_INDEX(p)] |= BITMAP_BIT(p)-1;
-
-    int out_of_range_bits = (NUM_IN_PAGE(p) + sweep_page->total_slots) % BITS_BITLENGTH;
-    if (out_of_range_bits != 0) { // sizeof(RVALUE) == 64
-        bits[BITMAP_INDEX(p) + sweep_page->total_slots / BITS_BITLENGTH] |= ~(((bits_t)1 << out_of_range_bits) - 1);
-    }
-
     for (i = 0; i < sweep_page->total_slots;) {
-        bitset = (~bits[i / BITS_BITLENGTH] >> (i % BITS_BITLENGTH)) & 1;
-
-        p = offset + i;
+        RVALUE *p = pstart + i;
         VALUE vp = (VALUE)p;
+
+        bitset = (~bits[BITMAP_INDEX(p)] >> BITMAP_OFFSET(p)) & 1;
+
         asan_unpoison_object(vp, false);
         if (bitset) {
             switch (BUILTIN_TYPE(vp)) {
