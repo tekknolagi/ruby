@@ -3239,7 +3239,7 @@ obj_slot_stride(VALUE obj)
 {
     VALUE next = obj + sizeof(RVALUE);
 
-    if (NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
+    if (NUM_IN_PAGE(next) == NUM_IN_PAGE(obj) + 1 && NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
             BUILTIN_TYPE(next) == T_GARBAGE) {
         return RANY(next)->as.garbage.length + 1;
     }
