@@ -2271,7 +2271,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
 
     GC_ASSERT(length > 0);
 
-    if (NUM_IN_PAGE(next) == NUM_IN_PAGE(obj) + 1 && has_empty_slots(next, length)) {
+    if (GET_PAGE_BODY(next) == GET_PAGE_BODY(obj) && has_empty_slots(next, length)) {
         for (int i = 0; i < length; i++) {
             VALUE p = next + i * sizeof(RVALUE);
             asan_unpoison_object(p, true);
@@ -3239,7 +3239,7 @@ obj_slot_stride(VALUE obj)
 {
     VALUE next = obj + sizeof(RVALUE);
 
-    if (NUM_IN_PAGE(next) == NUM_IN_PAGE(obj) + 1 && NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
+    if (GET_PAGE_BODY(next) == GET_PAGE_BODY(obj) && NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
             BUILTIN_TYPE(next) == T_GARBAGE) {
         return RANY(next)->as.garbage.length + 1;
     }
