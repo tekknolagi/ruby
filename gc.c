@@ -2085,6 +2085,16 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
         GC_ASSERT(prev == NULL);
         heap->freelist = next;
     }
+
+    if (p == GET_HEAP_PAGE(p)->freelist) {
+        GC_ASSERT(prev == NULL);
+        GET_HEAP_PAGE(p)->freelist = next;
+    }
+
+    if (p == GET_HEAP_PAGE(p)->freelist_tail) {
+        GC_ASSERT(next == NULL);
+        GET_HEAP_PAGE(p)->freelist_tail = prev;
+    }
 }
 
 static inline VALUE
@@ -4569,6 +4579,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
         RVALUE *p = pstart + i;
         VALUE vp = (VALUE)p;
 
+        GC_ASSERT(!RVALUE_PAGE_MARKING(sweep_page, p) || sweep_page->flags.has_remembered_objects);
+
         bitset = (~bits[BITMAP_INDEX(p)] >> BITMAP_OFFSET(p)) & 1;
 
         asan_unpoison_object(vp, false);
@@ -4578,7 +4590,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 gc_report(2, objspace, "page_sweep: free %p\n", (void *)p);
 #if RGENGC_CHECK_MODE
                 if (!is_full_marking(objspace)) {
-                    // if (RVALUE_OLD_P(vp)) rb_bug("page_sweep: %p - old while minor GC.", (void *)p);
                     if (RVALUE_OLD_P(vp)) rb_bug("page_sweep: old while minor GC: %s.", obj_info(p));
                     if (rgengc_remembered_sweep(objspace, vp)) rb_bug("page_sweep: %p - remembered.", (void *)p);
                 }
@@ -8048,6 +8059,7 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
       case T_NIL:
       case T_MOVED:
       case T_ZOMBIE:
+      case T_GARBAGE:
         return FALSE;
       case T_SYMBOL:
         if (DYNAMIC_SYM_P(obj) && (RSYMBOL(obj)->id & ~ID_SCOPE_MASK)) {
@@ -8135,6 +8147,8 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free, struct RMoved * moved_l
         st_insert(objspace->obj_to_id_tbl, (st_data_t)dest, id);
     }
 
+    remove_obj_from_freelist(heap_eden, (VALUE)dest);
+
     /* Move the object */
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
@@ -8188,12 +8202,12 @@ static void
 advance_cursor(struct heap_cursor *free, struct heap_page **page_list)
 {
     if (free->slot == free->page->start + free->page->total_slots - 1) {
-        free->index--;
+        free->index++;
         free->page = page_list[free->index];
         free->slot = free->page->start;
     }
     else {
-        free->slot--;
+        free->slot++;
     }
 }
 
@@ -8237,7 +8251,7 @@ init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_curs
     page = page_list[total_pages - 1];
     scan->index = total_pages - 1;
     scan->page = page;
-    scan->slot = page->start + page->total_slots * 2 - 2;
+    scan->slot = page->start + page->total_slots - 1;
     scan->objspace = objspace;
 }
 
@@ -8914,34 +8928,29 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 {
     rb_objspace_t * objspace;
     struct heap_page *page;
-    short free_slots = 0;
 
     VALUE v = (VALUE)vstart;
     objspace = (rb_objspace_t *)data;
     page = GET_HEAP_PAGE(v);
-    asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
-    page->freelist = NULL;
-    asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
-    page->flags.has_uncollectible_shady_objects = FALSE;
-    page->flags.has_remembered_objects = FALSE;
 
     /* For each object on the page */
     for (; v != (VALUE)vend; v += stride) {
         void *poisoned = asan_poisoned_object_p(v);
         asan_unpoison_object(v, false);
 
-        switch (BUILTIN_TYPE(v)) {
-          case T_NONE:
-            heap_page_add_freeobj(objspace, page, v);
-            free_slots++;
-            break;
-          case T_MOVED:
-            break;
-          case T_ZOMBIE:
-            break;
-          default:
-            if (RVALUE_WB_UNPROTECTED(v)) {
-                page->flags.has_uncollectible_shady_objects = TRUE;
+            switch (BUILTIN_TYPE(v)) {
+              case T_NONE:
+              case T_MOVED:
+              case T_ZOMBIE:
+                break;
+              default:
+                if (RVALUE_WB_UNPROTECTED(v)) {
+                    page->flags.has_uncollectible_shady_objects = TRUE;
+                }
+                if (RVALUE_PAGE_MARKING(page, v)) {
+                    page->flags.has_remembered_objects = TRUE;
+                }
+                gc_update_object_references(objspace, v);
             }
             if (RVALUE_PAGE_MARKING(page, v)) {
                 page->flags.has_remembered_objects = TRUE;
@@ -8954,7 +8963,6 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
         }
     }
 
-    page->free_slots = free_slots;
     return 0;
 }
 
