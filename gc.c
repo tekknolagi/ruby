@@ -842,6 +842,7 @@ struct heap_page {
     RVALUE *freelist_tail;
     struct list_node page_node;
 
+    bits_t garbage_bits[HEAP_PAGE_BITMAP_LIMIT];
     bits_t wb_unprotected_bits[HEAP_PAGE_BITMAP_LIMIT];
     /* the following three bitmaps are cleared at the beginning of full GC */
     bits_t mark_bits[HEAP_PAGE_BITMAP_LIMIT];
@@ -867,6 +868,7 @@ struct heap_page {
 #define CLEAR_IN_BITMAP(bits, p)     ((bits)[BITMAP_INDEX(p)] = (bits)[BITMAP_INDEX(p)] & ~BITMAP_BIT(p))
 
 /* getting bitmap */
+#define GET_HEAP_GARBAGE_BITS(x)        (&GET_HEAP_PAGE(x)->garbage_bits[0])
 #define GET_HEAP_MARK_BITS(x)           (&GET_HEAP_PAGE(x)->mark_bits[0])
 #define GET_HEAP_PINNED_BITS(x)         (&GET_HEAP_PAGE(x)->pinned_bits[0])
 #define GET_HEAP_UNCOLLECTIBLE_BITS(x)  (&GET_HEAP_PAGE(x)->uncollectible_bits[0])
@@ -2284,8 +2286,10 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
     if (GET_PAGE_BODY(next) == GET_PAGE_BODY(obj) && has_empty_slots(next, length)) {
         for (int i = 0; i < length; i++) {
             VALUE p = next + i * sizeof(RVALUE);
+            GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p));
             asan_unpoison_object(p, true);
             remove_obj_from_freelist(heap_eden, p);
+            MARK_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p);
         }
 
         RVALUE buf = {
@@ -2299,6 +2303,8 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
         MEMCPY(RANY(next), &buf, RVALUE, 1);
 
         objspace->garbage_slots += length;
+
+        memset((char *)next + sizeof(struct RGarbage), ~0, length * sizeof(RVALUE) - sizeof(struct RGarbage));
 
 #if RGENGC_CHECK_MODE
         for (int i = 0; i < length; i++) {
@@ -2339,7 +2345,7 @@ newobj_slowpath(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, rb_objsp
     obj = heap_get_freeobj(objspace, heap_eden);
 
     newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
-    newobj_init_garbage(objspace, obj, 1);
+    newobj_init_garbage(objspace, obj, 3);
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj);
     return obj;
 }
@@ -5503,14 +5509,15 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
 {
     (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
 
-    if (is_pointer_to_heap(objspace, (void *)obj)) {
+    if (is_pointer_to_heap(objspace, (void *)obj) && !MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(obj), obj)) {
+        GC_ASSERT(BUILTIN_TYPE(obj) != T_GARBAGE);
+
         void *ptr = __asan_region_is_poisoned((void *)obj, SIZEOF_VALUE);
         asan_unpoison_object(obj, false);
 
         /* Garbage can live on the stack, so do not mark or pin */
         switch (BUILTIN_TYPE(obj)) {
           case T_MOVED:
-          case T_GARBAGE:
           case T_ZOMBIE:
           case T_NONE:
             break;
@@ -8059,7 +8066,6 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
       case T_NIL:
       case T_MOVED:
       case T_ZOMBIE:
-      case T_GARBAGE:
         return FALSE;
       case T_SYMBOL:
         if (DYNAMIC_SYM_P(obj) && (RSYMBOL(obj)->id & ~ID_SCOPE_MASK)) {
@@ -8315,6 +8321,12 @@ allocate_page_list(rb_objspace_t *objspace, page_compare_func_t *comparator)
     return page_list;
 }
 
+static int
+is_garbage_slot(VALUE obj)
+{
+    return !!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(obj), obj);
+}
+
 static void
 gc_compact_heap(rb_objspace_t *objspace, page_compare_func_t *comparator, struct RMoved * moved_list)
 {
@@ -8337,7 +8349,7 @@ gc_compact_heap(rb_objspace_t *objspace, page_compare_func_t *comparator, struct
         void *free_slot_poison = asan_poisoned_object_p((VALUE)free_cursor.slot);
         asan_unpoison_object((VALUE)free_cursor.slot, false);
 
-        while (BUILTIN_TYPE((VALUE)free_cursor.slot) != T_NONE && not_met(&free_cursor, &scan_cursor)) {
+        while ((is_garbage_slot((VALUE)free_cursor.slot) || BUILTIN_TYPE((VALUE)free_cursor.slot) != T_NONE) && not_met(&free_cursor, &scan_cursor)) {
             /* Re-poison slot if it's not the one we want */
             if (free_slot_poison) {
                 GC_ASSERT(BUILTIN_TYPE((VALUE)free_cursor.slot) == T_NONE);
@@ -8358,7 +8370,7 @@ gc_compact_heap(rb_objspace_t *objspace, page_compare_func_t *comparator, struct
         /* Scan cursor movement */
         objspace->rcompactor.considered_count_table[BUILTIN_TYPE((VALUE)scan_cursor.slot)]++;
 
-        while (!gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot) && not_met(&free_cursor, &scan_cursor)) {
+        while ((is_garbage_slot((VALUE)scan_cursor.slot) || !gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot)) && not_met(&free_cursor, &scan_cursor)) {
 
             /* Re-poison slot if it's not the one we want */
             if (scan_slot_poison) {
