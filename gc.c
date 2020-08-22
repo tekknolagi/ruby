@@ -4586,7 +4586,7 @@ static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
     int i;
-    int empty_slots = 0, freed_slots = 0, final_objects = 0;
+    int empty_slots = 0, freed_slots = 0, freed_objects = 0, final_objects = 0;
     RVALUE *p, *offset;
     bits_t *bits, bitset;
 
@@ -4632,6 +4632,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                             gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
                             freed_slots += maybe_free_garbage_for(objspace, vp); // Demo freeing garbage slots
                             freed_slots++;
+                            freed_objects++;
                             asan_poison_object(vp);
                         }
                         break;
@@ -4666,7 +4667,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 		   freed_slots, empty_slots, final_objects);
 
     sweep_page->free_slots = freed_slots + empty_slots;
-    objspace->profile.total_freed_objects += freed_slots;
+    objspace->profile.total_freed_objects += freed_objects;
     heap_pages_final_objects += final_objects;
     sweep_page->final_objects += final_objects;
 
@@ -7578,7 +7579,7 @@ rb_gc_force_recycle(VALUE obj)
         objspace->profile.total_freed_objects++;
 
         heap_page_add_freeobj(objspace, GET_HEAP_PAGE(obj), obj);
-        objspace->profile.total_freed_objects += maybe_free_garbage_for(objspace, obj); // Demo freeing garbage slots
+        maybe_free_garbage_for(objspace, obj); // Demo freeing garbage slots
 
         /* Disable counting swept_slots because there are no meaning.
          * if (!MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(p), p)) {
