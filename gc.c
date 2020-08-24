@@ -2303,15 +2303,18 @@ newobj_init(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_prote
     return obj;
 }
 
-static inline int
-has_empty_slots(VALUE start, int length)
+static int
+can_allocate_garbage_slots(VALUE parent, int length)
 {
-    int curr_num_in_page = NUM_IN_PAGE(start);
-    RVALUE *p = RANY(start);
-    for (int i = 0; i < length; i++, curr_num_in_page++, p++) {
-        int num_in_page = NUM_IN_PAGE(p);
-        if (num_in_page >= GET_HEAP_PAGE(start)->total_slots ||
-                BUILTIN_TYPE((VALUE)p) != T_NONE) {
+    if (NUM_IN_PAGE(parent) + length + 1 >= GET_HEAP_PAGE(parent)->total_slots) {
+        return FALSE;
+    }
+
+    VALUE start = parent + sizeof(RVALUE);
+    for (int i = 0; i < length; i++) {
+        VALUE p = start + i * sizeof(RVALUE);
+        if (GET_PAGE_BODY(parent) != GET_PAGE_BODY(p) ||
+                BUILTIN_TYPE(p) != T_NONE) {
             return FALSE;
         }
     }
@@ -2327,7 +2330,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
 
     GC_ASSERT(length > 0);
 
-    if (GET_PAGE_BODY(next) == GET_PAGE_BODY(obj) && has_empty_slots(next, length)) {
+    if (can_allocate_garbage_slots(obj, length)) {
         for (int i = 0; i < length; i++) {
             VALUE p = next + i * sizeof(RVALUE);
             GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p));
