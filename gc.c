@@ -4668,8 +4668,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 
     sweep_page->free_slots = freed_slots + empty_slots;
     objspace->profile.total_freed_objects += freed_objects;
-    heap_pages_final_objects += final_objects;
-    sweep_page->final_objects += final_objects;
 
     if (heap_pages_deferred_final && !finalizing) {
         rb_thread_t *th = GET_THREAD();
