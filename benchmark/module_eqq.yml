@@ -1,0 +1,10 @@
+prelude: |
+  $hash = { a: 1 }
+  $int = 1
+  $ary = []
+
+benchmark:
+  hit: Hash === $hash
+  miss_obj: Hash === $ary
+  miss_special: Hash === $int
+loop_count: 10000

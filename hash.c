@@ -1923,6 +1923,14 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
     return hash;
 }
 
+static VALUE
+rb_hash_eqq(VALUE self, VALUE arg)
+{
+    if (SPECIAL_CONST_P(arg) || BUILTIN_TYPE(arg) != T_HASH) return Qfalse;
+
+    return rb_obj_is_kind_of(arg, self);
+}
+
 MJIT_FUNC_EXPORTED VALUE
 rb_to_hash_type(VALUE hash)
 {
@@ -7219,6 +7227,7 @@ Init_Hash(void)
     rb_define_alloc_func(rb_cHash, empty_hash_alloc);
     rb_define_singleton_method(rb_cHash, "[]", rb_hash_s_create, -1);
     rb_define_singleton_method(rb_cHash, "try_convert", rb_hash_s_try_convert, 1);
+    rb_define_singleton_method(rb_cHash, "===", rb_hash_eqq, 1);
     rb_define_method(rb_cHash, "initialize", rb_hash_initialize, -1);
     rb_define_method(rb_cHash, "initialize_copy", rb_hash_replace, 1);
     rb_define_method(rb_cHash, "rehash", rb_hash_rehash, 0);
