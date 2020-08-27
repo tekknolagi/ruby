@@ -99,6 +99,7 @@ class TestGc < Test::Unit::TestCase
     GC.stat(stat)
     ObjectSpace.count_objects(count)
     assert_equal(count[:TOTAL]-count[:FREE]-count[:GARBAGE], stat[:heap_live_objects])
+    assert_equal(count[:GARBAGE], stat[:garbage_slots])
     assert_equal(count[:FREE], stat[:heap_free_slots])
 
     # measure again without GC.start

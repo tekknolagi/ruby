@@ -5029,6 +5029,7 @@ push_mark_stack(mark_stack_t *stack, VALUE data)
     switch (BUILTIN_TYPE(obj)) {
       case T_NIL:
       case T_FIXNUM:
+      case T_GARBAGE:
       case T_MOVED:
 	rb_bug("push_mark_stack() called for broken object");
 	break;
@@ -9432,6 +9433,7 @@ enum gc_stat_sym {
     gc_stat_sym_remembered_wb_unprotected_objects_limit,
     gc_stat_sym_old_objects,
     gc_stat_sym_old_objects_limit,
+    gc_stat_sym_garbage_slots,
 #if RGENGC_ESTIMATE_OLDMALLOC
     gc_stat_sym_oldmalloc_increase_bytes,
     gc_stat_sym_oldmalloc_increase_bytes_limit,
@@ -9509,6 +9511,7 @@ setup_gc_stat_symbols(void)
 #if RGENGC_ESTIMATE_OLDMALLOC
 	S(oldmalloc_increase_bytes);
 	S(oldmalloc_increase_bytes_limit);
+    S(garbage_slots);
 #endif
 #if RGENGC_PROFILE
 	S(total_generated_normal_object_count);
@@ -9677,6 +9680,7 @@ gc_stat_internal(VALUE hash_or_sym)
 #if RGENGC_ESTIMATE_OLDMALLOC
     SET(oldmalloc_increase_bytes, objspace->rgengc.oldmalloc_increase);
     SET(oldmalloc_increase_bytes_limit, objspace->rgengc.oldmalloc_increase_limit);
+    SET(garbage_slots, objspace->garbage_slots);
 #endif
 
 #if RGENGC_PROFILE
