@@ -2074,6 +2074,7 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
     RVALUE *p = RANY(obj);
     RVALUE *prev = p->as.free.prev;
     RVALUE *next = p->as.free.next;
+    struct heap_page * page = GET_HEAP_PAGE(p);
 
     if (prev) {
         prev->as.free.next = next;
@@ -2088,15 +2089,18 @@ remove_obj_from_freelist(rb_heap_t *heap, VALUE obj)
         heap->freelist = next;
     }
 
-    if (p == GET_HEAP_PAGE(p)->freelist) {
+    asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE *), false);
+    if (p == page->freelist) {
         GC_ASSERT(prev == NULL);
-        GET_HEAP_PAGE(p)->freelist = next;
+        page->freelist = next;
     }
 
-    if (p == GET_HEAP_PAGE(p)->freelist_tail) {
+    if (p == page->freelist_tail) {
         GC_ASSERT(next == NULL);
-        GET_HEAP_PAGE(p)->freelist_tail = prev;
+        page->freelist_tail = prev;
     }
+    asan_poison_memory_region(&page->freelist, sizeof(RVALUE *));
+
 }
 
 static inline VALUE
@@ -2313,10 +2317,12 @@ can_allocate_garbage_slots(VALUE parent, int length)
     VALUE start = parent + sizeof(RVALUE);
     for (int i = 0; i < length; i++) {
         VALUE p = start + i * sizeof(RVALUE);
+        asan_unpoison_memory_region((void *)p, sizeof(VALUE), false);
         if (GET_PAGE_BODY(parent) != GET_PAGE_BODY(p) ||
                 BUILTIN_TYPE(p) != T_NONE) {
             return FALSE;
         }
+        asan_poison_memory_region((void *)p, sizeof(VALUE));
     }
     return TRUE;
 }
@@ -3300,11 +3306,13 @@ static int
 obj_slot_stride(VALUE obj)
 {
     VALUE next = obj + sizeof(RVALUE);
+    asan_unpoison_object(next, false);
 
     if (GET_PAGE_BODY(next) == GET_PAGE_BODY(obj) && NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
             BUILTIN_TYPE(next) == T_GARBAGE) {
         return RANY(next)->as.garbage.length + 1;
     }
+    asan_poison_object(next);
 
     return 1;
 }
