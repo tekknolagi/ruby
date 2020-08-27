@@ -3822,9 +3822,10 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
         GC_ASSERT(heap_pages_final_objects > 0);
         GC_ASSERT(page->final_objects > 0);
         heap_pages_final_objects--;
-        page->final_objects--;
-        heap_page_add_freeobj(objspace, GET_HEAP_PAGE(zombie), zombie);
-        page->free_slots += maybe_free_garbage_for(objspace, zombie) + 1;
+	page->final_objects--;
+    page->free_slots++;
+	    maybe_free_garbage_for(objspace, zombie);
+	heap_page_add_freeobj(objspace, GET_HEAP_PAGE(zombie), zombie);
 
 	objspace->profile.total_freed_objects++;
 
