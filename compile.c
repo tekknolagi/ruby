@@ -842,7 +842,7 @@ rb_iseq_compile_node(rb_iseq_t *iseq, const NODE *node)
 static int
 rb_iseq_translate_threaded_code(rb_iseq_t *iseq)
 {
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
     const void * const *table = rb_vm_get_insns_address_table();
     unsigned int i;
     VALUE *encoded = (VALUE *)iseq->body->iseq_encoded;
@@ -867,7 +867,7 @@ rb_iseq_original_iseq(const rb_iseq_t *iseq) /* cold path */
     original_code = ISEQ_ORIGINAL_ISEQ_ALLOC(iseq, iseq->body->iseq_size);
     MEMCPY(original_code, iseq->body->iseq_encoded, VALUE, iseq->body->iseq_size);
 
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
     {
 	unsigned int i;
 
@@ -1368,7 +1368,7 @@ update_catch_except_flags(struct rb_iseq_constant_body *body)
        BREAK/NEXT/REDO catch table entries are used only when `throw` insn is used in the block. */
     pos = 0;
     while (pos < body->iseq_size) {
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
         insn = rb_vm_insn_addr2insn((void *)body->iseq_encoded[pos]);
 #else
         insn = (int)body->iseq_encoded[pos];

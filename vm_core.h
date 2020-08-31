@@ -1099,7 +1099,7 @@ typedef VALUE CDHASH;
 #define FUNC_FASTCALL(x) x
 #endif
 
-typedef rb_control_frame_t *
+typedef VALUE
   (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
 
 #define VM_TAGGED_PTR_SET(p, tag)  ((VALUE)(p) | (tag))

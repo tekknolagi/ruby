@@ -65,7 +65,8 @@ static void vm_insns_counter_count_insn(int insn) {}
 #endif
 /* #define DECL_SC_REG(r, reg) VALUE reg_##r */
 
-#if !OPT_CALL_THREADED_CODE
+#if (OPT_DIRECT_THREADED_CODE || OPT_TOKEN_THREADED_CODE )
+
 static VALUE
 vm_exec_core(rb_execution_context_t *ec, VALUE initial)
 {
@@ -155,7 +156,7 @@ rb_vm_get_insns_address_table(void)
     return (const void **)vm_exec_core(0, 0);
 }
 
-#else /* OPT_CALL_THREADED_CODE */
+#elif OPT_CALL_THREADED_CODE
 
 #include "vm.inc"
 #include "vmtc.inc"
@@ -191,4 +192,50 @@ vm_exec_core(rb_execution_context_t *ec, VALUE initial)
 	return err;
     }
 }
+
+#elif OPT_TAIL_THREADED_CODE
+
+#include "vm.inc"
+#include "vmtc.inc"
+
+const void **
+rb_vm_get_insns_address_table(void)
+{
+    return (const void **)insns_address_table;
+}
+
+static VALUE
+vm_exec_core(rb_execution_context_t *ec, VALUE initial)
+{
+    register rb_control_frame_t *reg_cfp = ec->cfp;
+    rb_insn_func_t handler = (rb_insn_func_t) *GET_PC();
+
+	return handler(ec, reg_cfp);
+
+#if 0
+    // TODO: this exits execution???
+    /*
+	if (UNLIKELY(reg_cfp == 0)) {
+	    break;
+	}
+    */
+
+
+
+
+    if ((th = rb_ec_thread_ptr(ec))->retval != Qundef) {
+	VALUE ret = th->retval;
+	th->retval = Qundef;
+	return ret;
+    }
+    else {
+	VALUE err = ec->errinfo;
+	ec->errinfo = Qnil;
+	return err;
+    }
+#endif
+}
+
+#else
+#error "unknown threading mode"
 #endif

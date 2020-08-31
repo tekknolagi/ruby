@@ -34,12 +34,13 @@
  * 2: call (function call for each insn dispatch)
  */
 #ifndef OPT_THREADED_CODE
-#define OPT_THREADED_CODE 0
+#define OPT_THREADED_CODE 3
 #endif
 
 #define OPT_DIRECT_THREADED_CODE (OPT_THREADED_CODE == 0)
 #define OPT_TOKEN_THREADED_CODE  (OPT_THREADED_CODE == 1)
 #define OPT_CALL_THREADED_CODE   (OPT_THREADED_CODE == 2)
+#define OPT_TAIL_THREADED_CODE   (OPT_THREADED_CODE == 3)
 
 /* VM running option */
 #define OPT_CHECKED_RUN              1

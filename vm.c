@@ -3288,6 +3288,8 @@ Init_VM(void)
     rb_ary_push(opts, rb_str_new2("token threaded code"));
 #elif OPT_CALL_THREADED_CODE
     rb_ary_push(opts, rb_str_new2("call threaded code"));
+#elif OPT_TAIL_THREADED_CODE
+    rb_ary_push(opts, rb_str_new2("tail threaded code"));
 #endif
 
 #if OPT_STACK_CACHING

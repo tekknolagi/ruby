@@ -139,7 +139,7 @@ rb_iseq_free(const rb_iseq_t *iseq)
     RUBY_FREE_LEAVE("iseq");
 }
 
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
 static VALUE
 rb_vm_insn_addr2insn2(const void *addr)
 {
@@ -206,7 +206,7 @@ rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
     VALUE *code;
     size_t n;
     rb_vm_insns_translator_t *const translator =
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
         (FL_TEST((VALUE)iseq, ISEQ_TRANSLATED)) ? rb_vm_insn_addr2insn2 :
 #endif
         rb_vm_insn_null_translator;
@@ -3100,7 +3100,7 @@ static insn_data_t insn_data[VM_INSTRUCTION_SIZE/2];
 void
 rb_vm_encoded_insn_data_table_init(void)
 {
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAIL_THREADED_CODE
     const void * const *table = rb_vm_get_insns_address_table();
 #define INSN_CODE(insn) ((VALUE)table[insn])
 #else
