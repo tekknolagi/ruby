@@ -3337,7 +3337,11 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 
         RVALUE *slot = pstart;
         while (slot < pend) {
-            if (BUILTIN_TYPE((VALUE)slot) == T_GARBAGE) {
+            asan_unpoison_object(slot, false);
+            int type = BUILTIN_TYPE((VALUE)slot);
+            asan_poison_object(slot);
+
+            if (type == T_GARBAGE) {
                 slot += slot->as.garbage.length;
             } else {
                 if ((*callback)(slot, slot + 1, sizeof(RVALUE), data)) {
