@@ -3337,9 +3337,8 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 
         RVALUE *slot = pstart;
         while (slot < pend) {
-            asan_unpoison_object(slot, false);
+            asan_unpoison_object((VALUE)slot, false);
             int type = BUILTIN_TYPE((VALUE)slot);
-            asan_poison_object(slot);
 
             if (type == T_GARBAGE) {
                 slot += slot->as.garbage.length;
@@ -3350,6 +3349,7 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
 
                 slot++;
             }
+            asan_poison_object((VALUE)slot);
         }
     }
 }
