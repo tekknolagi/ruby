@@ -6568,15 +6568,15 @@ gc_verify_heap_page(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 	    remembered_old_objects++;
 	}
 
-        if (poisoned) {
-            GC_ASSERT(BUILTIN_TYPE(val) == T_NONE);
-            asan_poison_object(val);
-        }
-
         if (BUILTIN_TYPE(val) == T_GARBAGE) {
             i += RANY(val)->as.garbage.length;
         } else {
             i++;
+        }
+
+        if (poisoned) {
+            GC_ASSERT(BUILTIN_TYPE(val) == T_NONE);
+            asan_poison_object(val);
         }
     }
 
