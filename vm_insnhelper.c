@@ -4166,6 +4166,17 @@ vm_invokeblock_i(
     }
 }
 
+// NOINLINE(static VALUE vm_sendish(
+//     struct rb_execution_context_struct *ec,
+//     struct rb_control_frame_struct *reg_cfp,
+//     struct rb_call_data *cd,
+//     VALUE block_handler,
+//     void (*method_explorer)(
+//         const struct rb_control_frame_struct *reg_cfp,
+//         struct rb_call_data *cd,
+//         VALUE recv)));
+
+
 static VALUE
 vm_sendish(
     struct rb_execution_context_struct *ec,

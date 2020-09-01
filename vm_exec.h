@@ -133,11 +133,6 @@ error !
 #define START_OF_ORIGINAL_INSN(x) start_of_##x:
 #define DISPATCH_ORIGINAL_INSN(x) goto  start_of_##x;
 
-
-
-
-
-
 /**********************************/
 #elif OPT_TAIL_THREADED_CODE
 
@@ -149,18 +144,12 @@ error !
   static VALUE \
     FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp) {
 
-#define END_INSN(insn) do { rb_insn_func_t handler = (rb_insn_func_t) *GET_PC(); return handler(ec, reg_cfp); } while(0); }
+#define END_INSN(insn) end_of_insn: do { rb_insn_func_t handler = (rb_insn_func_t) *GET_PC(); return handler(ec, reg_cfp); } while(0); }
 
-#define NEXT_INSN() do { rb_insn_func_t handler = (rb_insn_func_t) *GET_PC(); return handler(ec, reg_cfp); } while(0)
+#define NEXT_INSN() goto end_of_insn;
 
 #define START_OF_ORIGINAL_INSN(x) /* ignore */
 #define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
-
-
-
-
-
-
 
 /************************************************/
 #else /* no threaded code */

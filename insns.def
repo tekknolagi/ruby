@@ -798,6 +798,8 @@ opt_send_without_block
     VALUE bh = VM_BLOCK_HANDLER_NONE;
     val = vm_sendish(ec, GET_CFP(), cd, bh, vm_search_method_wrap);
 
+    // If a new stack frame has been pushed
+    // Read pc from cfp and then dispatch to the first instruction of the new frame
     if (val == Qundef) {
         RESTORE_REGS();
         NEXT_INSN();
