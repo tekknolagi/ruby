@@ -428,7 +428,7 @@ class TestGc < Test::Unit::TestCase
   end
 
   def test_vm_object
-    assert_normal_exit <<-'end', '[Bug #12583]'
+    assert_normal_exit <<-'end', '[Bug #12583]', timeout: 120
       ObjectSpace.each_object{|o| o.singleton_class rescue 0}
       ObjectSpace.each_object{|o| case o when Module then o.instance_methods end}
     end
