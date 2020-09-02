@@ -857,7 +857,7 @@ struct heap_page {
 #define GET_PAGE_HEADER(x) (&GET_PAGE_BODY(x)->header)
 #define GET_HEAP_PAGE(x)   (GET_PAGE_HEADER(x)->page)
 
-#define NUM_IN_PAGE(p)   (((bits_t)(p) & HEAP_PAGE_ALIGN_MASK)/sizeof(RVALUE))
+#define NUM_IN_PAGE(p)   ((((bits_t)(p) - sizeof(struct heap_page_header)) & HEAP_PAGE_ALIGN_MASK)/sizeof(RVALUE))
 #define BITMAP_INDEX(p)  (NUM_IN_PAGE(p) / BITS_BITLENGTH )
 #define BITMAP_OFFSET(p) (NUM_IN_PAGE(p) & (BITS_BITLENGTH-1))
 #define BITMAP_BIT(p)    ((bits_t)1 << BITMAP_OFFSET(p))
@@ -1873,6 +1873,7 @@ heap_page_allocate(rb_objspace_t *objspace)
     page->total_slots = limit;
     page_body->header.page = page;
 
+    GC_ASSERT(NUM_IN_PAGE(start) == 0);
     for (p = start; p != end; p++) {
 	gc_report(3, objspace, "assign_heap_page: %p is added to freelist\n", (void *)p);
 	heap_page_add_freeobj(objspace, page, (VALUE)p);
@@ -2157,6 +2158,7 @@ free_garbage(rb_objspace_t *objspace, VALUE garbage)
         VALUE p = garbage + i * sizeof(RVALUE);
 
         GC_ASSERT(RANY(p) - page->start < page->total_slots);
+        GC_ASSERT(GET_PAGE_BODY(garbage) == GET_PAGE_BODY(p));
 
         CLEAR_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p);
         heap_page_add_freeobj(objspace, page, p);
@@ -4630,6 +4632,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 VALUE vp = (VALUE)p;
                 asan_unpoison_object(vp, false);
 		if (bitset & 1) {
+                    GC_ASSERT(BUILTIN_TYPE(vp) != T_GARBAGE);
+
                     switch (BUILTIN_TYPE(vp)) {
 		      default: /* majority case */
                         gc_report(2, objspace, "page_sweep: free %p\n", (void *)p);
@@ -5029,6 +5033,8 @@ free_stack_chunks(mark_stack_t *stack)
 static void
 push_mark_stack(mark_stack_t *stack, VALUE data)
 {
+    GC_ASSERT(is_pointer_to_heap(&rb_objspace, data));
+
     VALUE obj = data;
     switch (BUILTIN_TYPE(obj)) {
       case T_NIL:
