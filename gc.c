@@ -5033,7 +5033,7 @@ free_stack_chunks(mark_stack_t *stack)
 static void
 push_mark_stack(mark_stack_t *stack, VALUE data)
 {
-    GC_ASSERT(is_pointer_to_heap(&rb_objspace, data));
+    GC_ASSERT(is_pointer_to_heap(&rb_objspace, (void *)data));
 
     VALUE obj = data;
     switch (BUILTIN_TYPE(obj)) {
