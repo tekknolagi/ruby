@@ -2172,7 +2172,7 @@ free_garbage(rb_objspace_t *objspace, VALUE garbage)
         heap_page_add_freeobj(objspace, page, p);
     }
 
-    GC_ASSERT(objspace->garbage_slots >= length);
+    GC_ASSERT(objspace->garbage_slots >= (size_t)length);
 
     page->free_slots += length;
     objspace->garbage_slots -= length;
