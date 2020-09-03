@@ -2184,7 +2184,6 @@ maybe_free_garbage_for(rb_objspace_t *objspace, VALUE obj)
 {
     VALUE next = obj + sizeof(RVALUE);
 
-    struct heap_page * page = GET_HEAP_PAGE(obj);
     if (RVALUE_SAME_PAGE_P(obj, next) && is_garbage_slot(next)) {
         return free_garbage(objspace, next);
     }
