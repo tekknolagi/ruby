@@ -856,6 +856,7 @@ struct heap_page {
 #define GET_PAGE_BODY(x)   ((struct heap_page_body *)((bits_t)(x) & ~(HEAP_PAGE_ALIGN_MASK)))
 #define GET_PAGE_HEADER(x) (&GET_PAGE_BODY(x)->header)
 #define GET_HEAP_PAGE(x)   (GET_PAGE_HEADER(x)->page)
+#define GET_NEXT_RVALUE(x) (x + sizeof(RVALUE))
 
 #define NUM_IN_PAGE(p)   ((((bits_t)(p) - sizeof(struct heap_page_header)) & HEAP_PAGE_ALIGN_MASK)/sizeof(RVALUE))
 #define BITMAP_INDEX(p)  (NUM_IN_PAGE(p) / BITS_BITLENGTH )
@@ -2182,7 +2183,7 @@ free_garbage(rb_objspace_t *objspace, VALUE garbage)
 static int
 maybe_free_garbage_for(rb_objspace_t *objspace, VALUE obj)
 {
-    VALUE next = obj + sizeof(RVALUE);
+    VALUE next = GET_NEXT_RVALUE(obj);
 
     if (RVALUE_SAME_PAGE_P(obj, next) && is_garbage_slot(next)) {
         return free_garbage(objspace, next);
@@ -2341,7 +2342,7 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
 {
     GC_ASSERT(BUILTIN_TYPE(obj) != T_NONE);
 
-    VALUE next = obj + sizeof(RVALUE);
+    VALUE next = GET_NEXT_RVALUE(obj);
 
     GC_ASSERT(length > 0);
 
@@ -3314,7 +3315,7 @@ struct each_obj_args {
 static int
 obj_slot_stride(VALUE obj)
 {
-    VALUE next = obj + sizeof(RVALUE);
+    VALUE next = GET_NEXT_RVALUE(obj);
     asan_unpoison_object(next, false);
 
     if (RVALUE_SAME_PAGE_P(next, obj) && NUM_IN_PAGE(next) < GET_PAGE_HEADER(obj)->page->total_slots &&
@@ -4414,7 +4415,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
 	       BUILTIN_TYPE(obj), (void*)obj);
     }
 
-    return size + sizeof(RVALUE);
+    return GET_NEXT_RVALUE(size);
 }
 
 size_t
