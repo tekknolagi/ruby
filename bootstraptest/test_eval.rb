@@ -308,15 +308,16 @@ assert_equal "[:x]", %q{
   end
 }, '[ruby-core:25125]'
 
-assert_normal_exit %q{
-  hash = {}
-  ("aaaa".."matz").each_with_index do |s, i|
-    hash[s] = i
-  end
-  begin
-    eval "class C; @@h = #{hash.inspect}; end"
-  end
-}, '[ruby-core:25714]'
+# TODO: this test runs too slowly
+# assert_normal_exit %q{
+#   hash = {}
+#   ("aaaa".."matz").each_with_index do |s, i|
+#     hash[s] = i
+#   end
+#   begin
+#     eval "class C; @@h = #{hash.inspect}; end"
+#   end
+# }, '[ruby-core:25714]'
 
 assert_normal_exit %q{
   begin
