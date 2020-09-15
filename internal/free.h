@@ -40,4 +40,17 @@ RFREE_BODY_SET(VALUE obj)
     FL_UNSET_RAW(obj, RFREE_HEAD_MASK);
 }
 
+static VALUE
+rfree_get_head(VALUE free)
+{
+    VALUE head = free;
+
+    while (!RFREE_HEAD_P(head)) {
+        head = RFREE(head)->as.body.head;
+    }
+
+    return (VALUE)head;
+}
+
+
 #endif /* INTERNAL_FREE_H */

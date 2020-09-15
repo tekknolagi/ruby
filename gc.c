@@ -1808,7 +1808,6 @@ heap_page_add_free_region(struct heap_page *page, VALUE start, unsigned int size
             p->as.free.as.body.head = start;
         } else {
             RFREE_HEAD_SET((VALUE)p);
-            // FL_SET_RAW((VALUE)p, RFREE_HEAD_MASK);
             p->as.free.as.head.size = size;
         }
     }
@@ -1819,30 +1818,18 @@ heap_page_add_free_region(struct heap_page *page, VALUE start, unsigned int size
 static inline void
 heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 {
-    RVALUE *p = (RVALUE *)obj;
-    p->as.free.flags = 0;
+    struct RFree *p = RFREE(obj);
+    p->flags = 0;
 
-    VALUE left = (VALUE)(p - 1);
-    VALUE right = (VALUE)(p + 1);
+    VALUE left = obj - sizeof(RVALUE);
+    VALUE right = obj + sizeof(RVALUE);
 
-    int is_left_none = RVALUE_SAME_PAGE_P((VALUE)p, (VALUE)left) && BUILTIN_TYPE(left) == T_NONE;
-    int is_right_none = RVALUE_SAME_PAGE_P((VALUE)p, (VALUE)right) && BUILTIN_TYPE(right) == T_NONE;
-
-    VALUE head = is_left_none ? (RFREE_HEAD_P(left) ? left : RFREE(left)->as.body.head) : obj;
-    GC_ASSERT(head <= obj);
+    int is_left_none = RVALUE_SAME_PAGE_P(obj, left) && BUILTIN_TYPE(left) == T_NONE;
+    int is_right_none = RVALUE_SAME_PAGE_P(obj, right) && BUILTIN_TYPE(right) == T_NONE;
 
     unsigned int size = 1;
 
-    if (is_left_none) {
-        GC_ASSERT(BUILTIN_TYPE(head) == T_NONE);
-        GC_ASSERT(RFREE_HEAD_P(head));
-
-        p->as.free.as.body.head = head;
-        size += RFREE(head)->as.head.size;
-
-        // TODO: Don't remove and reinsert unless we know it moved to a different bin
-        heap_page_remove_free_region_head(page, head);
-    }
+    VALUE head = is_left_none ? rfree_get_head(left) : obj;
 
     if (is_right_none) {
         GC_ASSERT(RFREE_HEAD_P(right));
@@ -1850,12 +1837,36 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
         size += RFREE(right)->as.head.size;
 
         heap_page_remove_free_region_head(page, right);
+
+        RFREE_BODY_SET(right);
+        RFREE(right)->as.body.head = head;
+    }
+
+    if (is_left_none) {
+        GC_ASSERT(head < obj);
+        GC_ASSERT(BUILTIN_TYPE(head) == T_NONE);
+        GC_ASSERT(RFREE_HEAD_P(head));
+
+        int head_size = RFREE(head)->as.head.size;
+
+        p->as.body.head = head;
+        size += head_size;
+
+        if (rfree_size_bin_index(head_size) != rfree_size_bin_index(size)) {
+            heap_page_remove_free_region_head(page, head);
+            RFREE(head)->as.head.size = size;
+            heap_page_add_free_region_head(page, head);
+        } else {
+            RFREE(head)->as.head.size = size;
+        }
+    } else {
+        RFREE_HEAD_SET(obj);
+        RFREE(obj)->as.head.size = size;
+
+        heap_page_add_free_region_head(page, head);
     }
 
     GC_ASSERT(head + sizeof(RVALUE) * size > obj);
-
-    // TODO: do pointer chasing and lazy flattening
-    heap_page_add_free_region(page, head, size);
 
     if (RGENGC_CHECK_MODE &&
         /* obj should belong to page */
