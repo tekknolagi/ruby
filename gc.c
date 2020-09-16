@@ -2176,6 +2176,10 @@ heap_prepare_free_bin(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
 {
     objspace->rvargc.requested_bin = bin;
 
+    if (heap_increment(objspace, heap)) {
+        return;
+    }
+
     if (gc_mode(objspace) == gc_mode_none && gc_start(objspace, GPR_FLAG_NEWOBJ) == FALSE) {
         rb_memerror();
     }
@@ -2184,14 +2188,10 @@ heap_prepare_free_bin(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
     gc_rest(objspace);
 }
 
-static void
-heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
+static bool
+heap_find_free_page(rb_heap_t *heap, unsigned int bin)
 {
-    GC_ASSERT(bin <= HEAP_PAGE_FREELIST_BINS);
-
     struct heap_page *page;
-    heap_prepare_free_bin(objspace, heap, bin);
-
     for (unsigned int i = bin; i < HEAP_PAGE_FREELIST_BINS; i++) {
         page = heap->free_pages[i];
         if (page) {
@@ -2201,7 +2201,21 @@ heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
         }
     }
 
-    if (!heap->using_page) {
+    return !!page;
+}
+
+static void
+heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
+{
+    GC_ASSERT(bin <= HEAP_PAGE_FREELIST_BINS);
+
+    if (heap_find_free_page(heap, bin)) {
+        return;
+    }
+
+    heap_prepare_free_bin(objspace, heap, bin);
+
+    if (!heap_find_free_page(heap, bin)) {
         rb_bug("no free page suitable for object");
     }
 }
@@ -4735,6 +4749,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
         bits[i] = bits[i] | sweep_page->garbage_bits[i];
     }
 
+    // TODO: use counter over slots to directly skip garbage and free slots
     for (i=0; i < HEAP_PAGE_BITMAP_LIMIT; i++) {
 	bitset = ~bits[i];
 	if (bitset) {
