@@ -2213,19 +2213,22 @@ free_region_allocate(struct heap_page *page, VALUE head, unsigned int slots)
     GC_ASSERT(RFREE_HEAD_P(head));
     GC_ASSERT(GET_HEAP_PAGE(head) == page);
 
-    // TODO: (conditionally?) allocate at the end of the region so that we don't need to remove it
-    // from the list and re-add it when it doesn't change bins
-
     unsigned int free_size = RFREE(head)->as.head.size;
-
     GC_ASSERT(free_size >= slots);
 
-    heap_page_remove_free_region_head(page, head);
-    if (free_size > slots) {
-        heap_page_add_free_region(page, head + slots * sizeof(RVALUE), free_size - slots);
+    unsigned int new_size = free_size - slots;
+
+    if (new_size == 0 || rfree_size_bin_index(free_size) != rfree_size_bin_index(new_size)) {
+        heap_page_remove_free_region_head(page, head);
+        if (new_size) {
+            RFREE(head)->as.head.size = new_size;
+            heap_page_add_free_region_head(page, head);
+        }
+    } else {
+        RFREE(head)->as.head.size = new_size;
     }
 
-    return head;
+    return head + new_size * sizeof(RVALUE);
 }
 
 static VALUE
