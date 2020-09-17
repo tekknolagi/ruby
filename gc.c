@@ -1720,14 +1720,18 @@ heap_allocatable_pages_set(rb_objspace_t *objspace, size_t s)
 static void
 heap_page_update_freelist_high(struct heap_page *page)
 {
+    asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist), false);
+
     for (unsigned int i = HEAP_PAGE_FREELIST_BINS; i > 0; i--) {
         if (page->freelist.bins[i - 1]) {
             page->freelist.high = i;
+            asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
             return;
         }
     }
 
     page->freelist.high = 0;
+    asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
 }
 
 static void
@@ -1759,7 +1763,9 @@ heap_page_remove_free_region_head(struct heap_page *page, VALUE head)
         GC_ASSERT(bin >= 0 && bin < HEAP_PAGE_FREELIST_BINS);
         GC_ASSERT(page->freelist.bins[bin] == free);
 
+        asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist.bins), false);
         page->freelist.bins[bin] = next;
+        asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
         // TODO: if (next == NULL)
         heap_page_update_freelist_high(page);
     }
@@ -1776,6 +1782,7 @@ heap_page_add_free_region_head(struct heap_page *page, VALUE head)
 
     unsigned int bin_index = rfree_bin_index(head);
     GC_ASSERT(bin_index < HEAP_PAGE_FREELIST_BINS);
+    asan_unpoison_memory_region(&page->freelist.bins[bin_index], sizeof(struct RFree *), false);
 
     struct RFree *next = page->freelist.bins[bin_index];
 
@@ -1793,7 +1800,13 @@ heap_page_add_free_region_head(struct heap_page *page, VALUE head)
         page->freelist.high = bin_index + 1;
     }
 
-    asan_poison_memory_region(free, free->as.head.size * sizeof(RVALUE));
+    asan_poison_memory_region(&page->freelist.bins[bin_index], sizeof(struct RFree *));
+
+#if __has_feature(address_sanitizer)
+    for (unsigned int i = 0; i < free->as.head.size; i++) {
+        asan_poison_object(head + i * sizeof(RVALUE));
+    }
+#endif
 }
 
 static void
@@ -1825,6 +1838,9 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
 
     VALUE left = obj - sizeof(RVALUE);
     VALUE right = obj + sizeof(RVALUE);
+
+    asan_unpoison_object(left, false);
+    asan_unpoison_object(right, false);
 
     int is_left_none = RVALUE_SAME_PAGE_P(obj, left) && BUILTIN_TYPE(left) == T_NONE;
     int is_right_none = RVALUE_SAME_PAGE_P(obj, right) && BUILTIN_TYPE(right) == T_NONE;
@@ -1889,10 +1905,10 @@ heap_add_freepage(rb_heap_t *heap, struct heap_page *page)
     GC_ASSERT(page->freelist.high != 0);
 
     unsigned int bin = page->freelist.high - 1;
-    // asan_unpoison_memory_region(&page->freelist[bin], sizeof(RVALUE*), false);
+    asan_unpoison_memory_region(&page->freelist.bins[bin], sizeof(RVALUE*), false);
     page->free_next = heap->free_pages[bin];
     heap->free_pages[bin] = page;
-    // asan_poison_memory_region(&page->freelist[bin], sizeof(RVALUE*));
+    asan_poison_memory_region(&page->freelist.bins[bin], sizeof(RVALUE*));
 }
 
 static void
@@ -2225,6 +2241,8 @@ heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
 static VALUE
 free_region_allocate(struct heap_page *page, VALUE head, unsigned int slots)
 {
+    asan_unpoison_object(head, false);
+
     GC_ASSERT(BUILTIN_TYPE(head) == T_NONE);
     GC_ASSERT(RFREE_HEAD_P(head));
     GC_ASSERT(GET_HEAP_PAGE(head) == page);
@@ -2244,7 +2262,13 @@ free_region_allocate(struct heap_page *page, VALUE head, unsigned int slots)
         RFREE(head)->as.head.size = new_size;
     }
 
-    return head + new_size * sizeof(RVALUE);
+    asan_poison_object(head);
+
+    VALUE alloc = head + new_size * sizeof(RVALUE);
+
+    asan_unpoison_memory_region((void *)alloc, slots * sizeof(RVALUE), false);
+
+    return alloc;
 }
 
 static VALUE
@@ -2254,6 +2278,7 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
 
     if (heap->using_page) {
         struct heap_page *page = heap->using_page;
+        asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist.bins), false);
 
         for (unsigned int i = rfree_size_bin_index(slots); i <= heap->using_page->freelist.high; i++) {
             GC_ASSERT(i < HEAP_PAGE_FREELIST_BINS);
@@ -2263,6 +2288,8 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
                 break;
             }
         }
+
+        asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
     }
 
     return (VALUE)p;
@@ -2299,6 +2326,8 @@ free_garbage(rb_objspace_t *objspace, VALUE garbage)
 
     for (int i = 0; i < length; i++) {
         VALUE p = garbage + i * sizeof(RVALUE);
+
+        asan_unpoison_object(p, false);
 
         GC_ASSERT(RANY(p) - page->start < page->total_slots);
         GC_ASSERT(RVALUE_SAME_PAGE_P(garbage, p));
@@ -2361,10 +2390,6 @@ static inline VALUE
 newobj_init(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, rb_objspace_t *objspace, VALUE obj)
 {
 #if !__has_feature(memory_sanitizer)
-    if (BUILTIN_TYPE(obj) != T_NONE) {
-        fprintf(stderr, "%s\n", obj_info(obj));
-    }
-
     GC_ASSERT(BUILTIN_TYPE(obj) == T_NONE);
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
 #endif
@@ -2482,6 +2507,12 @@ newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
     objspace->garbage_slots += length;
 
     memset((char *)next + sizeof(struct RGarbage), ~0, length * sizeof(RVALUE) - sizeof(struct RGarbage));
+
+#if __has_feature(address_sanitizer)
+    for (int i = 0; i < length; i++) {
+        asan_poison_object(next + i * sizeof(RVALUE));
+    }
+#endif
 
 #if RGENGC_CHECK_MODE
     for (int i = 0; i < length; i++) {

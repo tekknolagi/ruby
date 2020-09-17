@@ -4,6 +4,7 @@
 #include "ruby/internal/cast.h"
 #include "ruby/internal/fl_type.h"
 #include "ruby/internal/value.h"
+#include "sanitizers.h"
 
 #define RFREE(obj) RBIMPL_CAST((struct RFree *)(obj))
 #define RFREE_HEAD_MASK RUBY_FL_USER1
@@ -43,14 +44,17 @@ RFREE_BODY_SET(VALUE obj)
 static VALUE
 rfree_get_head(VALUE free)
 {
+    asan_unpoison_object(free, false);
+
     VALUE head = free;
 
-    while (!RFREE_HEAD_P(head)) {
-        head = RFREE(head)->as.body.head;
+    if (!RFREE_HEAD_P(free)) {
+        head = rfree_get_head(RFREE(free)->as.body.head);
     }
 
-    return (VALUE)head;
-}
+    asan_poison_object(free);
 
+    return head;
+}
 
 #endif /* INTERNAL_FREE_H */
