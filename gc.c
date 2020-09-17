@@ -1578,12 +1578,14 @@ RVALUE_SAME_PAGE_P(VALUE obj1, VALUE obj2)
 {
     // TODO: this is a really sketchy implementation
     return GET_PAGE_BODY(obj1) == GET_PAGE_BODY(obj2)
+            && (RVALUE *)obj2 >= GET_PAGE_BODY(obj1)->header.page->start
+            && (RVALUE *)obj2 < GET_PAGE_BODY(obj1)->header.page->start + GET_PAGE_BODY(obj1)->header.page->total_slots;
             // Cases when obj1 or obj2 is on the boundary at the end of the page
-            && GET_PAGE_BODY(obj1) == GET_PAGE_BODY(obj1 + sizeof(RVALUE) - 1)
-            && GET_PAGE_BODY(obj2) == GET_PAGE_BODY(obj2 + sizeof(RVALUE) - 1)
-            // Cases when obj1 or obj2 is before the start of the data of the page
-            && GET_PAGE_BODY(obj1) != (void *)obj1
-            && GET_PAGE_BODY(obj2) != (void *)obj2;
+            // && GET_PAGE_BODY(obj1) == GET_PAGE_BODY(obj1 + sizeof(RVALUE) - 1)
+            // && GET_PAGE_BODY(obj2) == GET_PAGE_BODY(obj2 + sizeof(RVALUE) - 1)
+            // // Cases when obj1 or obj2 is before the start of the data of the page
+            // && GET_PAGE_BODY(obj1) != (void *)obj1
+            // && GET_PAGE_BODY(obj2) != (void *)obj2;
 }
 
 static unsigned int
