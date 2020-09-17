@@ -2192,7 +2192,7 @@ heap_increment(rb_objspace_t *objspace, rb_heap_t *heap)
 static void
 heap_prepare_free_bin(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
 {
-    objspace->rvargc.requested_bin = bin;
+    objspace->rvargc.requested_bin = bin + 1;
 
     if (heap_increment(objspace, heap)) {
         return;
@@ -5012,7 +5012,7 @@ gc_sweep_step(rb_objspace_t *objspace, rb_heap_t *heap)
 	}
 	else if (free_slots > 0) {
             heap_add_freepage(heap, sweep_page);
-            if (sweep_page->freelist.high >= objspace->rvargc.requested_bin + 1) break;
+            if (sweep_page->freelist.high >= objspace->rvargc.requested_bin) break;
 	}
 	else {
 	    sweep_page->free_next = NULL;
