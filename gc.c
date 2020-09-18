@@ -2189,22 +2189,6 @@ heap_increment(rb_objspace_t *objspace, rb_heap_t *heap)
     return FALSE;
 }
 
-static void
-heap_prepare_free_bin(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
-{
-    objspace->rvargc.requested_bin = bin + 1;
-
-    if (heap_increment(objspace, heap)) {
-        return;
-    }
-
-    if (gc_mode(objspace) == gc_mode_none && gc_start(objspace, GPR_FLAG_NEWOBJ) == FALSE) {
-        rb_memerror();
-    }
-
-    // TODO: bring back incremental marking
-    gc_rest(objspace);
-}
 
 static bool
 heap_find_free_page(rb_heap_t *heap, unsigned int bin)
@@ -2223,6 +2207,40 @@ heap_find_free_page(rb_heap_t *heap, unsigned int bin)
 }
 
 static void
+heap_prepare_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
+{
+    objspace->rvargc.requested_bin = bin + 1;
+
+    if (heap_increment(objspace, heap)) {
+        if (!heap_find_free_page(heap, bin)) {
+            rb_bug("no free page suitable for object");
+        }
+
+        return;
+    }
+
+    if (gc_mode(objspace) == gc_mode_none && gc_start(objspace, GPR_FLAG_NEWOBJ) == FALSE) {
+        rb_memerror();
+    }
+
+    // TODO: bring back incremental marking
+    gc_rest(objspace);
+
+    if (heap_find_free_page(heap, bin)) {
+        return;
+    } else {
+        heap_set_increment(objspace, 1);
+        if (!heap_increment(objspace, heap_eden)) {
+            rb_memerror();
+        }
+
+        if (!heap_find_free_page(heap, bin)) {
+            rb_bug("no free page suitable for object");
+        }
+    }
+}
+
+static void
 heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin)
 {
     GC_ASSERT(bin <= HEAP_PAGE_FREELIST_BINS);
@@ -2231,11 +2249,7 @@ heap_assign_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
         return;
     }
 
-    heap_prepare_free_bin(objspace, heap, bin);
-
-    if (!heap_find_free_page(heap, bin)) {
-        rb_bug("no free page suitable for object");
-    }
+    heap_prepare_free_page(objspace, heap, bin);
 }
 
 static VALUE
@@ -2280,7 +2294,7 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
         struct heap_page *page = heap->using_page;
         asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist.bins), false);
 
-        for (unsigned int i = rfree_size_bin_index(slots); i <= heap->using_page->freelist.high; i++) {
+        for (unsigned int i = rfree_size_bin_index(slots); i < heap->using_page->freelist.high; i++) {
             GC_ASSERT(i < HEAP_PAGE_FREELIST_BINS);
 
             if (page->freelist.bins[i]) {
@@ -4960,16 +4974,6 @@ gc_sweep_finish(rb_objspace_t *objspace)
     /* if heap_pages has unused pages, then assign them to increment */
     if (heap_allocatable_pages < heap_tomb->total_pages) {
 	heap_allocatable_pages_set(objspace, heap_tomb->total_pages);
-    }
-
-    if (heap_eden->free_bin_high < objspace->rvargc.requested_bin) {
-        // TODO: experiment with a better heuristic rather than just 1
-        heap_set_increment(objspace, 1);
-        if (!heap_increment(objspace, heap_eden)) {
-            rb_memerror();
-        }
-
-        objspace->rvargc.requested_bin = 0;
     }
 
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_GC_END_SWEEP, 0);
