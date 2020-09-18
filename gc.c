@@ -2209,7 +2209,7 @@ heap_prepare_free_bin(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bin
 static bool
 heap_find_free_page(rb_heap_t *heap, unsigned int bin)
 {
-    struct heap_page *page;
+    struct heap_page *page = NULL;
     for (unsigned int i = bin; i < HEAP_PAGE_FREELIST_BINS; i++) {
         page = heap->free_pages[i];
         if (page) {
