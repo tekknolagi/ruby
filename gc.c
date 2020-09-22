@@ -841,8 +841,6 @@ struct heap_page {
     RVALUE *start;
     struct {
         struct RFree *bins[HEAP_PAGE_FREELIST_BINS];
-        // TODO: store the low
-        // unsigned int low;
         unsigned int high;
     } freelist;
     struct list_node page_node;
@@ -1766,8 +1764,9 @@ heap_page_remove_free_region_head(struct heap_page *page, VALUE head)
         asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist.bins), false);
         page->freelist.bins[bin] = next;
         asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
-        // TODO: if (next == NULL)
-        heap_page_update_freelist_high(page);
+        if (next == NULL) {
+            heap_page_update_freelist_high(page);
+        }
     }
 }
 
@@ -2051,12 +2050,11 @@ heap_page_resurrect(rb_objspace_t *objspace)
 
     list_for_each_safe(&heap_tomb->pages, page, next, page_node) {
         asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
-        // TODO: I don't think this is needed
-	// if (page->freelist != NULL) {
-        heap_unlink_page(objspace, heap_tomb, page);
-        asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
-        return page;
-	// }
+        if (page->freelist.high > 0) {
+            heap_unlink_page(objspace, heap_tomb, page);
+            asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
+            return page;
+        }
     }
 
     return NULL;
@@ -7800,13 +7798,10 @@ enum {
 static void
 heap_ready_to_gc(rb_objspace_t *objspace, rb_heap_t *heap)
 {
-    // TODO: I don't think this is needed
-    // if (!heap->freelist && !heap->free_pages) {
     if (!heap_increment(objspace, heap)) {
         heap_set_increment(objspace, 1);
         heap_increment(objspace, heap);
     }
-    // }
 }
 
 static int
