@@ -6771,7 +6771,7 @@ gc_verify_heap_page_freelist(struct heap_page *page)
             rb_bug("non empty freelist bin %d is greater than high %d", i, page->freelist.high);
         }
 
-        if (page->freelist.high == i && !p) {
+        if (page->freelist.high - 1 == i && !p) {
             rb_bug("freelist bin %d should not be empty", i);
         }
 
@@ -6796,7 +6796,7 @@ gc_verify_heap_page_freelist(struct heap_page *page)
                     rb_bug("freelist slot expected to be T_NONE but was: %s", obj_info(vp));
                 }
 
-                if (k != 0 && RFREE_HEAD_P(vp)) {
+                if (k != 0 && RFREE_HEAD_P(body)) {
                     rb_bug("freelist body is a head");
                 }
             }

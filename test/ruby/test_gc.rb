@@ -393,7 +393,6 @@ class TestGc < Test::Unit::TestCase
   end
 
   def test_verify_internal_consistency
-    skip "TODO: fix me"
     assert_nil(GC.verify_internal_consistency)
   end
 
