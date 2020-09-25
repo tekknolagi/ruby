@@ -4695,12 +4695,12 @@ count_objects(int argc, VALUE *argv, VALUE os)
             VALUE vp = (VALUE)p;
             void *poisoned = asan_poisoned_object_p(vp);
             asan_unpoison_object(vp, false);
-	    if (p->as.basic.flags) {
+            if (BUILTIN_TYPE(vp) == T_NONE) {
+                freed++;
+            }
+            else {
                 counts[BUILTIN_TYPE(vp)]++;
-	    }
-	    else {
-		freed++;
-	    }
+            }
             if (poisoned) {
                 GC_ASSERT(BUILTIN_TYPE(vp) == T_NONE);
                 asan_poison_object(vp);

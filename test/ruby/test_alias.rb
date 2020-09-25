@@ -142,7 +142,6 @@ class TestAlias < Test::Unit::TestCase
   end
 
   def test_alias_wb_miss
-    skip "TODO: fix me"
     assert_normal_exit "#{<<-"begin;"}\n#{<<-'end;'}"
     begin;
       require 'stringio'

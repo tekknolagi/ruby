@@ -174,7 +174,6 @@ class TestObjSpace < Test::Unit::TestCase
   end
 
   def test_trace_object_allocations
-    skip "TODO: fix me"
     ObjectSpace.trace_object_allocations_clear # clear object_table to get rid of erroneous detection for c0
     Class.name
     o0 = Object.new
