@@ -142,7 +142,10 @@ ISEQ_COMPILE_DATA_CLEAR(rb_iseq_t *iseq)
 static inline rb_iseq_t *
 iseq_imemo_alloc(void)
 {
-    return (rb_iseq_t *)rb_imemo_new(imemo_iseq, 0, 0, 0, 0);
+    VALUE body;
+    rb_iseq_t *iseq = (rb_iseq_t *)rb_imemo_iseq_new(imemo_iseq, 0, 0, 0, 0, &body);
+    iseq->body = (struct rb_iseq_constant_body *)body;
+    return iseq;
 }
 
 VALUE rb_iseq_ibf_dump(const rb_iseq_t *iseq, VALUE opt);
@@ -178,7 +181,6 @@ void rb_iseq_trace_set(const rb_iseq_t *iseq, rb_event_flag_t turnon_events);
 void rb_iseq_trace_set_all(rb_event_flag_t turnon_events);
 void rb_iseq_insns_info_encode_positions(const rb_iseq_t *iseq);
 
-struct rb_iseq_constant_body *rb_iseq_constant_body_alloc(void);
 VALUE rb_iseqw_new(const rb_iseq_t *iseq);
 const rb_iseq_t *rb_iseqw_to_iseq(VALUE iseqw);
 

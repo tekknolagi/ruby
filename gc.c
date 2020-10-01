@@ -1600,6 +1600,24 @@ rfree_bin_index(VALUE obj)
     return rfree_size_bin_index(RFREE(obj)->as.head.size);
 }
 
+static unsigned int
+allocation_bin_index(unsigned int size)
+{
+    int bin = rfree_size_bin_index(size);
+
+    if (1 << bin == size) {
+        return bin;
+    } else {
+        return bin + 1;
+    }
+}
+
+static int
+is_garbage_slot(VALUE obj)
+{
+    return !!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(obj), obj);
+}
+
 /*
   --------------------------- ObjectSpace -----------------------------
 */
@@ -1841,8 +1859,8 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
     asan_unpoison_object(left, false);
     asan_unpoison_object(right, false);
 
-    int is_left_none = RVALUE_SAME_PAGE_P(obj, left) && BUILTIN_TYPE(left) == T_NONE;
-    int is_right_none = RVALUE_SAME_PAGE_P(obj, right) && BUILTIN_TYPE(right) == T_NONE;
+    int is_left_none = RVALUE_SAME_PAGE_P(obj, left) && !is_garbage_slot(left) && BUILTIN_TYPE(left) == T_NONE;
+    int is_right_none = RVALUE_SAME_PAGE_P(obj, right) && !is_garbage_slot(right) && BUILTIN_TYPE(right) == T_NONE;
 
     unsigned int size = 1;
 
@@ -2277,7 +2295,6 @@ free_region_allocate(struct heap_page *page, VALUE head, unsigned int slots)
     asan_poison_object(head);
 
     VALUE alloc = head + new_size * sizeof(RVALUE);
-
     asan_unpoison_memory_region((void *)alloc, slots * sizeof(RVALUE), false);
 
     return alloc;
@@ -2292,7 +2309,7 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
         struct heap_page *page = heap->using_page;
         asan_unpoison_memory_region(page->freelist.bins, sizeof(page->freelist.bins), false);
 
-        for (unsigned int i = rfree_size_bin_index(slots); i < heap->using_page->freelist.high; i++) {
+        for (unsigned int i = allocation_bin_index(slots); i < heap->using_page->freelist.high; i++) {
             GC_ASSERT(i < HEAP_PAGE_FREELIST_BINS);
 
             if (page->freelist.bins[i]) {
@@ -2310,7 +2327,7 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
 static inline VALUE
 heap_get_freeobj(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slots)
 {
-    unsigned int bin = rfree_size_bin_index(slots);
+    unsigned int bin = allocation_bin_index(slots);
 
     heap_assign_free_page(objspace, heap, bin);
 
@@ -2320,15 +2337,13 @@ heap_get_freeobj(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slots)
     return p;
 }
 
-static int
-is_garbage_slot(VALUE obj)
+void
+free_payload(VALUE payload)
 {
-    return !!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(obj), obj);
-}
+    rb_objspace_t *objspace = &rb_objspace;
 
-static int
-free_garbage(rb_objspace_t *objspace, VALUE garbage)
-{
+    VALUE garbage = payload - sizeof(struct RGarbage);
+
     GC_ASSERT(BUILTIN_TYPE(garbage) == T_GARBAGE);
 
     int length = RANY(garbage)->as.garbage.length;
@@ -2353,20 +2368,6 @@ free_garbage(rb_objspace_t *objspace, VALUE garbage)
 
     page->free_slots += length;
     objspace->garbage_slots -= length;
-
-    return length;
-}
-
-static int
-maybe_free_garbage_for(rb_objspace_t *objspace, VALUE obj)
-{
-    VALUE next = GET_NEXT_RVALUE(obj);
-
-    if (RVALUE_SAME_PAGE_P(obj, next) && is_garbage_slot(next)) {
-        return free_garbage(objspace, next);
-    }
-
-    return 0;
 }
 
 void
@@ -2490,53 +2491,6 @@ newobj_init(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_prote
     return obj;
 }
 
-static void
-newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, int length)
-{
-    GC_ASSERT(BUILTIN_TYPE(obj) != T_NONE);
-
-    VALUE next = GET_NEXT_RVALUE(obj);
-
-    GC_ASSERT(length > 0);
-    GC_ASSERT(RVALUE_SAME_PAGE_P(obj, next));
-
-    for (int i = 0; i < length; i++) {
-        VALUE p = next + i * sizeof(RVALUE);
-        GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p));
-        MARK_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p);
-    }
-
-    RVALUE buf = {
-        .as = {
-            .garbage =  {
-                .flags = T_GARBAGE,
-                .length = length,
-            },
-        },
-    };
-    MEMCPY(RANY(next), &buf, RVALUE, 1);
-
-    objspace->garbage_slots += length;
-
-    memset((char *)next + sizeof(struct RGarbage), ~0, length * sizeof(RVALUE) - sizeof(struct RGarbage));
-
-#if __has_feature(address_sanitizer)
-    for (int i = 0; i < length; i++) {
-        asan_poison_object(next + i * sizeof(RVALUE));
-    }
-#endif
-
-#if RGENGC_CHECK_MODE
-    for (int i = 0; i < length; i++) {
-        VALUE p = next + i * sizeof(RVALUE);
-        GC_ASSERT(RVALUE_MARK_BITMAP(obj) == 0);
-        GC_ASSERT(RVALUE_MARKING_BITMAP(obj) == FALSE);
-        GC_ASSERT(RVALUE_UNCOLLECTIBLE_BITMAP(p) == FALSE);
-        GC_ASSERT(RVALUE_WB_UNPROTECTED_BITMAP(p) == FALSE);
-    }
-#endif
-}
-
 static inline VALUE
 newobj_slowpath(rb_objspace_t *objspace, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, unsigned int slots)
 {
@@ -2559,7 +2513,6 @@ newobj_slowpath(rb_objspace_t *objspace, VALUE klass, VALUE flags, VALUE v1, VAL
     obj = heap_get_freeobj(objspace, heap_eden, slots);
 
     newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
-    newobj_init_garbage(objspace, obj, slots - 1);
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj);
     return obj;
 }
@@ -2579,17 +2532,96 @@ newobj_slowpath_wb_unprotected(rb_objspace_t *objspace, VALUE klass, VALUE flags
     return newobj_slowpath(objspace, klass, flags, v1, v2, v3, FALSE, slots);
 }
 
-static inline VALUE
-newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
+static void
+newobj_init_garbage(rb_objspace_t *objspace, VALUE obj, unsigned int length)
+{
+    memset((void *)obj, 0, length * sizeof(RVALUE)); // TODO: don't memset when not needed (malloc vs calloc)
+
+    for (unsigned int i = 0; i < length; i++) {
+        VALUE p = obj + i * sizeof(RVALUE);
+        GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p));
+        MARK_IN_BITMAP(GET_HEAP_GARBAGE_BITS(p), p);
+    }
+
+    RVALUE buf = {
+        .as = {
+            .garbage =  {
+                .flags = T_GARBAGE,
+                .length = length,
+            },
+        },
+    };
+    MEMCPY((void *)obj, &buf, RVALUE, 1);
+
+    objspace->garbage_slots += length;
+}
+
+static VALUE
+newobj_allocate(size_t size, VALUE *payload)
 {
     rb_objspace_t *objspace = &rb_objspace;
     VALUE obj;
 
-    unsigned int slots = 2;
+    unsigned int slots = (unsigned int)CEILDIV((size + sizeof(struct RGarbage)), sizeof(RVALUE));
 
     RB_VM_LOCK_ENTER();
     {
+        RB_DEBUG_COUNTER_INC(obj_newobj);
+        // (void)RB_DEBUG_COUNTER_INC_IF(obj_newobj_wb_unprotected, !wb_protected);
 
+#if GC_DEBUG_STRESS_TO_CLASS
+        if (UNLIKELY(stress_to_class)) {
+            long i, cnt = RARRAY_LEN(stress_to_class);
+            for (i = 0; i < cnt; ++i) {
+                if (klass == RARRAY_AREF(stress_to_class, i)) rb_memerror();
+            }
+        }
+#endif
+        if (!(during_gc ||
+              ruby_gc_stressful ||
+              gc_event_hook_available_p(objspace)) &&
+              (obj = heap_get_freeobj_head(objspace, heap_eden, slots)) != Qfalse) {
+            // return obj;
+        }
+        else {
+            RB_DEBUG_COUNTER_INC(obj_newobj_slowpath);
+            // TODO: this is (mostly) a copy of newobj_slowpath, refactor please
+            if (UNLIKELY(during_gc || ruby_gc_stressful)) {
+                if (during_gc) {
+                    dont_gc_on();
+                    during_gc = 0;
+                    rb_bug("object allocation during garbage collection phase");
+                }
+
+                if (ruby_gc_stressful) {
+                    if (!garbage_collect(objspace, GPR_FLAG_NEWOBJ)) {
+                        rb_memerror();
+                    }
+                }
+            }
+
+            obj = heap_get_freeobj(objspace, heap_eden, slots);
+        }
+    }
+    RB_VM_LOCK_LEAVE();
+
+    newobj_init_garbage(objspace, obj + sizeof(RVALUE), slots - 1);
+
+    // TODO: don't assume that payload is not a NULL pointer
+    // TODO: don't assume that slots > 1
+    (*payload) = obj + sizeof(RVALUE) + sizeof(struct RGarbage);
+
+    return obj;
+}
+
+static inline VALUE
+newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, unsigned int slots)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    VALUE obj;
+
+    RB_VM_LOCK_ENTER();
+    {
         RB_DEBUG_COUNTER_INC(obj_newobj);
         (void)RB_DEBUG_COUNTER_INC_IF(obj_newobj_wb_unprotected, !wb_protected);
 
@@ -2606,7 +2638,6 @@ newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protect
               gc_event_hook_available_p(objspace)) &&
               (obj = heap_get_freeobj_head(objspace, heap_eden, slots)) != Qfalse) {
             newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
-            newobj_init_garbage(objspace, obj, slots - 1);
             return obj;
         }
         else {
@@ -2625,14 +2656,14 @@ VALUE
 rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(klass, flags, 0, 0, 0, FALSE);
+    return newobj_of(klass, flags, 0, 0, 0, FALSE, 1);
 }
 
 VALUE
 rb_wb_protected_newobj_of(VALUE klass, VALUE flags)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(klass, flags, 0, 0, 0, TRUE);
+    return newobj_of(klass, flags, 0, 0, 0, TRUE, 1);
 }
 
 /* for compatibility */
@@ -2640,13 +2671,13 @@ rb_wb_protected_newobj_of(VALUE klass, VALUE flags)
 VALUE
 rb_newobj(void)
 {
-    return newobj_of(0, T_NONE, 0, 0, 0, FALSE);
+    return newobj_of(0, T_NONE, 0, 0, 0, FALSE, 1);
 }
 
 VALUE
 rb_newobj_of(VALUE klass, VALUE flags)
 {
-    return newobj_of(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED);
+    return newobj_of(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED, 1);
 }
 
 VALUE
@@ -2658,7 +2689,7 @@ rb_newobj_with(VALUE src)
     VALUE v1 = RANY(src)->as.values.v1;
     VALUE v2 = RANY(src)->as.values.v2;
     VALUE v3 = RANY(src)->as.values.v3;
-    return newobj_of(klass, flags & ~FL_WB_PROTECTED, v1, v2, v3, flags & FL_WB_PROTECTED);
+    return newobj_of(klass, flags & ~FL_WB_PROTECTED, v1, v2, v3, flags & FL_WB_PROTECTED, 1);
 }
 
 #define UNEXPECTED_NODE(func) \
@@ -2691,18 +2722,29 @@ rb_imemo_name(enum imemo_type type)
 
 #undef rb_imemo_new
 
+// TODO: refactor this
+VALUE
+rb_imemo_iseq_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0, VALUE *payload)
+{
+    VALUE flags = T_IMEMO | (type << FL_USHIFT);
+    // return newobj_of(v0, flags, v1, v2, v3, TRUE, 1 + rfree_size_bin_index(sizeof(struct rb_iseq_constant_body)));
+    VALUE obj = newobj_allocate(sizeof(RVALUE) + sizeof(struct rb_iseq_constant_body), payload);
+    newobj_init(v0, flags, v1, v2, v3, TRUE, &rb_objspace, obj);
+    return obj;
+}
+
 VALUE
 rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 {
     VALUE flags = T_IMEMO | (type << FL_USHIFT);
-    return newobj_of(v0, flags, v1, v2, v3, TRUE);
+    return newobj_of(v0, flags, v1, v2, v3, TRUE, 1);
 }
 
 static VALUE
 rb_imemo_tmpbuf_new(VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 {
     VALUE flags = T_IMEMO | (imemo_tmpbuf << FL_USHIFT);
-    return newobj_of(v0, flags, v1, v2, v3, FALSE);
+    return newobj_of(v0, flags, v1, v2, v3, FALSE, 1);
 }
 
 static VALUE
@@ -2765,7 +2807,7 @@ VALUE
 rb_class_allocate_instance(VALUE klass)
 {
     VALUE flags = T_OBJECT | ROBJECT_EMBED;
-    return newobj_of(klass, flags, Qundef, Qundef, Qundef, RGENGC_WB_PROTECTED_OBJECT);
+    return newobj_of(klass, flags, Qundef, Qundef, Qundef, RGENGC_WB_PROTECTED_OBJECT, 1);
 }
 
 VALUE
@@ -2773,7 +2815,7 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) Check_Type(klass, T_CLASS);
-    return newobj_of(klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, FALSE);
+    return newobj_of(klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, FALSE, 1);
 }
 
 VALUE
@@ -2789,7 +2831,7 @@ rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type)
 {
     RUBY_ASSERT_ALWAYS(type);
     if (klass) Check_Type(klass, T_CLASS);
-    return newobj_of(klass, T_DATA, (VALUE)type, (VALUE)1, (VALUE)datap, type->flags & RUBY_FL_WB_PROTECTED);
+    return newobj_of(klass, T_DATA, (VALUE)type, (VALUE)1, (VALUE)datap, type->flags & RUBY_FL_WB_PROTECTED, 1);
 }
 
 VALUE
@@ -3994,7 +4036,6 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
         heap_pages_final_objects--;
 	page->final_objects--;
     page->free_slots++;
-	    maybe_free_garbage_for(objspace, zombie);
 	heap_page_add_freeobj(objspace, GET_HEAP_PAGE(zombie), zombie);
 
 	objspace->profile.total_freed_objects++;
@@ -4823,7 +4864,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                             heap_page_add_freeobj(objspace, sweep_page, vp);
                             gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
 
-                            freed_slots += maybe_free_garbage_for(objspace, vp);
                             freed_slots++;
                             freed_objects++;
                             asan_poison_object(vp);
@@ -7709,7 +7749,6 @@ rb_gc_force_recycle(VALUE obj)
         objspace->profile.total_freed_objects++;
 
         heap_page_add_freeobj(objspace, GET_HEAP_PAGE(obj), obj);
-        maybe_free_garbage_for(objspace, obj); // Demo freeing garbage slots
 
         /* Disable counting swept_slots because there are no meaning.
          * if (!MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(p), p)) {
