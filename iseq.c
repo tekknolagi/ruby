@@ -129,7 +129,7 @@ rb_iseq_free(const rb_iseq_t *iseq)
 	    ruby_xfree((void *)body->param.keyword);
 	}
 	compile_data_free(ISEQ_COMPILE_DATA(iseq));
-	ruby_xfree(body);
+        rb_free_payload((VALUE)body);
     }
 
     if (iseq && ISEQ_EXECUTABLE_P(iseq) && iseq->aux.exec.local_hooks) {
@@ -451,19 +451,11 @@ rb_iseq_memsize(const rb_iseq_t *iseq)
     return size;
 }
 
-struct rb_iseq_constant_body *
-rb_iseq_constant_body_alloc(void)
-{
-    struct rb_iseq_constant_body *iseq_body;
-    iseq_body = ZALLOC(struct rb_iseq_constant_body);
-    return iseq_body;
-}
-
+// TODO: remove me
 static rb_iseq_t *
 iseq_alloc(void)
 {
     rb_iseq_t *iseq = iseq_imemo_alloc();
-    iseq->body = rb_iseq_constant_body_alloc();
     return iseq;
 }
 

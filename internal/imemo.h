@@ -128,6 +128,7 @@ struct MEMO {
    MEMO_FOR(type, value))
 
 typedef struct rb_imemo_tmpbuf_struct rb_imemo_tmpbuf_t;
+VALUE rb_imemo_iseq_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0, VALUE *payload);
 VALUE rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0);
 rb_imemo_tmpbuf_t *rb_imemo_tmpbuf_parser_heap(void *buf, rb_imemo_tmpbuf_t *old_heap, size_t cnt);
 struct vm_ifunc *rb_vm_ifunc_new(rb_block_call_func_t func, const void *data, int min_argc, int max_argc);
