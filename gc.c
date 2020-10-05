@@ -9126,41 +9126,43 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 {
     rb_objspace_t * objspace;
     struct heap_page *page;
+    short free_slots = 0;
 
     VALUE v = (VALUE)vstart;
     objspace = (rb_objspace_t *)data;
     page = GET_HEAP_PAGE(v);
+    asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
+    asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
+    page->flags.has_uncollectible_shady_objects = FALSE;
+    page->flags.has_remembered_objects = FALSE;
 
     /* For each object on the page */
     for (; v != (VALUE)vend; v += stride) {
         void *poisoned = asan_poisoned_object_p(v);
         asan_unpoison_object(v, false);
 
-            switch (BUILTIN_TYPE(v)) {
-              case T_NONE:
-              case T_MOVED:
-              case T_ZOMBIE:
-                break;
-              default:
-                if (RVALUE_WB_UNPROTECTED(v)) {
-                    page->flags.has_uncollectible_shady_objects = TRUE;
-                }
-                if (RVALUE_PAGE_MARKING(page, v)) {
-                    page->flags.has_remembered_objects = TRUE;
-                }
-                gc_update_object_references(objspace, v);
+        switch (BUILTIN_TYPE(v)) {
+          case T_NONE:
+          case T_MOVED:
+          case T_ZOMBIE:
+            break;
+          default:
+            if (RVALUE_WB_UNPROTECTED(v)) {
+              page->flags.has_uncollectible_shady_objects = TRUE;
             }
             if (RVALUE_PAGE_MARKING(page, v)) {
-                page->flags.has_remembered_objects = TRUE;
+              page->flags.has_remembered_objects = TRUE;
             }
             gc_update_object_references(objspace, v);
         }
 
         if (poisoned) {
+            GC_ASSERT(BUILTIN_TYPE(v) == T_NONE);
             asan_poison_object(v);
         }
     }
 
+    page->free_slots = free_slots;
     return 0;
 }
 
