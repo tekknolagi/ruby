@@ -2338,7 +2338,7 @@ heap_get_freeobj(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slots)
 }
 
 void
-free_payload(VALUE payload)
+rb_free_payload(VALUE payload)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
