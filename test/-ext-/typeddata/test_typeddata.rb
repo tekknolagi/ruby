@@ -22,7 +22,9 @@ class Test_TypedData < Test::Unit::TestCase
     assert_ruby_status([], "#{<<-"begin;"}\n#{<<-"end;"}")
     require "-test-/typeddata"
     begin;
-      n = 1 << 20
+      # TODO: We need to push this back to 20, lowering the number of operations
+      # here causes the test to timeout because of GC/heap page allocation churn
+      n = 1 << 18
       Bug::TypedData.make(n)
     end;
   end

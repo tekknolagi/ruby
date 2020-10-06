@@ -308,6 +308,7 @@ assert_equal "[:x]", %q{
   end
 }, '[ruby-core:25125]'
 
+# TODO: this test runs too slowly
 assert_normal_exit %q{
   hash = {}
   ("aaaa".."matz").each_with_index do |s, i|
