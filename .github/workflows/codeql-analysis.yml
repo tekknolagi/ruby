@@ -36,8 +36,13 @@ jobs:
         languages: cpp
         config-file: ./.github/codeql/codeql-config.yml
 
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v1
+    # - name: Autobuild
+    #   uses: github/codeql-action/autobuild@v1
+    - run: autoconf
+
+    - run: ./configure -C --disable-install-doc cflags="-DUSE_RINCGC=0"
+
+    - run: make $JOBS
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v1

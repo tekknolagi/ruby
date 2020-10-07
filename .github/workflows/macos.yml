@@ -35,7 +35,7 @@ jobs:
       - run: autoconf
         working-directory: src
       - name: Run configure
-        run: ../src/configure -C --disable-install-doc --with-openssl-dir=$(brew --prefix openssl@1.1) --with-readline-dir=$(brew --prefix readline)
+        run: ../src/configure -C --disable-install-doc --with-openssl-dir=$(brew --prefix openssl@1.1) --with-readline-dir=$(brew --prefix readline) cflags="-DUSE_RINCGC=0"
       - run: make $JOBS incs
       - run: make $JOBS
       - run: make prepare-gems

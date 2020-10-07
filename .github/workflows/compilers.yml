@@ -175,11 +175,13 @@ jobs:
             ../src/configure -C \
               ${default_configure} \
               ${append_configure} \
+              cflags=-DUSE_RINCGC=0 \
               --host="${crosshost}"
           else
             ../src/configure -C \
               ${default_configure} \
               ${append_configure} \
+              cflags=-DUSE_RINCGC=0 \
               --with-gcc="${default_cc} ${append_cc}"
           fi
       - run: $make extract-extlibs

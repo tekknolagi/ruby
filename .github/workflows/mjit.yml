@@ -38,7 +38,7 @@ jobs:
       - run: autoconf
         working-directory: src
       - name: Run configure
-        run: ../src/configure -C --disable-install-doc
+        run: ../src/configure -C --disable-install-doc cflags="-DUSE_RINCGC=0"
       - run: make $JOBS incs
       - run: make $JOBS
       - run: sudo make $JOBS -s install
