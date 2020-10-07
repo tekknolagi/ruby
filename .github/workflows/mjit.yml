@@ -37,7 +37,7 @@ jobs:
         working-directory: src
       - run: mkdir build
       - name: Run configure
-        run: ../src/configure -C --disable-install-doc
+        run: ../src/configure -C --disable-install-doc cflags="-DUSE_RINCGC=0"
         working-directory: build
       - run: make $JOBS incs
         working-directory: build

@@ -65,7 +65,7 @@ jobs:
           [Console]::InputEncoding  = [System.Text.Encoding]::GetEncoding("IBM437")
           $config_args = "--build=$env:CHOST --host=$env:CHOST --target=$env:CHOST"
           Write-Host $config_args
-          sh -c "../src/configure --disable-install-doc --prefix=/install $config_args"
+          sh -c "../src/configure --disable-install-doc --prefix=/install $config_args cflags='-DUSE_RINCGC=0'"
           # Write-Host "-------------------------------------- config.log"
           # Get-Content ./config.log | foreach {Write-Output $_}
 

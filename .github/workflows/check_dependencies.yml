@@ -31,7 +31,7 @@ jobs:
       - run: autoconf
         working-directory: src
       - name: Run configure
-        run: ./configure -C --disable-install-doc --disable-rubygems --with-gcc 'optflags=-O0' 'debugflags=-save-temps=obj -g'
+        run: ./configure -C --disable-install-doc --disable-rubygems --with-gcc 'optflags=-O0' 'debugflags=-save-temps=obj -g' cflags="-DUSE_RINCGC=0"
         working-directory: src
       - name: Run make
         run: make all golf
