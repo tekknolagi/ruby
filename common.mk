@@ -5630,6 +5630,7 @@ gc.$(OBJEXT): $(top_srcdir)/internal/cont.h
 gc.$(OBJEXT): $(top_srcdir)/internal/error.h
 gc.$(OBJEXT): $(top_srcdir)/internal/eval.h
 gc.$(OBJEXT): $(top_srcdir)/internal/fixnum.h
+gc.$(OBJEXT): $(top_srcdir)/internal/free.h
 gc.$(OBJEXT): $(top_srcdir)/internal/gc.h
 gc.$(OBJEXT): $(top_srcdir)/internal/hash.h
 gc.$(OBJEXT): $(top_srcdir)/internal/imemo.h
