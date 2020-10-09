@@ -2627,12 +2627,10 @@ newobj_slowpath_wb_unprotected(rb_objspace_t *objspace, VALUE klass, VALUE flags
 }
 
 static inline VALUE
-newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
+newobj_of_with_payload_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, unsigned int slots)
 {
     rb_objspace_t *objspace = &rb_objspace;
     VALUE obj;
-
-    unsigned int slots = 2;
 
     RB_VM_LOCK_ENTER();
     {
@@ -2666,6 +2664,12 @@ newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protect
     RB_VM_LOCK_LEAVE();
 
     return obj;
+}
+
+static inline VALUE
+newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
+{
+    return newobj_of_with_payload_size(klass, flags, v1, v2, v3, wb_protected, 2);
 }
 
 VALUE
