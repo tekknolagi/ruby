@@ -394,6 +394,47 @@ void gen_setlocal_wc0(codeblock_t* cb, codeblock_t* ocb, ctx_t* ctx)
     mov(cb, mem_opnd(64, RDX, offs), RCX);
 }
 
+VALUE rb_vm_opt_aref(VALUE recv, VALUE obj);
+
+static void
+gen_opt_aref(codeblock_t* cb, codeblock_t* ocb, ctx_t* ctx)
+{
+    // Create a size-exit to fall back to the interpreter
+    // Note: we generate the side-exit before popping operands from the stack
+    uint8_t* side_exit = ujit_side_exit(ocb, ctx, ctx->pc);
+
+    // opt_aref is not leaf, so write incremented PC before calling
+    // the instruction body which could call a method
+    mov(cb, RAX, const_ptr_opnd(ctx->pc + insn_len(BIN(opt_aref))));
+    mov(cb, mem_opnd(64, RDI, 0), RAX);
+
+    // Reserve registers before making a function call
+    push(cb, RSI);
+    push(cb, RDI);
+
+    // Pop arguments from temporary stack
+    x86opnd_t obj = ctx_stack_pop(ctx, 1);
+    x86opnd_t recv = ctx_stack_pop(ctx, 1);
+    mov(cb, RDI, recv);
+    mov(cb, RSI, obj);
+
+    mov(cb, RAX, const_ptr_opnd((void*)rb_vm_opt_aref));
+    call(cb, RAX);
+
+    // Restore registers
+    pop(cb, RDI);
+    pop(cb, RSI);
+
+    // Deopt when return is Qundef
+    cmp(cb, RAX, imm_opnd(Qundef));
+    je_ptr(cb, side_exit);
+
+    // Push the output on the stack
+    x86opnd_t dst = ctx_stack_push(ctx, 1);
+    mov(cb, dst, RAX);
+}
+
+
 void gen_opt_minus(codeblock_t* cb, codeblock_t* ocb, ctx_t* ctx)
 {
     // Create a size-exit to fall back to the interpreter
@@ -538,5 +579,6 @@ rb_ujit_init(void)
     st_insert(gen_fns, (st_data_t)BIN(getlocal_WC_0), (st_data_t)&gen_getlocal_wc0);
     st_insert(gen_fns, (st_data_t)BIN(setlocal_WC_0), (st_data_t)&gen_setlocal_wc0);
     st_insert(gen_fns, (st_data_t)BIN(opt_minus), (st_data_t)&gen_opt_minus);
+    st_insert(gen_fns, (st_data_t)BIN(opt_aref), (st_data_t)&gen_opt_aref);
     st_insert(gen_fns, (st_data_t)BIN(opt_send_without_block), (st_data_t)&gen_opt_send_without_block);
 }

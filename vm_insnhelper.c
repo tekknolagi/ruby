@@ -4734,6 +4734,13 @@ vm_opt_aref(VALUE recv, VALUE obj)
     }
 }
 
+VALUE
+rb_vm_opt_aref(VALUE recv, VALUE obj)
+{
+  return vm_opt_aref(recv, obj);
+}
+
+
 static VALUE
 vm_opt_aset(VALUE recv, VALUE obj, VALUE set)
 {
