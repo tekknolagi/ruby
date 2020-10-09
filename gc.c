@@ -552,6 +552,7 @@ struct RMoved {
 #define RMOVED(obj) ((struct RMoved *)(obj))
 
 #define PAYLOAD_LENGTH(obj) (RANY(obj)->as.payload.head.length)
+#define PAYLOAD_DATA_START(obj) ((void *)(obj + sizeof(RVALUE) + sizeof(rpayload_head_t)))
 
 typedef struct RPayloadHead {
     VALUE flags;
@@ -2679,11 +2680,24 @@ rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags)
     return newobj_of(klass, flags, 0, 0, 0, FALSE);
 }
 
+void *
+rb_payload_data_start_ptr(VALUE obj)
+{
+    return PAYLOAD_DATA_START(obj);
+}
+
 VALUE
 rb_wb_protected_newobj_of(VALUE klass, VALUE flags)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
     return newobj_of(klass, flags, 0, 0, 0, TRUE);
+}
+
+VALUE
+rb_wb_protected_newobj_of_with_size(VALUE klass, VALUE flags, unsigned int size)
+{
+    GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
+    return newobj_of_with_payload_size(klass, flags, 0, 0, 0, TRUE, size);
 }
 
 /* for compatibility */

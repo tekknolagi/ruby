@@ -84,6 +84,8 @@ should_not_be_shared_and_embedded(VALUE ary)
 
 #define ARY_OWNS_HEAP_P(a) (assert(should_be_T_ARRAY((VALUE)(a))), \
                             !FL_TEST_RAW((a), ELTS_SHARED|RARRAY_EMBED_FLAG))
+#define ARY_OWNS_GC_HEAP_P(a) (assert(should_be_T_ARRAY((VALUE)(a))), \
+                            FL_TEST_RAW((a), ELTS_SHARED|RARRAY_GC_EMBED_FLAG))
 
 #define FL_SET_EMBED(a) do { \
     assert(!ARY_SHARED_P(a)); \
@@ -98,6 +100,12 @@ should_not_be_shared_and_embedded(VALUE ary)
     FL_SET((ary), ELTS_SHARED); \
 } while (0)
 #define FL_UNSET_SHARED(ary) FL_UNSET((ary), ELTS_SHARED)
+
+#define FL_SET_GC_EMBED(ary) do { \
+    assert(!ARY_EMBED_P(ary)); \
+    FL_SET((ary), RARRAY_GC_EMBED_FLAG); \
+} while (0)
+#define FL_UNSET_GC_EMBED(ary) FL_UNSET((ary), RARRAY_GC_EMBED_FLAG)
 
 #define ARY_SET_PTR(ary, p) do { \
     assert(!ARY_EMBED_P(ary)); \
@@ -746,6 +754,26 @@ rb_ary_new_capa(long capa)
 }
 
 VALUE
+rb_ary_new_capa_gc_heap(long capa)
+{
+    if (capa > RARRAY_EMBED_LEN_MAX && capa < 408) {
+        VALUE ary = rb_wb_protected_newobj_of_with_size(rb_cArray, T_ARRAY, (unsigned int)capa + 1);
+
+        void * ptr = rb_payload_data_start_ptr(ary);
+
+        FL_UNSET_EMBED(ary);
+        FL_SET_GC_EMBED(ary);
+        ARY_SET_PTR(ary, ptr);
+        ARY_SET_CAPA(ary, capa);
+        ARY_SET_HEAP_LEN(ary, 0);
+
+        return ary;
+    } else {
+        return ary_new(rb_cArray, capa);
+    }
+}
+
+VALUE
 rb_ary_new(void)
 {
     return rb_ary_new2(RARRAY_EMBED_LEN_MAX);
@@ -811,6 +839,10 @@ rb_ary_tmp_new_fill(long capa)
 void
 rb_ary_free(VALUE ary)
 {
+    if (FL_TEST_RAW(ary, RARRAY_GC_EMBED_FLAG)) {
+
+    }
+
     if (ARY_OWNS_HEAP_P(ary)) {
         if (USE_DEBUG_COUNTER &&
             !ARY_SHARED_ROOT_P(ary) &&
@@ -823,7 +855,9 @@ rb_ary_free(VALUE ary)
         }
         else {
             RB_DEBUG_COUNTER_INC(obj_ary_ptr);
-            ary_heap_free(ary);
+            if (!ARY_OWNS_GC_HEAP_P(ary)) {
+                ary_heap_free(ary);
+            }
         }
     }
     else {
