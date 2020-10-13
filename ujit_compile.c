@@ -443,49 +443,62 @@ void gen_opt_send_without_block(codeblock_t* cb, codeblock_t* ocb, ctx_t* ctx)
     // Create a size-exit to fall back to the interpreter
     uint8_t* side_exit = ujit_side_exit(ocb, ctx, ctx->pc);
 
-
-
-    /*
     struct rb_call_data * cd = (struct rb_call_data *)ctx_get_arg(ctx, 0);
     int32_t argc = (int32_t)vm_ci_argc(cd->ci);
     const struct rb_callcache *cc = cd->cc;
 
+    struct rb_calling_info *calling = (struct rb_calling_info*)malloc(sizeof(struct rb_calling_info));
+    calling->block_handler = VM_BLOCK_HANDLER_NONE;
+    calling->kw_splat = 0;
+    calling->argc = argc;
+
     ID mid = vm_ci_mid(cd->ci);
     //fprintf(stderr, "jitting call to \"%s\", argc: %lu\n", rb_id2name(mid), argc);
 
+    if (vm_ci_flag(cd->ci) & VM_CALL_KW_SPLAT)
+    {
+        jmp_ptr(cb, side_exit);
+        return;
+    }
+
     // TODO: don't jit calls that aren't simple
     // have this codegen function return false, make codegen stop?
-    if (vm_ci_flag(cd->ci) & VM_CALL_ARGS_SIMPLE)
+    if (!(vm_ci_flag(cd->ci) & VM_CALL_ARGS_SIMPLE))
     {
-        //fprintf(stderr, "simple call\n");
+        jmp_ptr(cb, side_exit);
+        return;
     }
 
     mov(cb, RAX, const_ptr_opnd(cd));
     x86opnd_t ptr_to_cc = member_opnd(RAX, struct rb_call_data, cc);
     mov(cb, RAX, ptr_to_cc);
-    */
 
-
-
-
-
-    /*
     x86opnd_t ptr_to_klass = mem_opnd(64, RAX, offsetof(struct rb_callcache, klass));
     x86opnd_t ptr_to_cme_ = mem_opnd(64, RAX, offsetof(struct rb_callcache, cme_));
-    mov(cb, RBX, ptr_to_klass);
+    x86opnd_t ptr_to_call_ = mem_opnd(64, RAX, offsetof(struct rb_callcache, call_));
+    mov(cb, R9, ptr_to_klass);
     mov(cb, RCX, ptr_to_cme_);
 
     // Points to the receiver operand on the stack
     x86opnd_t recv = ctx_stack_opnd(ctx, argc);
     mov(cb, RDX, recv);
+    //print_int(cb, recv);
+
+    // Store calling->recv
+    mov(cb, R8, const_ptr_opnd(calling));
+    x86opnd_t recv_opnd = mem_opnd(64, R8, offsetof(struct rb_calling_info, recv));
+    mov(cb, recv_opnd, RDX);
+
+
+    //print_int(cb, recv_opnd);
+
     // Pointer to the klass field of the receiver
     x86opnd_t klass_opnd = mem_opnd(64, RDX, offsetof(struct RBasic, klass));
 
-    print_int(cb, klass_opnd);
 
-    cmp(cb, RBX, klass_opnd);
+    cmp(cb, R9, klass_opnd);
     jne_ptr(cb, side_exit);
-
+    //print_int(cb, klass_opnd);
     print_str(cb, "cache klass hit");
 
     //#define METHOD_ENTRY_INVALIDATED(me)         ((me)->flags & IMEMO_FL_USER5)
@@ -493,14 +506,50 @@ void gen_opt_send_without_block(codeblock_t* cb, codeblock_t* ocb, ctx_t* ctx)
     test(cb, flags_opnd, imm_opnd(IMEMO_FL_USER5));
     jnz_ptr(cb, side_exit);
 
-    print_str(cb, "method entry not invalidated!!!1");
-    */
+    push(cb, RDI);
+    push(cb, RSI);
 
+    x86opnd_t ptr_to_pc = mem_opnd(64, RDI, offsetof(rb_control_frame_t, pc));
+    mov(cb, ptr_to_pc, const_ptr_opnd(ctx->pc + insn_len(BIN(opt_send_without_block))));
 
+    // Write the adjusted SP back into the CFP
+    if (ctx->stack_diff != 0)
+    {
+        x86opnd_t stack_pointer = ctx_sp_opnd(ctx, 1);
+        lea(cb, RSI, stack_pointer);
+        mov(cb, mem_opnd(64, RDI, 8), RSI);
+    }
 
+    // val = vm_cc_call(cc)(ec, GET_CFP(), &calling, cd);
+    mov(cb, RSI, RDI);
+    mov(cb, RDI, const_ptr_opnd(rb_current_execution_context()));
+    mov(cb, RDX, R8);
+    print_int(cb, RDX);
+    mov(cb, RCX, const_ptr_opnd(cd));
 
+    call(cb, ptr_to_call_);
 
-    jmp_ptr(cb, side_exit);
+    pop(cb, RSI);
+    pop(cb, RDI);
+
+    size_t continue_in_jit = cb_new_label(cb, "continue_in_jit");
+    cmp(cb, RAX, imm_opnd(Qundef));
+    jne(cb, continue_in_jit);
+
+    //print_str(cb, "method entry not invalidated!!!1");
+
+    mov(cb, RDI, const_ptr_opnd(rb_current_execution_context()));
+    mov(cb, RDI, mem_opnd(64, RDI, offsetof(rb_execution_context_t, cfp)));
+
+    // Read the PC from the CFP
+    mov(cb, RAX, mem_opnd(64, RDI, 0));
+
+    // Write the post call bytes
+    for (size_t i = 0; i < sizeof(ujit_post_call_bytes); ++i)
+        cb_write_byte(cb, ujit_post_call_bytes[i]);
+
+    cb_write_label(cb, continue_in_jit);
+    cb_link_labels(cb);
 }
 
 bool
@@ -538,5 +587,5 @@ rb_ujit_init(void)
     st_insert(gen_fns, (st_data_t)BIN(getlocal_WC_0), (st_data_t)&gen_getlocal_wc0);
     st_insert(gen_fns, (st_data_t)BIN(setlocal_WC_0), (st_data_t)&gen_setlocal_wc0);
     st_insert(gen_fns, (st_data_t)BIN(opt_minus), (st_data_t)&gen_opt_minus);
-    st_insert(gen_fns, (st_data_t)BIN(opt_send_without_block), (st_data_t)&gen_opt_send_without_block);
+    //st_insert(gen_fns, (st_data_t)BIN(opt_send_without_block), (st_data_t)&gen_opt_send_without_block);
 }
