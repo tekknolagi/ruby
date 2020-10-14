@@ -280,7 +280,7 @@ def lldb_inspect(debugger, target, result, val):
             check_bits(page, "pinned_bits", bitmap_index, bitmap_bit, "P"),
             check_bits(page, "marking_bits", bitmap_index, bitmap_bit, "R"),
             check_bits(page, "wb_unprotected_bits", bitmap_index, bitmap_bit, "U"),
-            check_bits(page, "payload_bits", bitmap_index, bitmap_bit, "P"),
+            check_bits(page, "payload_bits", bitmap_index, bitmap_bit, "G"),
             ), file=result)
 
         if (flags & RUBY_FL_PROMOTED) == RUBY_FL_PROMOTED:
@@ -427,6 +427,10 @@ def lldb_inspect(debugger, target, result, val):
             tRZombie = target.FindFirstType("struct RZombie").GetPointerType()
             val = val.Cast(tRZombie)
             append_command_output(debugger, "p *(struct RZombie *) %0#x" % val.GetValueAsUnsigned(), result)
+        elif check_bits(page, "payload_bits", bitmap_index, bitmap_bit, 'P') == 'P':
+            tRPayload = target.FindFirstType("struct RPayload").GetPointerType()
+            val = val.Cast(tRPayload)
+            append_command_output(debugger, "p *(struct RPayload *) %0#x" % val.GetValueAsUnsigned(), result)
         else:
             print("Not-handled type %0#x" % flType, file=result)
             print(val, file=result)
