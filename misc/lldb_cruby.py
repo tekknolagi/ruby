@@ -7,6 +7,7 @@
 #
 
 from __future__ import print_function
+from math import floor
 import lldb
 import os
 import shlex
@@ -522,6 +523,27 @@ def rb_backtrace(debugger, command, result, internal_dict):
 
     bt.print_bt(val)
 
+def num_in_page(debugger, command, ctx, result, internal_dict):
+    target, process, thread, frame = lldb_expand_context(debugger)
+
+    rvalue = target.FindFirstType("struct RVALUE")
+    rvalue_size = rvalue.GetByteSize()
+
+    val = frame.EvaluateExpression(command)
+    tbits_t = target.FindFirstType("bits_t")
+    pos = (val.Cast(tbits_t).GetValueAsUnsigned() & HEAP_PAGE_ALIGN_MASK) / rvalue_size
+
+    print("NUM_IN_PAGE: ", floor(pos), file=result)
+
+
+def lldb_expand_context(debugger):
+    target = debugger.GetSelectedTarget()
+    process = target.GetProcess()
+    thread = process.GetSelectedThread()
+    frame = thread.GetSelectedFrame()
+
+    return target, process, thread, frame
+
 def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand("command script add -f lldb_cruby.lldb_rp rp")
     debugger.HandleCommand("command script add -f lldb_cruby.count_objects rb_count_objects")
@@ -530,5 +552,6 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand("command script add -f lldb_cruby.heap_page heap_page")
     debugger.HandleCommand("command script add -f lldb_cruby.heap_page_body heap_page_body")
     debugger.HandleCommand("command script add -f lldb_cruby.rb_backtrace rbbt")
+    debugger.HandleCommand("command script add -f lldb_cruby.num_in_page num_in_page")
     lldb_init(debugger)
     print("lldb scripts for ruby has been installed.")
