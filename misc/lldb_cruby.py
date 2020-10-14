@@ -288,7 +288,13 @@ def lldb_inspect(debugger, target, result, val):
             flaginfo += "[FROZEN] "
         flType = flags & RUBY_T_MASK
         if flType == RUBY_T_NONE:
-            print('T_NONE: %s%s' % (flaginfo, val.Dereference()), file=result)
+            if flags & RUBY_FL_USER1:
+                tRFree = target.FindFirstType("struct RFree").GetPointerType()
+                val = val.Cast(tRFree)
+                append_command_output(debugger, "print *(struct RFree)%0#x" % val.GetValueAsUnsigned(), result)
+                print('T_NONE (RFree): %s%s' % (flaginfo, val.Dereference()), file=result)
+            else:
+                print('T_NONE: %s%s' % (flaginfo, val.Dereference()), file=result)
         elif flType == RUBY_T_NIL:
             print('T_NIL: %s%s' % (flaginfo, val.Dereference()), file=result)
         elif flType == RUBY_T_OBJECT:
