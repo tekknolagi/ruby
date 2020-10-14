@@ -274,12 +274,13 @@ def lldb_inspect(debugger, target, result, val):
         page_type = target.FindFirstType("struct heap_page").GetPointerType()
         page.Cast(page_type)
 
-        print("bits [%s%s%s%s%s]" % (
+        print("bits [%s%s%s%s%s%s]" % (
             check_bits(page, "uncollectible_bits", bitmap_index, bitmap_bit, "L"),
             check_bits(page, "mark_bits", bitmap_index, bitmap_bit, "M"),
             check_bits(page, "pinned_bits", bitmap_index, bitmap_bit, "P"),
             check_bits(page, "marking_bits", bitmap_index, bitmap_bit, "R"),
             check_bits(page, "wb_unprotected_bits", bitmap_index, bitmap_bit, "U"),
+            check_bits(page, "payload_bits", bitmap_index, bitmap_bit, "P"),
             ), file=result)
 
         if (flags & RUBY_FL_PROMOTED) == RUBY_FL_PROMOTED:
