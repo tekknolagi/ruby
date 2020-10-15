@@ -1615,6 +1615,9 @@ allocation_bin_index(unsigned int size)
 {
     unsigned int bin = rfree_size_bin_index(size);
 
+    if (bin == HEAP_PAGE_FREELIST_BINS - 1)
+        return bin;
+
     if ((1 << bin) == size)
         return bin;
 
