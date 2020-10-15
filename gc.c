@@ -2353,10 +2353,16 @@ heap_get_freeobj_head(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int slo
         for (unsigned int i = allocation_bin_index(slots); i < heap->using_page->freelist.high; i++) {
             GC_ASSERT(i < HEAP_PAGE_FREELIST_BINS);
 
-            if (page->freelist.bins[i]) {
-                p = heap_page_free_region_allocate(page, (VALUE)page->freelist.bins[i], slots);
-                break;
+            struct RFree *region = page->freelist.bins[i];
+            while(region) {
+                if (region->as.head.size >= slots){
+                    p = heap_page_free_region_allocate(page, (VALUE)region, slots);
+                    break;
+                } else {
+                    region = region->as.head.next;
+                }
             }
+            if (p) break;
         }
 
         asan_poison_memory_region(page->freelist.bins, sizeof(page->freelist.bins));
