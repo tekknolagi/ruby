@@ -756,7 +756,7 @@ rb_ary_new_capa(long capa)
 VALUE
 rb_ary_new_capa_gc_heap(long capa)
 {
-    if (capa > RARRAY_EMBED_LEN_MAX && capa < 408) {
+    if (capa > RARRAY_EMBED_LEN_MAX && capa < RB_GC_MAX_PAYLOAD_LEN) {
         VALUE ary = rb_wb_protected_newobj_of_with_size(rb_cArray, T_ARRAY, (unsigned int)capa + 1);
 
         void * ptr = rb_payload_data_start_ptr(ary);

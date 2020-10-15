@@ -33,6 +33,8 @@ struct rb_objspace; /* in vm_core.h */
 #define NEWOBJ_OF(var, T, c, f) RB_NEWOBJ_OF((var), T, (c), (f))
 #define RB_OBJ_GC_FLAGS_MAX 6   /* used in ext/objspace */
 
+#define RB_GC_MAX_PAYLOAD_LEN rb_gc_max_payload_len()
+
 #ifndef USE_UNALIGNED_MEMBER_ACCESS
 # define UNALIGNED_MEMBER_ACCESS(expr) (expr)
 #elif ! USE_UNALIGNED_MEMBER_ACCESS
@@ -79,6 +81,7 @@ static inline void *ruby_sized_xrealloc_inlined(void *ptr, size_t new_size, size
 static inline void *ruby_sized_xrealloc2_inlined(void *ptr, size_t new_count, size_t elemsiz, size_t old_count) RUBY_ATTR_RETURNS_NONNULL RUBY_ATTR_ALLOC_SIZE((2, 3));
 static inline void ruby_sized_xfree_inlined(void *ptr, size_t size);
 VALUE rb_class_allocate_instance(VALUE klass);
+int rb_gc_max_payload_len();
 
 RUBY_SYMBOL_EXPORT_BEGIN
 /* gc.c (export) */

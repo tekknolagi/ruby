@@ -674,6 +674,17 @@ enum {
     HEAP_PAGE_FREELIST_BINS = LOG(CEILDIV(HEAP_PAGE_SIZE - sizeof(struct heap_page_header), sizeof(struct RVALUE))) + 1
 };
 
+int
+rb_gc_max_payload_len()
+{
+    int n = 1;
+    for (int i = 0; i < LOG(HEAP_PAGE_OBJ_LIMIT); ++i) {
+        n *= 2;
+    }
+
+    return n;
+}
+
 typedef struct rb_heap_struct {
     struct heap_page *free_pages[HEAP_PAGE_FREELIST_BINS];
     struct heap_page *using_page;
