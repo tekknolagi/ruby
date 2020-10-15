@@ -9,6 +9,7 @@
 from __future__ import print_function
 from math import floor
 import lldb
+import re
 import os
 import shlex
 
@@ -546,6 +547,26 @@ def num_in_page(debugger, command, ctx, result, internal_dict):
 
     print("NUM_IN_PAGE: ", floor(pos), file=result)
 
+def same_page_p(debugger, command, ctx, result, internal_dict):
+    target, process, thread, frame = lldb_expand_context(debugger)
+    arg_parser = re.compile("\((.*)\)\s\((.*)\)")
+    matches = arg_parser.match(command)
+
+    if matches is None:
+        print("Error parsing arguments. Use the form `(expr1) (expr2)`")
+        return
+
+    first, other = [frame.EvaluateExpression(obj) for obj in shlex.split(command)]
+
+    v = target.FindFirstType("VALUE")
+    first_page = get_page(lldb, target, first)
+    other_page = get_page(lldb, target, other)
+
+    if first_page.GetValueAsUnsigned() == other_page.GetValueAsUnsigned():
+        print("TRUE", file=result)
+    else:
+        print("FALSE", file=result)
+
 
 def lldb_expand_context(debugger):
     target = debugger.GetSelectedTarget()
@@ -564,5 +585,7 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand("command script add -f lldb_cruby.heap_page_body heap_page_body")
     debugger.HandleCommand("command script add -f lldb_cruby.rb_backtrace rbbt")
     debugger.HandleCommand("command script add -f lldb_cruby.num_in_page num_in_page")
+    debugger.HandleCommand("command script add -f lldb_cruby.same_page_p same_page_p")
+
     lldb_init(debugger)
     print("lldb scripts for ruby has been installed.")
