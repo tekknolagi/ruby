@@ -2627,7 +2627,8 @@ newobj_slowpath(rb_objspace_t *objspace, VALUE klass, VALUE flags, VALUE v1, VAL
     obj = heap_get_freeobj(objspace, heap_eden, slots);
 
     newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
-    newobj_init_payload(objspace, obj, slots - 1);
+    if (slots > 1)
+        newobj_init_payload(objspace, obj, slots - 1);
     gc_event_hook(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj);
     return obj;
 }
@@ -2648,7 +2649,7 @@ newobj_slowpath_wb_unprotected(rb_objspace_t *objspace, VALUE klass, VALUE flags
 }
 
 static inline VALUE
-newobj_of_with_payload_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, unsigned int slots)
+newobj_of_with_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, unsigned int slots)
 {
     rb_objspace_t *objspace = &rb_objspace;
     VALUE obj;
@@ -2672,7 +2673,8 @@ newobj_of_with_payload_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE 
               gc_event_hook_available_p(objspace)) &&
               (obj = heap_get_freeobj_head(objspace, heap_eden, slots)) != Qfalse) {
             newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
-            newobj_init_payload(objspace, obj, slots - 1);
+            if (slots > 1)
+                newobj_init_payload(objspace, obj, slots - 1);
             return obj;
         }
         else {
@@ -2690,7 +2692,7 @@ newobj_of_with_payload_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE 
 static inline VALUE
 newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
 {
-    return newobj_of_with_payload_size(klass, flags, v1, v2, v3, wb_protected, 2);
+    return newobj_of_with_size(klass, flags, v1, v2, v3, wb_protected, 3);
 }
 
 VALUE
@@ -2717,7 +2719,7 @@ VALUE
 rb_wb_protected_newobj_of_with_size(VALUE klass, VALUE flags, unsigned int size)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of_with_payload_size(klass, flags, 0, 0, 0, TRUE, size);
+    return newobj_of_with_size(klass, flags, 0, 0, 0, TRUE, size);
 }
 
 /* for compatibility */
