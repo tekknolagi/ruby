@@ -5272,6 +5272,14 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     sweep_page->flags.before_sweep = FALSE;
 
     p = sweep_page->start;
+
+    // skip this page if it's entirely empty
+    if (NUM_IN_PAGE(p) == 0 &&
+            RFREE_HEAD_P((VALUE)p) &&
+            RFREE(p)->as.head.size == (unsigned)sweep_page->total_slots) {
+        return sweep_page->total_slots;
+    }
+
     offset = p - NUM_IN_PAGE(p);
     bits = sweep_page->mark_bits;
 
