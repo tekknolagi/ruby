@@ -11,6 +11,7 @@ class TestGCCompact < Test::Unit::TestCase
     end
 
     def test_enable_autocompact
+      skip
       before = GC.auto_compact
       GC.auto_compact = true
       assert GC.auto_compact
@@ -19,6 +20,7 @@ class TestGCCompact < Test::Unit::TestCase
     end
 
     def test_disable_autocompact
+      skip
       before = GC.auto_compact
       GC.auto_compact = false
       refute GC.auto_compact
@@ -27,6 +29,7 @@ class TestGCCompact < Test::Unit::TestCase
     end
 
     def test_major_compacts
+      skip
       before = GC.auto_compact
       GC.auto_compact = true
       compact = GC.stat :compact_count
@@ -37,6 +40,7 @@ class TestGCCompact < Test::Unit::TestCase
     end
 
     def test_implicit_compaction_does_something
+      skip
       before = GC.auto_compact
       list = []
       list2 = []
@@ -80,6 +84,7 @@ class TestGCCompact < Test::Unit::TestCase
   end
 
   def test_gc_compact_stats
+    skip
     list = []
 
     # Try to make some fragmentation
