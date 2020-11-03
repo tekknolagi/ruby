@@ -173,8 +173,11 @@ rb_class_detach_module_subclasses(VALUE klass)
 static VALUE
 class_alloc(VALUE flags, VALUE klass)
 {
-    NEWOBJ_OF(obj, struct RClass, klass, (flags & T_MASK) | FL_PROMOTED1 /* start from age == 2 */ | (RGENGC_WB_PROTECTED_CLASS ? FL_WB_PROTECTED : 0));
-    obj->ptr = ZALLOC(rb_classext_t);
+    int payload_size = rb_gc_payload_len_for_size(sizeof(rb_classext_t));
+
+    NEWOBJ_OF_SIZED(obj, struct RClass, klass, (flags & T_MASK) | FL_PROMOTED1 /* start from age == 2 */ | (RGENGC_WB_PROTECTED_CLASS ? FL_WB_PROTECTED : 0), 1 + payload_size);
+    obj->ptr = rb_payload_data_start_ptr((VALUE)obj);
+    memset(obj->ptr, 0, sizeof(rb_classext_t));
     /* ZALLOC
       RCLASS_IV_TBL(obj) = 0;
       RCLASS_CONST_TBL(obj) = 0;
@@ -184,7 +187,7 @@ class_alloc(VALUE flags, VALUE klass)
       RCLASS_EXT(obj)->subclasses = NULL;
       RCLASS_EXT(obj)->parent_subclasses = NULL;
       RCLASS_EXT(obj)->module_subclasses = NULL;
-     */
+    */
     RCLASS_SET_ORIGIN((VALUE)obj, (VALUE)obj);
     RCLASS_SERIAL(obj) = rb_next_class_serial();
     RB_OBJ_WRITE(obj, &RCLASS_REFINED_CLASS(obj), Qnil);

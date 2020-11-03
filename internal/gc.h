@@ -30,7 +30,12 @@ struct rb_objspace; /* in vm_core.h */
   T *(var) = (T *)(((f) & FL_WB_PROTECTED) ? \
                    rb_wb_protected_newobj_of((c), (f) & ~FL_WB_PROTECTED) : \
                    rb_wb_unprotected_newobj_of((c), (f)))
+#define RB_NEWOBJ_OF_SIZED(var, T, c, f, s) \
+  T *(var) = (T *)(((f) & FL_WB_PROTECTED) ? \
+                   rb_wb_protected_newobj_of_with_size((c), (f) & ~FL_WB_PROTECTED, s) : \
+                   rb_wb_unprotected_newobj_of_with_size((c), (f), s))
 #define NEWOBJ_OF(var, T, c, f) RB_NEWOBJ_OF((var), T, (c), (f))
+#define NEWOBJ_OF_SIZED RB_NEWOBJ_OF_SIZED
 #define RB_OBJ_GC_FLAGS_MAX 6   /* used in ext/objspace */
 
 #define RB_GC_MAX_PAYLOAD_LEN rb_gc_max_payload_len()
@@ -82,6 +87,7 @@ static inline void *ruby_sized_xrealloc2_inlined(void *ptr, size_t new_count, si
 static inline void ruby_sized_xfree_inlined(void *ptr, size_t size);
 VALUE rb_class_allocate_instance(VALUE klass);
 int rb_gc_max_payload_len();
+int rb_gc_payload_len_for_size(int length);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 /* gc.c (export) */

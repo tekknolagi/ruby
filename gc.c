@@ -685,6 +685,21 @@ rb_gc_max_payload_len()
     return n;
 }
 
+int
+rb_gc_payload_len_for_size(int length)
+{
+    int remainder_slots;
+    size_t head_remainder = sizeof(struct RPayload) - sizeof(rpayload_head_t);
+
+    if (length % sizeof(RVALUE) > head_remainder) {
+        remainder_slots = 2;
+    } else {
+        remainder_slots = 1;
+    }
+
+    return remainder_slots + (length / sizeof(RVALUE));
+}
+
 typedef struct rb_heap_struct {
     struct heap_page *free_pages[HEAP_PAGE_FREELIST_BINS];
     struct heap_page *using_page;
@@ -2702,6 +2717,13 @@ rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags)
     return newobj_of(klass, flags, 0, 0, 0, FALSE);
 }
 
+VALUE
+rb_wb_unprotected_newobj_of_with_size(VALUE klass, VALUE flags, unsigned int size)
+{
+    GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
+    return newobj_of_with_size(klass, flags, 0, 0, 0, FALSE, size);
+}
+
 void *
 rb_payload_data_start_ptr(VALUE obj)
 {
@@ -2738,6 +2760,12 @@ rb_newobj_of(VALUE klass, VALUE flags)
     } else {
         return newobj_of(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED);
     }
+}
+
+VALUE
+rb_newobj_of_with_size(VALUE klass, VALUE flags, int size)
+{
+    return newobj_of_with_size(klass, flags & ~FL_WB_PROTECTED, 0, 0, 0, flags & FL_WB_PROTECTED, size);
 }
 
 #define UNEXPECTED_NODE(func) \
@@ -3207,9 +3235,6 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	}
 	rb_class_remove_from_module_subclasses(obj);
 	rb_class_remove_from_super_subclasses(obj);
-	if (RANY(obj)->as.klass.ptr)
-	    xfree(RANY(obj)->as.klass.ptr);
-	RANY(obj)->as.klass.ptr = NULL;
 
         (void)RB_DEBUG_COUNTER_INC_IF(obj_module_ptr, BUILTIN_TYPE(obj) == T_MODULE);
         (void)RB_DEBUG_COUNTER_INC_IF(obj_class_ptr, BUILTIN_TYPE(obj) == T_CLASS);

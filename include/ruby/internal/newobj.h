@@ -48,6 +48,7 @@ void rb_copy_generic_ivar(VALUE,VALUE);
 RBIMPL_SYMBOL_EXPORT_END()
 
 VALUE rb_wb_protected_newobj_of_with_size(VALUE klass, VALUE flags, unsigned int size);
+VALUE rb_wb_unprotected_newobj_of_with_size(VALUE klass, VALUE flags, unsigned int size);
 
 static inline void
 rb_clone_setup(VALUE clone, VALUE obj)
