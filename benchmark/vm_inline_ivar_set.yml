@@ -1,0 +1,15 @@
+prelude: |
+  class C
+    def initialize
+      @set_foo = 1
+    end
+
+    def set_foo
+      @set_foo = 1
+    end
+  end
+
+  obj = C.new
+benchmark:
+  vm_iclass_super: obj.set_foo
+loop_count: 60000000

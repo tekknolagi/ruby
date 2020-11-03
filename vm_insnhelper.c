@@ -1201,8 +1201,6 @@ static inline VALUE
 vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const struct rb_callcache *cc, int is_attr)
 {
 #if OPT_IC_FOR_IVAR
-    rb_check_frozen_internal(obj);
-
     if (LIKELY(RB_TYPE_P(obj, T_OBJECT))) {
 	VALUE klass = RBASIC(obj)->klass;
 	uint32_t index;
@@ -1220,6 +1218,8 @@ vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const str
 	    }
 	}
 	else {
+            rb_check_frozen_internal(obj);
+
 	    struct st_table *iv_index_tbl = ROBJECT_IV_INDEX_TBL(obj);
             struct rb_iv_index_tbl_entry *ent;
 
@@ -1239,6 +1239,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const str
 	}
     }
     else {
+        rb_check_frozen_internal(obj);
 	RB_DEBUG_COUNTER_INC(ivar_set_ic_miss_noobject);
     }
 #endif /* OPT_IC_FOR_IVAR */

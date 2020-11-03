@@ -1280,6 +1280,12 @@ rb_obj_freeze(VALUE obj)
 {
     if (!OBJ_FROZEN(obj)) {
 	OBJ_FREEZE(obj);
+
+        if (RBASIC(obj)->klass) {
+            VALUE singleton = rb_make_metaclass(obj, Qnil);
+            RCLASS_SERIAL(singleton) = rb_next_class_serial();
+        }
+
 	if (SPECIAL_CONST_P(obj)) {
 	    rb_bug("special consts should be frozen.");
 	}

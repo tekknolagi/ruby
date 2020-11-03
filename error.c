@@ -2819,6 +2819,7 @@ Init_Exception(void)
     warning_categories = rb_hash_new();
     rb_gc_register_mark_object(warning_categories);
     rb_hash_aset(warning_categories, ID2SYM(rb_intern_const("deprecated")), Qtrue);
+    rb_obj_hide(warning_categories);
     rb_obj_freeze(warning_categories);
 }
 
