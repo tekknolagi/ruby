@@ -271,6 +271,20 @@ class TestISeq < Test::Unit::TestCase
     end
   end
 
+  def test_compile_file_encoding
+    previous_external = Encoding.default_external
+    Encoding.default_external = Encoding::US_ASCII
+    Tempfile.create(%w"test_iseq .rb") do |f|
+      f.puts '{ "Þ" => "Th", "ß" => "ss", "à" => "a" }'
+      f.close
+
+      load f.path
+      RubyVM::InstructionSequence.compile_file(f.path)
+    end
+  ensure
+    Encoding.default_external = previous_external
+  end
+
   def test_translate_by_object
     assert_separately([], <<-"end;")
       class Object
