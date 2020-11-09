@@ -9467,6 +9467,7 @@ enum gc_stat_sym {
     gc_stat_sym_remembered_wb_unprotected_objects_limit,
     gc_stat_sym_old_objects,
     gc_stat_sym_old_objects_limit,
+    gc_stat_sym_root_address_list_length,
 #if RGENGC_ESTIMATE_OLDMALLOC
     gc_stat_sym_oldmalloc_increase_bytes,
     gc_stat_sym_oldmalloc_increase_bytes_limit,
@@ -9542,6 +9543,7 @@ setup_gc_stat_symbols(void)
 	S(remembered_wb_unprotected_objects_limit);
 	S(old_objects);
 	S(old_objects_limit);
+	S(root_address_list_length);
 #if RGENGC_ESTIMATE_OLDMALLOC
 	S(oldmalloc_increase_bytes);
 	S(oldmalloc_increase_bytes_limit);
@@ -9650,6 +9652,19 @@ default_proc_for_compat_func(RB_BLOCK_CALL_FUNC_ARGLIST(hash, _))
 }
 
 static size_t
+global_list_size(rb_objspace_t *objspace)
+{
+    size_t size = 0;
+    if (global_list) {
+	struct gc_list *list;
+	for (list = global_list; list; list = list->next) {
+            size++;
+	}
+    }
+    return size;
+}
+
+static size_t
 gc_stat_internal(VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = &rb_objspace;
@@ -9711,6 +9726,7 @@ gc_stat_internal(VALUE hash_or_sym)
     SET(remembered_wb_unprotected_objects_limit, objspace->rgengc.uncollectible_wb_unprotected_objects_limit);
     SET(old_objects, objspace->rgengc.old_objects);
     SET(old_objects_limit, objspace->rgengc.old_objects_limit);
+    SET(root_address_list_length, global_list_size(objspace));
 #if RGENGC_ESTIMATE_OLDMALLOC
     SET(oldmalloc_increase_bytes, objspace->rgengc.oldmalloc_increase);
     SET(oldmalloc_increase_bytes_limit, objspace->rgengc.oldmalloc_increase_limit);
