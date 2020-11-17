@@ -286,6 +286,7 @@ struct rb_callcache {
 
     union {
         const unsigned int attr_index;
+        struct rb_iv_index_tbl_entry *entry;
         const enum method_missing_reason method_missing_reason; /* used by method_missing */
         VALUE v;
     } aux_;

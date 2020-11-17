@@ -1197,21 +1197,22 @@ vm_getivar(VALUE obj, ID id, const rb_iseq_t *iseq, IVC ic, const struct rb_call
     }
 }
 
-static inline VALUE
-vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const struct rb_callcache *cc, int is_attr)
+static inline void
+vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, struct rb_iv_index_tbl_entry **entry)
 {
 #if OPT_IC_FOR_IVAR
     rb_check_frozen_internal(obj);
 
     if (LIKELY(RB_TYPE_P(obj, T_OBJECT))) {
+        struct rb_iv_index_tbl_entry *e = *entry;
+
 	VALUE klass = RBASIC(obj)->klass;
 	uint32_t index;
 
 	if (LIKELY(
-	    (!is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_serial, ic->entry && ic->entry->class_serial  == RCLASS_SERIAL(klass))) ||
-            ( is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_unset, vm_cc_attr_index(cc) > 0)))) {
+	    (RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_serial, e && e->class_serial  == RCLASS_SERIAL(klass))))) {
 	    VALUE *ptr = ROBJECT_IVPTR(obj);
-	    index = !is_attr ? ic->entry->index : vm_cc_attr_index(cc)-1;
+	    index = e->index;
 
             if (index >= ROBJECT_NUMIV(obj)) {
                 st_table * iv_idx_tbl = ROBJECT_IV_INDEX_TBL(obj);
@@ -1220,23 +1221,15 @@ vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const str
             }
             RB_OBJ_WRITE(obj, &ptr[index], val);
             RB_DEBUG_COUNTER_INC(ivar_set_ic_hit);
-            return val; /* inline cache hit */
+            return; /* inline cache hit */
 	}
 	else {
 	    struct st_table *iv_index_tbl = ROBJECT_IV_INDEX_TBL(obj);
             struct rb_iv_index_tbl_entry *ent;
 
             if (iv_index_tbl_lookup(iv_index_tbl, id, &ent)) {
-                if (!is_attr) {
-                    ic->entry = ent;
-                    RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
-                }
-		else if (ent->index >= INT_MAX) {
-		    rb_raise(rb_eArgError, "too many instance variables");
-		}
-		else {
-		    vm_cc_attr_index_set(cc, (int)(ent->index + 1));
-		}
+                *entry = ent;
+                RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
 
                 index = ent->index;
 
@@ -1248,7 +1241,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const str
                 RB_OBJ_WRITE(obj, &ptr[index], val);
                 RB_DEBUG_COUNTER_INC(ivar_set_ic_miss_iv_hit);
 
-                return val;
+                return;
 	    }
 	    /* fall through */
 	}
@@ -1258,7 +1251,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic, const str
     }
 #endif /* OPT_IC_FOR_IVAR */
     RB_DEBUG_COUNTER_INC(ivar_set_ic_miss);
-    return rb_ivar_set(obj, id, val);
+    rb_ivar_set(obj, id, val);
 }
 
 static inline VALUE
@@ -1270,7 +1263,7 @@ vm_getinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, IVC ic)
 static inline void
 vm_setinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, VALUE val, IVC ic)
 {
-    vm_setivar(obj, id, val, iseq, ic, 0, 0);
+    vm_setivar(obj, id, val, iseq, &ic->entry);
 }
 
 static VALUE
@@ -2693,7 +2686,8 @@ vm_call_attrset(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_c
     RB_DEBUG_COUNTER_INC(ccf_attrset);
     VALUE val = *(cfp->sp - 1);
     cfp->sp -= 2;
-    return vm_setivar(calling->recv, vm_cc_cme(cc)->def->body.attr.id, val, NULL, NULL, cc, 1);
+    vm_setivar(calling->recv, vm_cc_cme(cc)->def->body.attr.id, val, cfp->iseq, &cc->aux_.entry);
+    return val;
 }
 
 static inline VALUE
@@ -3163,7 +3157,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
         CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
 
 	rb_check_arity(calling->argc, 1, 1);
-	vm_cc_attr_index_set(cc, 0);
+        VM_FORCE_WRITE((const VALUE *)&cc->aux_.entry, 0);
         CC_SET_FASTPATH(cc, vm_call_attrset, !(vm_ci_flag(ci) & (VM_CALL_ARGS_SPLAT | VM_CALL_KW_SPLAT | VM_CALL_KWARG)));
         return vm_call_attrset(ec, cfp, calling, cd);
 
