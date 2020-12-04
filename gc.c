@@ -697,6 +697,7 @@ typedef struct rb_objspace {
 
     rb_heap_t eden_heap;
     rb_heap_t tomb_heap; /* heap for zombies and ghosts */
+    rb_heap_t promoted_heap;
 
     struct {
 	rb_atomic_t finalizing;
@@ -895,6 +896,7 @@ VALUE *ruby_initial_gc_stress_ptr = &ruby_initial_gc_stress;
 #define heap_pages_deferred_final	objspace->heap_pages.deferred_final
 #define heap_eden               (&objspace->eden_heap)
 #define heap_tomb               (&objspace->tomb_heap)
+#define heap_promoted           (&objspace->promoted_heap)
 #define during_gc		objspace->flags.during_gc
 #define finalizing		objspace->atomic_flags.finalizing
 #define finalizer_table 	objspace->finalizer_table
@@ -1579,6 +1581,7 @@ rb_objspace_alloc(void)
     malloc_limit = gc_params.malloc_limit_min;
     list_head_init(&objspace->eden_heap.pages);
     list_head_init(&objspace->tomb_heap.pages);
+    list_head_init(&objspace->promoted_heap.pages);
     dont_gc_on();
 
     return objspace;
@@ -1660,6 +1663,7 @@ heap_pages_expand_sorted(rb_objspace_t *objspace)
     size_t next_length = heap_allocatable_pages;
     next_length += heap_eden->total_pages;
     next_length += heap_tomb->total_pages;
+    next_length += heap_promoted->total_pages;
 
     if (next_length > heap_pages_sorted_length) {
 	heap_pages_expand_sorted_to(objspace, next_length);
@@ -4441,6 +4445,34 @@ unlock_page_body(rb_objspace_t *objspace, struct heap_page_body *body)
     }
 }
 
+static VALUE
+heap_promoted_get_free_slot(rb_objspace_t *objspace)
+{
+    rb_heap_t *heap = heap_promoted;
+
+    if (!heap->freelist) {
+        heap_allocatable_pages += 1;
+        heap_pages_expand_sorted(objspace);
+        heap_assign_page(objspace, heap);
+
+        // Copied from heap_get_freeobj_from_next_freepage
+        struct heap_page *page = heap->free_pages;
+        GC_ASSERT(page);
+        heap->free_pages = page->free_next;
+        heap->using_page = page;
+        GC_ASSERT(page->free_slots != 0);
+        heap->freelist = page->freelist;
+        page->freelist = NULL;
+        page->free_slots = 0;
+    }
+
+    GC_ASSERT(heap->freelist);
+    RVALUE *p = heap->freelist;
+    heap->freelist = p->as.free.next;
+
+    return (VALUE)p;
+}
+
 static short
 try_move(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page, VALUE dest)
 {
@@ -4457,7 +4489,7 @@ try_move(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page,
         from_freelist = 1;
     }
 
-    while(1) {
+    while (1) {
         size_t index = heap->compact_cursor_index;
 
         bits_t *mark_bits = cursor->mark_bits;
@@ -4482,14 +4514,20 @@ try_move(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page,
                             /* We were able to move "p" */
                             objspace->rcompactor.moved_count_table[BUILTIN_TYPE((VALUE)p)]++;
                             objspace->rcompactor.total_moved++;
-                            gc_move(objspace, (VALUE)p, dest);
-                            gc_pin(objspace, (VALUE)p);
                             heap->compact_cursor_index = i;
-                            if (from_freelist) {
-                                FL_SET((VALUE)p, FL_FROM_FREELIST);
-                            }
 
-                            return 1;
+                            if (RVALUE_OLD_P((VALUE)p)) {
+                                gc_move(objspace, (VALUE)p, heap_promoted_get_free_slot(objspace));
+                                gc_pin(objspace, (VALUE)p);
+                            } else {
+                                if (from_freelist) {
+                                    FL_SET((VALUE)p, FL_FROM_FREELIST);
+                                }
+
+                                gc_move(objspace, (VALUE)p, dest);
+                                gc_pin(objspace, (VALUE)p);
+                                return 1;
+                            }
                         }
                     }
                     p++;
@@ -4680,6 +4718,7 @@ gc_compact_finish(rb_objspace_t *objspace, rb_heap_t *heap)
     check_stack_for_moved(objspace);
 
     gc_update_references(objspace, heap);
+    gc_update_references(objspace, heap_promoted);
     heap->compact_cursor = NULL;
     heap->compact_cursor_index = 0;
     objspace->profile.compact_count++;
