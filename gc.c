@@ -9558,6 +9558,7 @@ enum gc_stat_sym {
     gc_stat_sym_heap_marked_slots,
     gc_stat_sym_heap_eden_pages,
     gc_stat_sym_heap_tomb_pages,
+    gc_stat_sym_heap_promoted_pages,
     gc_stat_sym_total_allocated_pages,
     gc_stat_sym_total_freed_pages,
     gc_stat_sym_total_allocated_objects,
@@ -9633,6 +9634,7 @@ setup_gc_stat_symbols(void)
 	S(heap_marked_slots);
 	S(heap_eden_pages);
 	S(heap_tomb_pages);
+        S(heap_promoted_pages);
 	S(total_allocated_pages);
 	S(total_freed_pages);
 	S(total_allocated_objects);
@@ -9802,6 +9804,7 @@ gc_stat_internal(VALUE hash_or_sym)
     SET(heap_marked_slots, objspace->marked_slots);
     SET(heap_eden_pages, heap_eden->total_pages);
     SET(heap_tomb_pages, heap_tomb->total_pages);
+    SET(heap_promoted_pages, heap_promoted->total_pages);
     SET(total_allocated_pages, objspace->profile.total_allocated_pages);
     SET(total_freed_pages, objspace->profile.total_freed_pages);
     SET(total_allocated_objects, objspace->total_allocated_objects);
