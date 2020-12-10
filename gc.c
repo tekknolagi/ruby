@@ -2301,7 +2301,7 @@ heap_prepare_free_page(rb_objspace_t *objspace, rb_heap_t *heap, unsigned int bi
         return;
     }
 
-    if (gc_mode(objspace) == gc_mode_none && gc_start(objspace, GPR_FLAG_NEWOBJ) == FALSE) {
+    if (gc_mode(objspace) == gc_mode_none && gc_start(objspace, GPR_FLAG_NEWOBJ | GPR_FLAG_IMMEDIATE_SWEEP) == FALSE) {
         rb_memerror();
     }
 
