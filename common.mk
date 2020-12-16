@@ -5631,6 +5631,7 @@ gc.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 gc.$(OBJEXT): $(top_srcdir)/internal/io.h
 gc.$(OBJEXT): $(top_srcdir)/internal/numeric.h
 gc.$(OBJEXT): $(top_srcdir)/internal/object.h
+gc.$(OBJEXT): $(top_srcdir)/internal/payload.h
 gc.$(OBJEXT): $(top_srcdir)/internal/proc.h
 gc.$(OBJEXT): $(top_srcdir)/internal/rational.h
 gc.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h

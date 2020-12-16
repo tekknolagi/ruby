@@ -77,6 +77,11 @@
 #include "gc.h"
 #include "id_table.h"
 #include "internal.h"
+
+#if RVARGC_ENABLED
+# include "internal/payload.h"
+#endif
+
 #include "internal/class.h"
 #include "internal/complex.h"
 #include "internal/cont.h"
@@ -431,6 +436,14 @@ int ruby_rgengc_debug;
  */
 #ifndef RGENGC_FORCE_MAJOR_GC
 #define RGENGC_FORCE_MAJOR_GC 0
+#endif
+
+/* RVARGC_ENABBLED
+ * Enable RVALUE objects to span multiple heap slots. This will inline malloc heap data
+ * into the GC heap
+ */
+#ifndef RVARGC_ENABLED
+#define RVARGC_ENABLED 0
 #endif
 
 #ifndef GC_PROFILE_MORE_DETAIL
