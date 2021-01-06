@@ -1885,7 +1885,7 @@ heap_page_add_free_region(struct heap_page *page, VALUE start, unsigned int size
     heap_page_add_free_region_head(page, start);
 }
 
-static int
+int
 is_payload_object(VALUE obj)
 {
     return !!MARKED_IN_BITMAP(GET_HEAP_PAYLOAD_BITS(obj), obj);
@@ -2707,7 +2707,7 @@ newobj_of_with_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int 
 static inline VALUE
 newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
 {
-    return newobj_of_with_size(klass, flags, v1, v2, v3, wb_protected, 1);
+    return newobj_of_with_size(klass, flags, v1, v2, v3, wb_protected, 2);
 }
 
 VALUE
@@ -3581,7 +3581,7 @@ Init_gc_stress(void)
 
 typedef int each_obj_callback(void *, void *, size_t, void *);
 
-static void objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void *data);
+static void objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void *data, int with_payload);
 static void objspace_reachable_objects_from_root(rb_objspace_t *, void (func)(const char *, VALUE, void *), void *);
 
 struct each_obj_args {
@@ -3592,7 +3592,7 @@ struct each_obj_args {
 
 
 static void
-objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *callback, void *data)
+objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *callback, void *data, int with_payload)
 {
     size_t i;
     struct heap_page *page;
@@ -3614,9 +3614,9 @@ objspace_each_objects_without_setup(rb_objspace_t *objspace, each_obj_callback *
             asan_unpoison_object((VALUE)slot, false);
             int type = BUILTIN_TYPE((VALUE)slot);
 
-            if (type == T_PAYLOAD) {
+            if (type == T_PAYLOAD && !with_payload) {
                 slot += PAYLOAD_LENGTH(slot);
-            } else if (type == T_NONE) {
+            } else if (type == T_NONE && !with_payload) {
                 GC_ASSERT(RFREE_HEAD_P((VALUE)slot));
                 slot += slot->as.free.as.head.size;
             } else {
@@ -3635,7 +3635,7 @@ static VALUE
 objspace_each_objects_protected(VALUE arg)
 {
     struct each_obj_args *args = (struct each_obj_args *)arg;
-    objspace_each_objects_without_setup(args->objspace, args->callback, args->data);
+    objspace_each_objects_without_setup(args->objspace, args->callback, args->data, 1);
     return Qnil;
 }
 
@@ -3685,13 +3685,13 @@ incremental_enable(VALUE _)
  *       use some constant value in the iteration.
  */
 void
-rb_objspace_each_objects(each_obj_callback *callback, void *data)
+rb_objspace_each_objects(each_obj_callback *callback, void *data, int with_payload)
 {
-    objspace_each_objects(&rb_objspace, callback, data);
+    objspace_each_objects(&rb_objspace, callback, data, with_payload);
 }
 
 static void
-objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void *data)
+objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void *data, int with_payload)
 {
     int prev_dont_incremental = objspace->flags.dont_incremental;
 
@@ -3699,7 +3699,7 @@ objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void
     objspace->flags.dont_incremental = TRUE;
 
     if (prev_dont_incremental) {
-        objspace_each_objects_without_setup(objspace, callback, data);
+        objspace_each_objects_without_setup(objspace, callback, data, with_payload);
     }
     else {
         struct each_obj_args args = {objspace, callback, data};
@@ -3710,7 +3710,7 @@ objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void
 void
 rb_objspace_each_objects_without_setup(each_obj_callback *callback, void *data)
 {
-    objspace_each_objects_without_setup(&rb_objspace, callback, data);
+    objspace_each_objects_without_setup(&rb_objspace, callback, data, 0);
 }
 
 struct os_each_struct {
@@ -3788,7 +3788,7 @@ os_obj_of(VALUE of)
 
     oes.num = 0;
     oes.of = of;
-    rb_objspace_each_objects(os_obj_of_i, &oes);
+    rb_objspace_each_objects(os_obj_of_i, &oes, 0);
     return SIZET2NUM(oes.num);
 }
 
@@ -7548,7 +7548,7 @@ gc_verify_internal_consistency_(rb_objspace_t *objspace)
 
     /* check relations */
 
-    objspace_each_objects_without_setup(objspace, verify_internal_consistency_i, &data);
+    objspace_each_objects_without_setup(objspace, verify_internal_consistency_i, &data, 0);
 
     if (data.err_count != 0) {
 #if RGENGC_CHECK_MODE >= 5
@@ -9924,7 +9924,7 @@ gc_verify_compaction_references(rb_execution_context_t *ec, VALUE self, VALUE do
     gc_start_internal(ec, self, Qtrue, Qtrue, Qtrue, Qtrue);
 
     objspace_reachable_objects_from_root(objspace, root_obj_check_moved_i, NULL);
-    objspace_each_objects(objspace, heap_check_moved_i, NULL);
+    objspace_each_objects(objspace, heap_check_moved_i, NULL, 0);
 
     return gc_compact_stats(ec, self);
 }

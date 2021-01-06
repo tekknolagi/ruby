@@ -264,7 +264,7 @@ rb_coverage_peek_result(VALUE klass)
     st_foreach(RHASH_TBL_RAW(coverages), coverage_peek_result_i, ncoverages);
 
     if (current_mode & COVERAGE_TARGET_METHODS) {
-	rb_objspace_each_objects(method_coverage_i, &ncoverages);
+	rb_objspace_each_objects(method_coverage_i, &ncoverages, 0);
     }
 
     rb_hash_freeze(ncoverages);

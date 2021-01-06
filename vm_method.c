@@ -260,7 +260,7 @@ invalidate_all_cc(void *vstart, void *vend, size_t stride, void *data)
 void
 rb_clear_method_cache_all(void)
 {
-    rb_objspace_each_objects(invalidate_all_cc, NULL);
+    rb_objspace_each_objects(invalidate_all_cc, NULL, 0);
 }
 
 void

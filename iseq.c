@@ -1154,7 +1154,7 @@ remove_coverage_i(void *vstart, void *vend, size_t stride, void *data)
 void
 rb_iseq_remove_coverage_all(void)
 {
-    rb_objspace_each_objects(remove_coverage_i, NULL);
+    rb_objspace_each_objects(remove_coverage_i, NULL, 0);
 }
 
 /* define wrapper class methods (RubyVM::InstructionSequence) */
@@ -3363,7 +3363,7 @@ trace_set_i(void *vstart, void *vend, size_t stride, void *data)
 void
 rb_iseq_trace_set_all(rb_event_flag_t turnon_events)
 {
-    rb_objspace_each_objects(trace_set_i, &turnon_events);
+    rb_objspace_each_objects(trace_set_i, &turnon_events, 0);
 }
 
 VALUE

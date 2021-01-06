@@ -260,6 +260,7 @@ obj_type(VALUE obj)
 	CASE_TYPE(UNDEF);
 	CASE_TYPE(NODE);
 	CASE_TYPE(ZOMBIE);
+    CASE_TYPE(PAYLOAD);
 #undef CASE_TYPE
       default: break;
     }
@@ -367,6 +368,12 @@ dump_object(VALUE obj, struct dump_config *dc)
     if (rb_obj_frozen_p(obj))
         dump_append(dc, ", \"frozen\":true");
 
+    if (is_payload_object(obj))
+    {
+        dump_append(dc, "}\n");
+        return;
+    }
+
     switch (BUILTIN_TYPE(obj)) {
       case T_NONE:
         dump_append(dc, "}\n");
@@ -466,7 +473,10 @@ dump_object(VALUE obj, struct dump_config *dc)
         break;
     }
 
+
+
     rb_objspace_reachable_objects_from(obj, reachable_object_i, dc);
+
     if (dc->cur_obj_references > 0)
         dump_append(dc, "]");
 
@@ -598,6 +608,8 @@ objspace_dump(VALUE os, VALUE obj, VALUE output)
 static VALUE
 objspace_dump_all(VALUE os, VALUE output, VALUE full, VALUE since)
 {
+    int with_payload = 1;
+
     struct dump_config dc = {0,};
     dump_output(&dc, output, full, since);
 
@@ -608,7 +620,7 @@ objspace_dump_all(VALUE os, VALUE output, VALUE full, VALUE since)
     }
 
     /* dump all objects */
-    rb_objspace_each_objects(heap_i, &dc);
+    rb_objspace_each_objects(heap_i, &dc, with_payload);
 
     return dump_result(&dc);
 }

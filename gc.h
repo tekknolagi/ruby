@@ -129,11 +129,14 @@ int rb_objspace_garbage_object_p(VALUE obj);
 
 void rb_objspace_each_objects(
     int (*callback)(void *start, void *end, size_t stride, void *data),
-    void *data);
+    void *data, int with_payload);
 
 void rb_objspace_each_objects_without_setup(
     int (*callback)(void *, void *, size_t, void *),
     void *data);
+
+
+int is_payload_object(VALUE obj);
 
 RUBY_SYMBOL_EXPORT_END
 
