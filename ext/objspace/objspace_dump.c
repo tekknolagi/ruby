@@ -357,6 +357,18 @@ dump_object(VALUE obj, struct dump_config *dc)
     dump_append(dc, "{\"address\":");
     dump_append_ref(dc, obj);
 
+    if (is_payload_object(obj))
+    {
+        dump_append(dc, ", \"type\":\"PAYLOAD\"");
+        if (BUILTIN_TYPE(obj) == T_PAYLOAD) {
+            dump_append(dc, ", \"length\":");
+            dump_append_lu(dc, (unsigned long)145);
+        }
+        dump_append(dc, "}\n");
+        return;
+
+    }
+
     dump_append(dc, ", \"type\":\"");
     dump_append(dc, obj_type(obj));
     dump_append(dc, "\"");
@@ -367,12 +379,6 @@ dump_object(VALUE obj, struct dump_config *dc)
     }
     if (rb_obj_frozen_p(obj))
         dump_append(dc, ", \"frozen\":true");
-
-    if (is_payload_object(obj))
-    {
-        dump_append(dc, "}\n");
-        return;
-    }
 
     switch (BUILTIN_TYPE(obj)) {
       case T_NONE:

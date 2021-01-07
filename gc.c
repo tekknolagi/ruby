@@ -2707,7 +2707,7 @@ newobj_of_with_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int 
 static inline VALUE
 newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected)
 {
-    return newobj_of_with_size(klass, flags, v1, v2, v3, wb_protected, 2);
+    return newobj_of_with_size(klass, flags, v1, v2, v3, wb_protected, 1);
 }
 
 VALUE
