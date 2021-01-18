@@ -475,6 +475,8 @@ dump_object(VALUE obj, struct dump_config *dc)
             dump_append(dc, ", \"file\":\"");
             dump_append(dc, ainfo->path);
             dump_append(dc, "\"");
+        } else {
+            printf("[DEBUG] ainfo->path == NULL : address=%#"PRIxVALUE, obj);
         }
         if (ainfo->line) {
             dump_append(dc, ", \"line\":");
