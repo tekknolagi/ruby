@@ -589,6 +589,8 @@ load_iseq_eval(rb_execution_context_t *ec, VALUE fname)
         iseq = rb_iseq_new_top(&ast->body, rb_fstring_lit("<top (required)>"),
                                fname, rb_realpath_internal(Qnil, fname, 1), NULL);
         rb_ast_dispose(ast);
+    } else {
+        rb_iseq_pathobj_set(iseq, fname, rb_realpath_internal(Qnil, fname, 1));
     }
     rb_exec_event_hook_script_compiled(ec, iseq, Qnil);
     rb_iseq_eval(iseq);
