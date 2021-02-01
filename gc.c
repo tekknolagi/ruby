@@ -2564,6 +2564,16 @@ rb_wb_protected_newobj_of_with_size(VALUE klass, VALUE flags, size_t payload_siz
 }
 
 void *
+rb_payload_start(VALUE obj)
+{
+    struct RPayload *payload = RPAYLOAD(NEXT_SLOT(obj));
+    GC_ASSERT(BUILTIN_TYPE((VALUE)payload) == T_PAYLOAD);
+    GC_ASSERT(RVALUE_PAYLOAD_BITMAP(payload));
+
+    return payload->data;
+}
+
+void *
 rb_payload_start_zero(VALUE obj)
 {
     struct RPayload *payload = RPAYLOAD(NEXT_SLOT(obj));
