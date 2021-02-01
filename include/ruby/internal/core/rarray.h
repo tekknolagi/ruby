@@ -77,6 +77,10 @@ enum ruby_rarray_flags {
     ,
     RARRAY_TRANSIENT_FLAG  = RUBY_FL_USER13
 #endif
+#if USE_RVARGC
+    ,
+    RARRAY_GC_HEAP_FLAG    = RUBY_FL_USER14
+#endif
 };
 
 enum ruby_rarray_consts {
@@ -160,6 +164,14 @@ RARRAY_TRANSIENT_P(VALUE ary)
     return false;
 #endif
 }
+
+#if USE_RVARGC
+static inline bool
+RARRAY_GC_HEAP_P(VALUE ary)
+{
+    return RB_FL_ANY_RAW(ary, RARRAY_GC_HEAP_FLAG);
+}
+#endif
 
 RBIMPL_ATTR_PURE_UNLESS_DEBUG()
 /* internal function. do not use this function */

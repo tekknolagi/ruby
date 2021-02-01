@@ -75,9 +75,16 @@ ARY_PTR_USING_P(VALUE ary)
     return FL_TEST_RAW(ary, RARRAY_PTR_IN_USE_FLAG);
 }
 
+#if USE_RVARGC
+__attribute__((noreturn)) 
+#endif
 static inline void
 RARY_TRANSIENT_SET(VALUE ary)
 {
+#if USE_RVARGC
+    rb_bug("cannot use transient heap with rvargc");
+#endif
+
 #if USE_TRANSIENT_HEAP
     FL_SET_RAW(ary, RARRAY_TRANSIENT_FLAG);
 #endif
@@ -90,6 +97,20 @@ RARY_TRANSIENT_UNSET(VALUE ary)
     FL_UNSET_RAW(ary, RARRAY_TRANSIENT_FLAG);
 #endif
 }
+
+#if USE_RVARGC
+static inline void
+RARY_GC_HEAP_SET(VALUE ary)
+{
+    FL_SET_RAW(ary, RARRAY_GC_HEAP_FLAG);
+}
+
+static inline void
+RARY_GC_HEAP_UNSET(VALUE ary)
+{
+    FL_UNSET_RAW(ary, RARRAY_GC_HEAP_FLAG);
+}
+#endif
 
 #undef rb_ary_new_from_args
 #if RBIMPL_HAS_WARNING("-Wgnu-zero-variadic-macro-arguments")

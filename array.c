@@ -319,6 +319,9 @@ ary_memcpy(VALUE ary, long beg, long argc, const VALUE *argv)
 static VALUE *
 ary_heap_alloc(VALUE ary, size_t capa)
 {
+#if USE_RVARGC
+    VALUE *ptr = ALLOC_N(VALUE, capa);
+#else
     VALUE *ptr = rb_transient_heap_alloc(ary, sizeof(VALUE) * capa);
 
     if (ptr != NULL) {
@@ -328,6 +331,7 @@ ary_heap_alloc(VALUE ary, size_t capa)
         RARY_TRANSIENT_UNSET(ary);
         ptr = ALLOC_N(VALUE, capa);
     }
+#endif
 
     return ptr;
 }
@@ -349,6 +353,12 @@ ary_heap_free(VALUE ary)
     if (RARRAY_TRANSIENT_P(ary)) {
         RARY_TRANSIENT_UNSET(ary);
     }
+#if USE_RVARGC
+    else if (RARRAY_GC_HEAP_P(ary)) {
+        RARY_GC_HEAP_UNSET(ary);
+        rb_payload_free((void *)ARY_HEAP_PTR(ary));
+    }
+#endif
     else {
         ary_heap_free_ptr(ary, ARY_HEAP_PTR(ary), ARY_HEAP_SIZE(ary));
     }
@@ -375,6 +385,22 @@ ary_heap_realloc(VALUE ary, size_t new_capa)
             ARY_SET_PTR(ary, new_ptr);
         }
     }
+#if USE_RVARGC
+    else if (RARRAY_GC_HEAP_P(ary)) {
+        if (new_capa <= old_capa) {
+            rb_payload_resize(ARY_HEAP_PTR(ary), new_capa * sizeof(VALUE));
+        } else {
+            const VALUE *ptr = ARY_HEAP_PTR(ary);
+            VALUE *new_ptr = ALLOC_N(VALUE, new_capa);
+
+            RARY_GC_HEAP_UNSET(ary);
+
+            MEMCPY(new_ptr, ptr, VALUE, old_capa);
+            rb_payload_free((void *)ptr);
+            ARY_SET_PTR(ary, new_ptr);
+        }
+    }
+#endif
     else {
         SIZED_REALLOC_N(RARRAY(ary)->as.heap.ptr, VALUE, new_capa, old_capa);
     }
@@ -465,7 +491,17 @@ ary_resize_capa(VALUE ary, long capacity)
 
             if (len > capacity) len = capacity;
             MEMCPY((VALUE *)RARRAY(ary)->as.ary, ptr, VALUE, len);
+#if USE_RVARGC
+            if (RARRAY_GC_HEAP_P(ary)) {
+                RARY_GC_HEAP_UNSET(ary);
+                rb_payload_free((void *)ptr);
+            }
+            else {
+                ary_heap_free_ptr(ary, ptr, old_capa);
+            }
+#else
             ary_heap_free_ptr(ary, ptr, old_capa);
+#endif
 
             FL_SET_EMBED(ary);
             ARY_SET_LEN(ary, len);
@@ -586,6 +622,12 @@ rb_ary_cancel_sharing(VALUE ary)
             RARRAY_PTR_USE_TRANSIENT(ary, ptr, {
                 MEMMOVE(ptr, ptr+shift, VALUE, len);
             });
+#if USE_RVARGC
+            if (RARRAY_GC_HEAP_P(shared_root)) {
+                RARY_GC_HEAP_UNSET(shared_root);
+                RARY_GC_HEAP_SET(ary);
+            }
+#endif
             FL_SET_EMBED(shared_root);
             rb_ary_decrement_share(shared_root);
         }
@@ -706,6 +748,15 @@ ary_alloc(VALUE klass)
     return (VALUE)ary;
 }
 
+#if USE_RVARGC
+static VALUE
+ary_alloc_size(VALUE klass, long capa)
+{
+    NEWOBJ_OF_SIZE(ary, struct RArray, klass, T_ARRAY | RARRAY_GC_HEAP_FLAG | (RGENGC_WB_PROTECTED_ARRAY ? FL_WB_PROTECTED : 0), capa * sizeof(VALUE));
+    return (VALUE)ary;
+}
+#endif
+
 static VALUE
 empty_ary_alloc(VALUE klass)
 {
@@ -727,9 +778,22 @@ ary_new(VALUE klass, long capa)
 
     RUBY_DTRACE_CREATE_HOOK(ARRAY, capa);
 
+#if USE_RVARGC
+    if (capa > RARRAY_EMBED_LEN_MAX && rb_payload_size_allocatable(capa * sizeof(VALUE))) {
+        ary = ary_alloc_size(klass, capa);
+        ptr = rb_payload_start(ary);
+    } else {
+        ary = ary_alloc(klass);
+        if (capa > RARRAY_EMBED_LEN_MAX)
+            ptr = ary_heap_alloc(ary, capa);
+    }
+#else
     ary = ary_alloc(klass);
+#endif
     if (capa > RARRAY_EMBED_LEN_MAX) {
+#if !USE_RVARGC
         ptr = ary_heap_alloc(ary, capa);
+#endif
         FL_UNSET_EMBED(ary);
         ARY_SET_PTR(ary, ptr);
         ARY_SET_CAPA(ary, capa);
@@ -944,6 +1008,12 @@ ary_make_shared(VALUE ary)
         FL_SET_SHARED_ROOT(vshared);
         ARY_SET_SHARED_ROOT_REFCNT(vshared, 1);
 	FL_SET_SHARED(ary);
+#if USE_RVARGC
+        if (RARRAY_GC_HEAP_P(ary)) {
+            RARY_GC_HEAP_UNSET(ary);
+            RARY_GC_HEAP_SET(vshared);
+        }
+#endif
         RB_DEBUG_COUNTER_INC(obj_ary_shared_create);
         ARY_SET_SHARED(ary, vshared);
         OBJ_FREEZE(vshared);
@@ -3337,6 +3407,11 @@ rb_ary_sort_bang(VALUE ary)
                 else {
                     ary_heap_free(ary);
                 }
+#if USE_RVARGC
+                if (RARRAY_GC_HEAP_P(tmp)) {
+                    RARY_GC_HEAP_SET(ary);
+                }
+#endif
                 ARY_SET_PTR(ary, ARY_HEAP_PTR(tmp));
                 ARY_SET_HEAP_LEN(ary, len);
                 ARY_SET_CAPA(ary, ARY_HEAP_LEN(tmp));
