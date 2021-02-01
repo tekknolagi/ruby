@@ -3028,6 +3028,12 @@ gc_payload_free(rb_objspace_t *objspace, void *ptr)
         CLEAR_IN_BITMAP(page->payload_bits, slot);
     }
 }
+
+void
+rb_payload_free(void *ptr)
+{
+    gc_payload_free(&rb_objspace, ptr);
+}
 #endif
 
 static int
