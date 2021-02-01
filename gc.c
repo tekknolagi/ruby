@@ -2523,11 +2523,17 @@ rb_ec_wb_protected_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flag
 }
 
 #if USE_RVARGC
+static unsigned short
+payload_slots_from_size(size_t size)
+{
+    return (unsigned int)roomof(size + sizeof(struct RPayloadHead), sizeof(RVALUE));
+}
+
 static inline VALUE
 newobj_of_with_size(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protected, size_t payload_size)
 {
     rb_ractor_t *cr = GET_RACTOR();
-    unsigned short slots = (unsigned short)roomof(payload_size + sizeof(struct RPayloadHead), sizeof(RVALUE));
+    unsigned short slots = payload_slots_from_size(payload_size);
     GC_ASSERT(cr->newobj_cache.requested_payload_slots == 0);
     GC_ASSERT(slots > 0);
     cr->newobj_cache.requested_payload_slots = slots;
@@ -2557,6 +2563,35 @@ rb_payload_start_zero(VALUE obj)
     memset(payload->data, 0, payload->head.length * sizeof(RVALUE) - sizeof(struct RPayloadHead));
 
     return payload->data;
+}
+
+void
+rb_payload_resize(const void *ptr, size_t size)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+
+    VALUE pstart = (VALUE)ptr - sizeof(struct RPayloadHead);
+    GC_ASSERT(pstart % sizeof(RVALUE) == 0);
+    GC_ASSERT(BUILTIN_TYPE(pstart) == T_PAYLOAD);
+
+    unsigned short length = RPAYLOAD(pstart)->head.length;
+    unsigned short new_length = payload_slots_from_size(size);
+
+    if (length == new_length) return;
+    if (length < new_length) rb_bug("rb_payload_resize: cannot resize upwards");
+
+    RPAYLOAD(pstart)->head.length = new_length;
+
+    struct heap_page *page = GET_HEAP_PAGE(pstart);
+    for (unsigned short i = new_length; i < length; i++) {
+        VALUE p = pstart + i * sizeof(RVALUE);
+
+        GC_ASSERT(GET_HEAP_PAGE(p) == page);
+        heap_page_add_freeobj(objspace, page, p);
+
+        GC_ASSERT(RVALUE_PAYLOAD_BITMAP(p));
+        CLEAR_IN_BITMAP(page->payload_bits, p);
+    }
 }
 #endif
 
