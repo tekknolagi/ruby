@@ -2523,6 +2523,15 @@ rb_ec_wb_protected_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flag
 }
 
 #if USE_RVARGC
+// 2 slots cannot be used: 1 slot is used for object, 1 slot may not exist due to alignment.
+#define MAX_PAYLOAD_SIZE ((HEAP_PAGE_OBJ_LIMIT - 2) * sizeof(RVALUE) - sizeof(struct RPayloadHead))
+
+bool
+rb_payload_size_allocatable(size_t size)
+{
+    return size <= MAX_PAYLOAD_SIZE;
+}
+
 static unsigned short
 payload_slots_from_size(size_t size)
 {

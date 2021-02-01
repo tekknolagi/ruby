@@ -101,6 +101,7 @@ VALUE rb_wb_protected_newobj_of(VALUE, VALUE);
 VALUE rb_wb_unprotected_newobj_of(VALUE, VALUE);
 VALUE rb_ec_wb_protected_newobj_of(struct rb_execution_context_struct *ec, VALUE klass, VALUE flags);
 #if USE_RVARGC
+bool rb_payload_size_allocatable(size_t size);
 VALUE rb_wb_unprotected_newobj_of_with_size(VALUE klass, VALUE flags, size_t size);
 VALUE rb_wb_protected_newobj_of_with_size(VALUE klass, VALUE flags, size_t size);
 void *rb_payload_start_zero(VALUE obj);
