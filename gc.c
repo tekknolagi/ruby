@@ -2176,7 +2176,6 @@ rvargc_slot_count(size_t size)
     return roomof(size, sizeof(RVALUE));
 }
 
-
 void *
 rvargc_malloc(size_t size, struct heap_page *page, RVALUE **freelist)
 {
@@ -2223,7 +2222,7 @@ rvargc_malloc(size_t size, struct heap_page *page, RVALUE **freelist)
 }
 
 static inline VALUE
-ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
+ractor_cached_free_region(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
 {
     RVALUE *p = rvargc_malloc(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
 
@@ -2303,7 +2302,7 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_t *
         }
 
         // allocate new slot
-        while ((obj = ractor_cached_freeobj(objspace, cr, size)) == Qfalse) {
+        while ((obj = ractor_cached_free_region(objspace, cr, size)) == Qfalse) {
             ractor_cache_slots(objspace, cr);
         }
         GC_ASSERT(obj != 0);
@@ -2355,7 +2354,7 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr)
                    ruby_gc_stressful ||
                    gc_event_hook_available_p(objspace)) &&
          wb_protected &&
-         (obj = ractor_cached_freeobj(objspace, cr, size)) != Qfalse)) {
+         (obj = ractor_cached_free_region(objspace, cr, size)) != Qfalse)) {
 
         newobj_init(klass, flags, wb_protected, objspace, obj);
     }
