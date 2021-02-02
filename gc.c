@@ -2169,10 +2169,63 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
     return obj;
 }
 
-static inline VALUE
-ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
+unsigned long
+rvargc_slot_count(size_t size)
 {
-    RVALUE *p = cr->newobj_cache.freelist;
+    // roomof == ceiling division, so we don't have to do div then mod
+    return roomof(size, sizeof(RVALUE));
+}
+
+
+void *
+rvargc_malloc(size_t size, struct heap_page *page, RVALUE **freelist)
+{
+    int slots = (int)rvargc_slot_count(size);
+    if (!*freelist) return 0;
+
+    RVALUE **end_ptr = freelist;
+    RVALUE *end = *freelist;
+
+    do {
+        // If we're right at the beginning of the page, then break.
+        if (end - slots + 1 < page->start) break;
+
+        RVALUE *curr = end->as.free.next;
+        unsigned short i;
+        for (i = 1; i < slots; i++) {
+            if (!curr) break;
+
+            void *poisoned = asan_poisoned_object_p((VALUE)curr);
+            asan_unpoison_object((VALUE)curr, false);
+            // if any adjacent slots within range are occupied
+            // then we need to break out and try the next free region
+            if (BUILTIN_TYPE((VALUE)curr) != T_NONE) break;
+            // if the this freelist slot is not adjacent then bail
+            if (end - curr != i) break;
+            if (poisoned) asan_poison_object((VALUE)curr);
+            curr = curr->as.free.next;
+        }
+
+        if (i == slots) {
+            RVALUE *start = end - slots + 1;
+            for (RVALUE *p = start; p <= end; p++) {
+                asan_unpoison_object((VALUE)p, false);
+                GC_ASSERT(BUILTIN_TYPE((VALUE)p) == T_NONE);
+            }
+            *end_ptr = start->as.free.next;
+            return start;
+        } else {
+            end_ptr = &end->as.free.next;
+        }
+    } while ((end = RANY(end)->as.free.next));
+
+    return NULL;
+}
+
+static inline VALUE
+ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
+{
+    RVALUE *p = rvargc_malloc(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
 
     if (p) {
         VALUE obj = (VALUE)p;
@@ -2231,6 +2284,7 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_t *
 {
     VALUE obj;
     unsigned int lev;
+    size_t size = sizeof(RVALUE);
 
     RB_VM_LOCK_ENTER_CR_LEV(cr, &lev);
     {
@@ -2249,7 +2303,7 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_t *
         }
 
         // allocate new slot
-        while ((obj = ractor_cached_freeobj(objspace, cr)) == Qfalse) {
+        while ((obj = ractor_cached_freeobj(objspace, cr, size)) == Qfalse) {
             ractor_cache_slots(objspace, cr);
         }
         GC_ASSERT(obj != 0);
@@ -2283,6 +2337,7 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr)
 {
     VALUE obj;
     rb_objspace_t *objspace = &rb_objspace;
+    size_t size = sizeof(RVALUE);
 
     RB_DEBUG_COUNTER_INC(obj_newobj);
     (void)RB_DEBUG_COUNTER_INC_IF(obj_newobj_wb_unprotected, !wb_protected);
@@ -2300,7 +2355,7 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr)
                    ruby_gc_stressful ||
                    gc_event_hook_available_p(objspace)) &&
          wb_protected &&
-         (obj = ractor_cached_freeobj(objspace, cr)) != Qfalse)) {
+         (obj = ractor_cached_freeobj(objspace, cr, size)) != Qfalse)) {
 
         newobj_init(klass, flags, wb_protected, objspace, obj);
     }
