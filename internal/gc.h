@@ -28,13 +28,13 @@ struct rb_objspace; /* in vm_core.h */
 /* optimized version of NEWOBJ() */
 #define RB_NEWOBJ_OF(var, T, c, f) \
   T *(var) = (T *)(((f) & FL_WB_PROTECTED) ? \
-                   rb_wb_protected_newobj_of((c), (f) & ~FL_WB_PROTECTED) : \
-                   rb_wb_unprotected_newobj_of((c), (f)))
+                   rb_wb_protected_newobj_of((c), (f) & ~FL_WB_PROTECTED, 0) : \
+                   rb_wb_unprotected_newobj_of((c), (f), 0))
 
 #define RB_EC_NEWOBJ_OF(ec, var, T, c, f) \
   T *(var) = (T *)(((f) & FL_WB_PROTECTED) ? \
-                   rb_ec_wb_protected_newobj_of((ec), (c), (f) & ~FL_WB_PROTECTED) : \
-                   rb_wb_unprotected_newobj_of((c), (f)))
+                   rb_ec_wb_protected_newobj_of((ec), (c), (f) & ~FL_WB_PROTECTED, 0) : \
+                   rb_wb_unprotected_newobj_of((c), (f), 0))
 
 #define NEWOBJ_OF(var, T, c, f) RB_NEWOBJ_OF((var), T, (c), (f))
 #define RB_OBJ_GC_FLAGS_MAX 6   /* used in ext/objspace */
@@ -89,9 +89,9 @@ VALUE rb_class_allocate_instance(VALUE klass);
 RUBY_SYMBOL_EXPORT_BEGIN
 /* gc.c (export) */
 const char *rb_objspace_data_type_name(VALUE obj);
-VALUE rb_wb_protected_newobj_of(VALUE, VALUE);
-VALUE rb_wb_unprotected_newobj_of(VALUE, VALUE);
-VALUE rb_ec_wb_protected_newobj_of(struct rb_execution_context_struct *ec, VALUE klass, VALUE flags);
+VALUE rb_wb_protected_newobj_of(VALUE, VALUE, size_t);
+VALUE rb_wb_unprotected_newobj_of(VALUE, VALUE, size_t);
+VALUE rb_ec_wb_protected_newobj_of(struct rb_execution_context_struct *ec, VALUE klass, VALUE flags, size_t);
 size_t rb_obj_memsize_of(VALUE);
 void rb_gc_verify_internal_consistency(void);
 size_t rb_obj_gc_flags(VALUE, ID[], size_t);
