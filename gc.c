@@ -2169,14 +2169,14 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
     return obj;
 }
 
-unsigned long
+static unsigned long
 rvargc_slot_count(size_t size)
 {
     // roomof == ceiling division, so we don't have to do div then mod
     return roomof(size, sizeof(RVALUE));
 }
 
-void *
+static void *
 rvargc_pmalloc(size_t size, struct heap_page *page, RVALUE **freelist)
 {
     int slots = (int)rvargc_slot_count(size);
@@ -2221,7 +2221,7 @@ rvargc_pmalloc(size_t size, struct heap_page *page, RVALUE **freelist)
     return NULL;
 }
 
-void *
+static void *
 rvargc_malloc(size_t size)
 {
     rb_ractor_t *cr = GET_RACTOR();
