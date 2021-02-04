@@ -3725,7 +3725,7 @@ Init_vm_objects(void)
     vm->loading_table = st_init_strtable();
     vm->frozen_strings = st_init_table_with_size(&rb_fstring_hash_type, 10000);
 
-    rb_objspace_gc_enable(vm->objspace);
+    //rb_objspace_gc_enable(vm->objspace);
 }
 
 /* top self */
