@@ -556,12 +556,19 @@ struct RMoved {
 #pragma pack(push, 4) /* == SIZEOF_VALUE: magic for reducing sizeof(RVALUE): 24 -> 20 */
 #endif
 
+struct RPayload {
+    VALUE flags;
+    short len;
+    char data[];
+};
+
 typedef struct RVALUE {
     union {
 	struct {
 	    VALUE flags;		/* always 0 for freed obj */
 	    struct RVALUE *next;
 	} free;
+        struct RPayload payload;
         struct RMoved  moved;
 	struct RBasic  basic;
 	struct RObject object;
@@ -2228,6 +2235,18 @@ rvargc_malloc(size_t size)
     return rvargc_find_region(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
 }
 
+VALUE
+rb_rvargc_payload_init(VALUE obj, size_t size)
+{
+    struct RPayload *ph = (struct RPayload *)(obj + sizeof(RVALUE));
+    memset(ph, 0, size);
+
+    ph->flags = T_PAYLOAD;
+    ph->len = size;
+
+    return (VALUE)ph->data;
+}
+
 
 static inline VALUE
 ractor_cached_free_region(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
@@ -2270,7 +2289,6 @@ static inline void
 ractor_cache_slots(rb_objspace_t *objspace, rb_ractor_t *cr)
 {
     ASSERT_vm_locking();
-    GC_ASSERT(cr->newobj_cache.freelist == NULL);
 
     struct heap_page *page = heap_next_freepage(objspace, heap_eden);
 
