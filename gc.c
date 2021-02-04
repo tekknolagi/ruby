@@ -853,6 +853,7 @@ struct heap_page {
     bits_t mark_bits[HEAP_PAGE_BITMAP_LIMIT];
     bits_t uncollectible_bits[HEAP_PAGE_BITMAP_LIMIT];
     bits_t marking_bits[HEAP_PAGE_BITMAP_LIMIT];
+    bits_t payload_bits[HEAP_PAGE_BITMAP_LIMIT];
 
     /* If set, the object is not movable */
     bits_t pinned_bits[HEAP_PAGE_BITMAP_LIMIT];
@@ -878,6 +879,7 @@ struct heap_page {
 #define GET_HEAP_UNCOLLECTIBLE_BITS(x)  (&GET_HEAP_PAGE(x)->uncollectible_bits[0])
 #define GET_HEAP_WB_UNPROTECTED_BITS(x) (&GET_HEAP_PAGE(x)->wb_unprotected_bits[0])
 #define GET_HEAP_MARKING_BITS(x)        (&GET_HEAP_PAGE(x)->marking_bits[0])
+#define GET_HEAP_PAYLOAD_BITS(x)        (&GET_HEAP_PAGE(x)->payload_bits[0])
 
 /* Aliases */
 #define rb_objspace (*rb_objspace_of(GET_VM()))
@@ -1225,10 +1227,12 @@ tick(void)
 #define RVALUE_WB_UNPROTECTED_BITMAP(obj) MARKED_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), (obj))
 #define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  MARKED_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS(obj), (obj))
 #define RVALUE_MARKING_BITMAP(obj)        MARKED_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), (obj))
+#define RVALUE_PAYLOAD_BITMAP(obj)        MARKED_IN_BITMAP(GET_HEAP_PAYLOAD_BITS(obj), (obj))
 
 #define RVALUE_PAGE_WB_UNPROTECTED(page, obj) MARKED_IN_BITMAP((page)->wb_unprotected_bits, (obj))
 #define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  MARKED_IN_BITMAP((page)->uncollectible_bits, (obj))
 #define RVALUE_PAGE_MARKING(page, obj)        MARKED_IN_BITMAP((page)->marking_bits, (obj))
+#define RVALUE_PAGE_PAYLOAD(page, obj)        MARKED_IN_BITMAP((page)->payload_bits, (obj))
 
 #define RVALUE_OLD_AGE   3
 #define RVALUE_AGE_SHIFT 5 /* FL_PROMOTED0 bit */
@@ -2244,7 +2248,30 @@ rb_rvargc_payload_init(VALUE obj, size_t size)
     ph->flags = T_PAYLOAD;
     ph->len = size;
 
+    for (int i = 0; i < (int)rvargc_slot_count(size); i++) {
+        MARK_IN_BITMAP(GET_HEAP_PAYLOAD_BITS(obj), obj + (i * sizeof(RVALUE)));
+    }
+
     return (VALUE)ph->data;
+}
+
+static void
+rvargc_free(void *ptr)
+{
+    VALUE pstart = (VALUE)ptr - sizeof(struct RPayload);
+    int size = ((struct RPayload *)ptr)->len;
+
+    struct heap_page *page = GET_HEAP_PAGE(pstart);
+
+    for (int i = 0; i < size; i++) {
+        VALUE slot = pstart + i * sizeof(RVALUE);
+
+        GC_ASSERT(GET_HEAP_PAGE(slot) == page);
+        heap_page_add_freeobj(&rb_objspace, page, slot);
+
+        GC_ASSERT(RVALUE_PAYLOAD_BITMAP(slot));
+        CLEAR_IN_BITMAP(page->payload_bits, slot);
+    }
 }
 
 
@@ -2931,7 +2958,11 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	rb_class_remove_from_module_subclasses(obj);
 	rb_class_remove_from_super_subclasses(obj);
 	if (RCLASS_EXT(obj))
+#if USE_RVARGC
+            rvargc_free(RCLASS_EXT(obj));
+#else
 	    xfree(RCLASS_EXT(obj));
+#endif
 	RCLASS_EXT(obj) = NULL;
 
         (void)RB_DEBUG_COUNTER_INC_IF(obj_module_ptr, BUILTIN_TYPE(obj) == T_MODULE);
@@ -3098,7 +3129,11 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         cc_table_free(objspace, obj, FALSE);
 	rb_class_remove_from_module_subclasses(obj);
 	rb_class_remove_from_super_subclasses(obj);
+#if USE_RVARGC
+        rvargc_free(RCLASS_EXT(obj));
+#else
 	xfree(RCLASS_EXT(obj));
+#endif
 	RCLASS_EXT(obj) = NULL;
 
         RB_DEBUG_COUNTER_INC(obj_iclass_ptr);
@@ -3428,6 +3463,7 @@ internal_object_p(VALUE obj)
 	    return 0;
 	  default:
 	    if (!p->as.basic.klass) break;
+            if (RVALUE_PAYLOAD_BITMAP(p)) break;
 	    return 0;
 	}
     }
@@ -4945,7 +4981,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     int empty_slots = 0, freed_slots = 0, final_slots = 0;
     int was_compacting = 0;
     RVALUE *p, *offset;
-    bits_t *bits, bitset;
+    bits_t *bits, *pbits, bitset;
 
     gc_report(2, objspace, "page_sweep: start.\n");
 
@@ -4969,6 +5005,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     p = sweep_page->start;
     offset = p - NUM_IN_PAGE(p);
     bits = sweep_page->mark_bits;
+    pbits = sweep_page->payload_bits;
 
     /* create guard : fill 1 out-of-range */
     bits[BITMAP_INDEX(p)] |= BITMAP_BIT(p)-1;
@@ -4979,7 +5016,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     }
 
     for (i=0; i < HEAP_PAGE_BITMAP_LIMIT; i++) {
-	bitset = ~bits[i];
+	bitset = ~bits[i] & ~pbits[i];
 	if (bitset) {
 	    p = offset  + i * BITS_BITLENGTH;
 	    do {
