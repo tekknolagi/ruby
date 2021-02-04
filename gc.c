@@ -12678,6 +12678,236 @@ rb_gcdebug_remove_stress_to_class(int argc, VALUE *argv, VALUE self)
 #include "gc.rbinc"
 
 void
+rb_mmtk_referent_objects(VALUE obj, void (*callback_object)(void *user, VALUE *adjacent), void (*callback_data)(void **data))
+{
+    // Adapted from gc_mark_children - could possibly reimplement that in terms of this in the future
+
+    register RVALUE *any = RANY(obj);
+    void *objspace = &rb_objspace;
+
+    /*if (LIKELY(during_gc)) {
+	rb_bug("rb_mmtk_referent_objects during GC");
+    }*/
+
+    //register RVALUE *any = RANY(obj);
+    //gc_mark_set_parent(objspace, obj);
+
+    if (FL_TEST(obj, FL_EXIVAR)) {
+	rb_bug("rb_mmtk_referent_objects not supported");
+	rb_mark_generic_ivar(obj);
+    }
+
+    switch (BUILTIN_TYPE(obj)) {
+      case T_FLOAT:
+      case T_BIGNUM:
+      case T_SYMBOL:
+        /* Not immediates, but does not have references and singleton
+         * class */
+	rb_bug("rb_mmtk_referent_objects not supported");
+        return;
+
+      case T_NIL:
+      case T_FIXNUM:
+	rb_bug("rb_mmtk_referent_objects not supported");
+	break;
+
+      case T_NODE:
+	rb_bug("rb_mmtk_referent_objects not supported");
+	//UNEXPECTED_NODE(rb_gc_mark);
+	break;
+
+      case T_IMEMO:
+	rb_bug("rb_mmtk_referent_objects not supported");
+	//gc_mark_imemo(objspace, obj);
+	return;
+
+      default:
+        break;
+    }
+
+    callback_object(objspace, (VALUE *)(&any->as.basic.klass));
+
+    switch (BUILTIN_TYPE(obj)) {
+      /*case T_CLASS:
+      case T_MODULE:
+        if (RCLASS_SUPER(obj)) {
+            gc_mark(objspace, RCLASS_SUPER(obj));
+        }
+	if (!RCLASS_EXT(obj)) break;
+
+        mark_m_tbl(objspace, RCLASS_M_TBL(obj));
+        cc_table_mark(objspace, obj);
+        mark_tbl_no_pin(objspace, RCLASS_IV_TBL(obj));
+	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
+	break;
+
+      case T_ICLASS:
+        if (RICLASS_OWNS_M_TBL_P(obj)) {
+	    mark_m_tbl(objspace, RCLASS_M_TBL(obj));
+	}
+        if (RCLASS_SUPER(obj)) {
+            gc_mark(objspace, RCLASS_SUPER(obj));
+        }
+	if (!RCLASS_EXT(obj)) break;
+	mark_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
+        cc_table_mark(objspace, obj);
+	break;*/
+
+      case T_ARRAY:
+        if (FL_TEST(obj, ELTS_SHARED)) {
+	        rb_bug("rb_mmtk_referent_objects shared array supported");
+            //VALUE root = any->as.array.as.heap.aux.shared_root;
+            //gc_mark(objspace, root);
+	}
+	else {
+	    long i, len = RARRAY_LEN(obj);
+            VALUE *ptr = (VALUE *)RARRAY_CONST_PTR_TRANSIENT(obj);
+	    for (i=0; i < len; i++) {
+                callback_object(objspace, &ptr[i]);
+	    }
+
+            /*if (LIKELY(during_gc)) {
+	        rb_bug("rb_mmtk_referent_objects not supported");
+                if (!FL_TEST_RAW(obj, RARRAY_EMBED_FLAG) &&
+                    RARRAY_TRANSIENT_P(obj)) {
+                    rb_transient_heap_mark(obj, ptr);
+                }
+            }*/
+        }
+	break;
+
+      /*case T_HASH:
+        mark_hash(objspace, obj);
+	break;
+
+      case T_STRING:
+	if (STR_SHARED_P(obj)) {
+	    gc_mark(objspace, any->as.string.as.heap.aux.shared);
+	}
+	break;
+
+      case T_DATA:
+	{
+	    void *const ptr = DATA_PTR(obj);
+	    if (ptr) {
+		RUBY_DATA_FUNC mark_func = RTYPEDDATA_P(obj) ?
+		    any->as.typeddata.type->function.dmark :
+		    any->as.data.dmark;
+		if (mark_func) (*mark_func)(ptr);
+	    }
+	}
+	break;
+
+      case T_OBJECT:
+        {
+            const VALUE * const ptr = ROBJECT_IVPTR(obj);
+
+            uint32_t i, len = ROBJECT_NUMIV(obj);
+            for (i  = 0; i < len; i++) {
+                gc_mark(objspace, ptr[i]);
+            }
+
+            if (LIKELY(during_gc) &&
+                    ROBJ_TRANSIENT_P(obj)) {
+                rb_transient_heap_mark(obj, ptr);
+            }
+        }
+	break;
+
+      case T_FILE:
+        if (any->as.file.fptr) {
+            gc_mark(objspace, any->as.file.fptr->self);
+            gc_mark(objspace, any->as.file.fptr->pathv);
+            gc_mark(objspace, any->as.file.fptr->tied_io_for_writing);
+            gc_mark(objspace, any->as.file.fptr->writeconv_asciicompat);
+            gc_mark(objspace, any->as.file.fptr->writeconv_pre_ecopts);
+            gc_mark(objspace, any->as.file.fptr->encs.ecopts);
+            gc_mark(objspace, any->as.file.fptr->write_lock);
+        }
+        break;
+
+      case T_REGEXP:
+        gc_mark(objspace, any->as.regexp.src);
+	break;
+
+      case T_MATCH:
+	gc_mark(objspace, any->as.match.regexp);
+	if (any->as.match.str) {
+	    gc_mark(objspace, any->as.match.str);
+	}
+	break;
+
+      case T_RATIONAL:
+	gc_mark(objspace, any->as.rational.num);
+	gc_mark(objspace, any->as.rational.den);
+	break;
+
+      case T_COMPLEX:
+	gc_mark(objspace, any->as.complex.real);
+	gc_mark(objspace, any->as.complex.imag);
+	break;
+
+      case T_STRUCT:
+	{
+            long i;
+            const long len = RSTRUCT_LEN(obj);
+            const VALUE * const ptr = RSTRUCT_CONST_PTR(obj);
+
+            for (i=0; i<len; i++) {
+                gc_mark(objspace, ptr[i]);
+            }
+
+            if (LIKELY(during_gc) &&
+                RSTRUCT_TRANSIENT_P(obj)) {
+                rb_transient_heap_mark(obj, ptr);
+            }
+	}
+	break;*/
+
+      default:
+	rb_bug("rb_mmtk_referent_objects not supported");
+/*#if GC_DEBUG
+	rb_gcdebug_print_obj_condition((VALUE)obj);
+#endif
+        if (BUILTIN_TYPE(obj) == T_MOVED)   rb_bug("rb_gc_mark(): %p is T_MOVED", (void *)obj);
+	if (BUILTIN_TYPE(obj) == T_NONE)   rb_bug("rb_gc_mark(): %p is T_NONE", (void *)obj);
+	if (BUILTIN_TYPE(obj) == T_ZOMBIE) rb_bug("rb_gc_mark(): %p is T_ZOMBIE", (void *)obj);
+	rb_bug("rb_gc_mark(): unknown data type 0x%x(%p) %s",
+	       BUILTIN_TYPE(obj), (void *)any,
+	       is_pointer_to_heap(objspace, any) ? "corrupted object" : "non object");*/
+    }
+}
+
+static VALUE array_helper;
+
+static void
+rb_mmtk_referent_objects_object_callback(void *user, VALUE *adjacent) {
+    rb_ary_push(array_helper, *adjacent);
+}
+
+static VALUE
+rb_mmtk_referent_objects_helper(int argc, VALUE *argv, VALUE os)
+{
+    VALUE of;
+
+    of = (!rb_check_arity(argc, 0, 1) ? 0 : argv[0]);
+    
+    array_helper = rb_ary_new();
+    rb_mmtk_referent_objects(of, &rb_mmtk_referent_objects_object_callback, NULL);
+    return array_helper;
+}
+
+void
+rb_mmtk_roots(void (*callback)(void **root)) {
+    abort();
+}
+
+void
+rb_mmtk_stacks(void (*callback)(void *stack, size_t size)) {
+    abort();
+}
+
+void
 Init_GC(void)
 {
 #undef rb_intern
@@ -12711,6 +12941,8 @@ Init_GC(void)
     rb_mObjSpace = rb_define_module("ObjectSpace");
 
     rb_define_module_function(rb_mObjSpace, "each_object", os_each_obj, -1);
+
+    rb_define_module_function(rb_mObjSpace, "rb_mmtk_referent_objects", rb_mmtk_referent_objects_helper, -1);
 
     rb_define_module_function(rb_mObjSpace, "define_finalizer", define_final, -1);
     rb_define_module_function(rb_mObjSpace, "undefine_finalizer", undefine_final, 1);

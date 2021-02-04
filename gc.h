@@ -135,6 +135,15 @@ void rb_objspace_each_objects_without_setup(
     int (*callback)(void *, void *, size_t, void *),
     void *data);
 
+// Takes a Ruby object and calls callback once for each outgoing reference from the object
+void rb_mmtk_referent_objects(VALUE obj, void (*callback_object)(void *user, VALUE *adjacent), void (*callback_data)(void **data));
+
+// Calls callback once for each regsitered GC root - doesn't include the stacks
+void rb_mmtk_roots(void (*callback)(void **root));
+
+// Calls callback once for each live stack
+void rb_mmtk_stacks(void (*callback)(void *stack, size_t size));
+
 RUBY_SYMBOL_EXPORT_END
 
 #endif /* RUBY_GC_H */
