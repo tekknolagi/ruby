@@ -9173,6 +9173,36 @@ gc_stat(rb_execution_context_t *ec, VALUE self, VALUE arg) // arg is (nil || has
     return arg;
 }
 
+static VALUE
+gc_root_list_sizes(rb_execution_context_t *ec, VALUE self)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    long linked_size = 0, bucket_size = 0;
+
+    {
+        struct gc_list *cur = global_list;
+        while (cur != NULL) {
+            linked_size++;
+            cur = cur->next;
+        }
+    }
+
+    {
+        rb_vm_t *vm = rb_ec_vm_ptr(ec);
+        long len = RARRAY_LEN(vm->mark_object_ary);
+        const VALUE *obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
+        for (long i = 0; i < len; i++) {
+            bucket_size += RARRAY_LEN(*obj_ary);
+            obj_ary++;
+        }
+    }
+
+    VALUE ret = rb_ary_new();
+    rb_ary_push(ret, LONG2FIX(linked_size));
+    rb_ary_push(ret, LONG2FIX(bucket_size));
+    return ret;
+}
+
 size_t
 rb_gc_stat(VALUE key)
 {
