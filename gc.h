@@ -139,7 +139,7 @@ void rb_objspace_each_objects_without_setup(
 void rb_mmtk_referent_objects(VALUE obj, void (*callback_object)(void *user, VALUE *adjacent), void (*callback_data)(void **data));
 
 // Calls callback once for each regsitered GC root - doesn't include the stacks
-void rb_mmtk_roots(void (*callback)(void **root));
+void rb_mmtk_roots(void (*callback_object)(VALUE adjacent));
 
 // Calls callback once for each live stack
 void rb_mmtk_stacks(void (*callback)(void *stack, size_t size));

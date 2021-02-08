@@ -12878,11 +12878,135 @@ rb_mmtk_referent_objects(VALUE obj, void (*callback_object)(void *user, VALUE *a
     }
 }
 
+void
+rb_mmtk_roots(void (*callback_object)(VALUE adjacent)) {
+    rb_objspace_t *objspace = &rb_objspace;
+
+    struct gc_list *list;
+    rb_execution_context_t *ec = GET_EC();
+    rb_vm_t *vm = rb_ec_vm_ptr(ec);
+
+    objspace->rgengc.parent_object = Qfalse;
+
+    // copied the contents of this function inline here.
+    // rb_vm_mark(vm);
+    {
+        rb_ractor_t *r = 0;
+        long i, len;
+        const VALUE *obj_ary;
+
+	list_for_each(&vm->ractor.set, r, vmlr_node) {
+            // ractor.set only contains blocking or running ractors
+            VM_ASSERT(rb_ractor_status_p(r, ractor_blocking) ||
+                      rb_ractor_status_p(r, ractor_running));
+            callback_object(rb_ractor_self(r));
+	}
+
+        callback_object(vm->mark_object_ary);
+
+        len = RARRAY_LEN(vm->mark_object_ary);
+        obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
+
+        for (i=0; i < len; i++) {
+            const VALUE *ptr;
+            long j, jlen;
+
+            //callback_object(*obj_ary);
+            jlen = RARRAY_LEN(*obj_ary);
+            ptr = RARRAY_CONST_PTR(*obj_ary);
+            for (j=0; j < jlen; j++) {
+                callback_object(*ptr++);
+            }
+            obj_ary++;
+        }
+
+        callback_object(vm->load_path);
+        callback_object(vm->load_path_snapshot);
+        callback_object(vm->load_path_check_cache);
+        callback_object(vm->expanded_load_path);
+        callback_object(vm->loaded_features);
+        callback_object(vm->loaded_features_snapshot);
+        callback_object(vm->top_self);
+        callback_object(vm->orig_progname);
+        callback_object(vm->coverages);
+        /* Prevent classes from moving */
+        
+        //rb_mark_tbl(vm->defined_module_hash); 
+        
+        // TODO: I tried replacing these with calls to st_foreach directly, but
+        // I guess I need to wrap the callback as the signature of the
+        // callbacks are different
+        // st_foreach(vm->defined_module_hash, callback_object, NULL);
+
+	if (vm->loading_table) {
+            // TODO: see above
+	    //rb_mark_tbl(vm->loading_table);
+	}
+
+	//rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd);
+        long j;
+        for (j=0; i<RUBY_NSIG; j++) {
+            gc_mark_and_pin(objspace, vm->trap_list.cmd[j]);
+        }
+
+        //rb_id_table_foreach_values(vm->negative_cme_table, callback_object, NULL);
+        for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
+            const struct rb_callcache *cc = vm->global_cc_cache_table[i];
+
+            if (cc != NULL) {
+                if (!vm_cc_invalidated_p(cc)) {
+                    callback_object((VALUE)cc);
+                }
+                else {
+                    vm->global_cc_cache_table[i] = NULL;
+                }
+            }
+        }
+
+        //mjit_mark();
+    }
+    // rb_vm_mark end
+
+    if (vm->self) 
+        callback_object(vm->self);
+
+    //mark_finalizer_tbl(objspace, finalizer_table);
+
+    //mark_current_machine_context(objspace, ec);
+
+    /* mark protected global variables */
+    for (list = global_list; list; list = list->next) {
+        callback_object(*list->varptr);
+    }
+
+    //callback
+    //rb_mark_end_proc();
+
+    //callback
+    //rb_gc_mark_global_tbl();
+
+    //callback
+    //rb_gc_mark(objspace->next_object_id);
+
+    //callback
+    //mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
+
+    //if (stress_to_class) 
+        //rb_gc_mark(stress_to_class);
+
+}
+
 static VALUE array_helper;
 
+// TODO: merge these?
 static void
 rb_mmtk_referent_objects_object_callback(void *user, VALUE *adjacent) {
     rb_ary_push(array_helper, *adjacent);
+}
+
+static void
+rb_mmtk_root_objects_callback(VALUE v) {
+    rb_ary_push(array_helper, v);
 }
 
 static VALUE
@@ -12897,10 +13021,18 @@ rb_mmtk_referent_objects_helper(int argc, VALUE *argv, VALUE os)
     return array_helper;
 }
 
-void
-rb_mmtk_roots(void (*callback)(void **root)) {
-    abort();
+static VALUE
+rb_mmtk_roots_helper(int argc, VALUE *argv, VALUE os)
+{
+    VALUE of;
+
+    of = (!rb_check_arity(argc, 0, 1) ? 0 : argv[0]);
+    
+    array_helper = rb_ary_new();
+    rb_mmtk_roots(&rb_mmtk_root_objects_callback);
+    return array_helper;
 }
+
 
 void
 rb_mmtk_stacks(void (*callback)(void *stack, size_t size)) {
@@ -12943,6 +13075,7 @@ Init_GC(void)
     rb_define_module_function(rb_mObjSpace, "each_object", os_each_obj, -1);
 
     rb_define_module_function(rb_mObjSpace, "rb_mmtk_referent_objects", rb_mmtk_referent_objects_helper, -1);
+    rb_define_module_function(rb_mObjSpace, "rb_mmtk_roots", rb_mmtk_roots_helper, -1);
 
     rb_define_module_function(rb_mObjSpace, "define_finalizer", define_final, -1);
     rb_define_module_function(rb_mObjSpace, "undefine_finalizer", undefine_final, 1);
