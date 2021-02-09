@@ -9177,7 +9177,7 @@ static VALUE
 gc_root_list_sizes(rb_execution_context_t *ec, VALUE self)
 {
     rb_objspace_t *objspace = &rb_objspace;
-    long linked_size = 0, bucket_size = 0;
+    long linked_size = 0, bucket_size = 0, immediates_in_bucket = 0;
 
     {
         struct gc_list *cur = global_list;
@@ -9191,15 +9191,22 @@ gc_root_list_sizes(rb_execution_context_t *ec, VALUE self)
         rb_vm_t *vm = rb_ec_vm_ptr(ec);
         long len = RARRAY_LEN(vm->mark_object_ary);
         const VALUE *obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
-        for (long i = 0; i < len; i++) {
-            bucket_size += RARRAY_LEN(*obj_ary);
-            obj_ary++;
+        for (long i = 0; i < len; i++, obj_ary++) {
+            const long obj_ary_len = RARRAY_LEN(*obj_ary);
+            const VALUE *obj = RARRAY_CONST_PTR(*obj_ary);
+
+            for (long j = 0; j < obj_ary_len; j++, obj++) {
+                if (SPECIAL_CONST_P(*obj)) immediates_in_bucket++;
+            }
+
+            bucket_size += obj_ary_len;
         }
     }
 
     VALUE ret = rb_ary_new();
     rb_ary_push(ret, LONG2FIX(linked_size));
     rb_ary_push(ret, LONG2FIX(bucket_size));
+    rb_ary_push(ret, LONG2FIX(immediates_in_bucket));
     return ret;
 }
 
