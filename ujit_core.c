@@ -560,8 +560,10 @@ void gen_direct_jump(
 void
 invalidate_block_version(block_t* block)
 {
+#ifdef UJIT_DEBUG
     fprintf(stderr, "invalidating block (%p, %d)\n", block->blockid.iseq, block->blockid.idx);
     fprintf(stderr, "block=%p\n", block);
+#endif
 
     // Find the first version for this blockid
     block_t* first_block = NULL;
@@ -656,7 +658,9 @@ invalidate_block_version(block_t* block)
     // Free the old block version object
     free(block);
 
+#ifdef UJIT_DEBUG
     fprintf(stderr, "invalidation done\n");
+#endif
 }
 
 int blockid_cmp(st_data_t arg0, st_data_t arg1)

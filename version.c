@@ -13,6 +13,7 @@
 #include "version.h"
 #include "vm_core.h"
 #include "mjit.h"
+#include "ujit.h" // for rb_ujit_enabled_p()
 #include "ujit_iface.h"
 #include <stdio.h>
 
