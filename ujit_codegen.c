@@ -247,12 +247,15 @@ ujit_gen_block(ctx_t* ctx, block_t* block)
 static bool
 gen_dup(jitstate_t* jit, ctx_t* ctx)
 {
-    x86opnd_t dup_val = ctx_stack_pop(ctx, 1);
-    x86opnd_t loc0 = ctx_stack_push(ctx, T_NONE);
-    x86opnd_t loc1 = ctx_stack_push(ctx, T_NONE);
+    // Get the top value and its type
+    x86opnd_t dup_val = ctx_stack_pop(ctx, 0);
+    int dup_type = ctx_get_top_type(ctx);
+
+    // Push the same value on top
+    x86opnd_t loc0 = ctx_stack_push(ctx, dup_type);
     mov(cb, REG0, dup_val);
     mov(cb, loc0, REG0);
-    mov(cb, loc1, REG0);
+
     return true;
 }
 
@@ -289,7 +292,19 @@ gen_putobject(jitstate_t* jit, ctx_t* ctx)
     {
         // Keep track of the fixnum type tag
         x86opnd_t stack_top = ctx_stack_push(ctx, T_FIXNUM);
-        mov(cb, stack_top, imm_opnd((int64_t)arg));
+
+        x86opnd_t imm = imm_opnd((int64_t)arg);
+
+        // 64-bit immediates can't be directly written to memory
+        if (imm.num_bits <= 32)
+        {
+            mov(cb, stack_top, imm);
+        }
+        else
+        {
+            mov(cb, REG0, imm);
+            mov(cb, stack_top, REG0);
+        }
     }
     else if (arg == Qtrue || arg == Qfalse)
     {
@@ -1311,15 +1326,6 @@ gen_opt_swb_iseq(jitstate_t* jit, ctx_t* ctx, struct rb_call_data * cd, const rb
     sub(cb, REG_CFP, imm_opnd(sizeof(rb_control_frame_t)));
     mov(cb, member_opnd(REG_EC, rb_execution_context_t, cfp), REG_CFP);
 
-
-
-
-
-    // FIXME
-    // FIXME: we could use REG_CFP here instead of REG1???
-    // FIXME: no need to reload from CFP
-
-
     // Setup the new frame
     // *cfp = (const struct rb_control_frame_struct) {
     //    .pc         = pc,
@@ -1330,23 +1336,17 @@ gen_opt_swb_iseq(jitstate_t* jit, ctx_t* ctx, struct rb_call_data * cd, const rb
     //    .block_code = 0,
     //    .__bp__     = sp,
     // };
-    mov(cb, REG1, member_opnd(REG_EC, rb_execution_context_t, cfp));
-    mov(cb, member_opnd(REG1, rb_control_frame_t, block_code), imm_opnd(0));
-    mov(cb, member_opnd(REG1, rb_control_frame_t, sp), REG0);
-    mov(cb, member_opnd(REG1, rb_control_frame_t, __bp__), REG0);
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, block_code), imm_opnd(0));
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, sp), REG0);
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, __bp__), REG0);
     sub(cb, REG0, imm_opnd(sizeof(VALUE)));
-    mov(cb, member_opnd(REG1, rb_control_frame_t, ep), REG0);
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, ep), REG0);
     mov(cb, REG0, recv);
-    mov(cb, member_opnd(REG1, rb_control_frame_t, self), REG0);
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, self), REG0);
     mov(cb, REG0, const_ptr_opnd(iseq));
-    mov(cb, member_opnd(REG1, rb_control_frame_t, iseq), REG0);
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, iseq), REG0);
     mov(cb, REG0, const_ptr_opnd(start_pc));
-    mov(cb, member_opnd(REG1, rb_control_frame_t, pc), REG0);
-
-
-
-
-
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, pc), REG0);
 
     // Stub so we can return to JITted code
     blockid_t return_block = { jit->iseq, jit_next_insn_idx(jit) };
@@ -1367,8 +1367,6 @@ gen_opt_swb_iseq(jitstate_t* jit, ctx_t* ctx, struct rb_call_data * cd, const rb
         &return_ctx,
         gen_return_branch
     );
-
-
 
     //print_str(cb, "calling Ruby func:");
     //print_str(cb, rb_id2name(vm_ci_mid(cd->ci)));
@@ -1457,18 +1455,11 @@ gen_leave(jitstate_t* jit, ctx_t* ctx)
     // TODO:
     // RUBY_VM_CHECK_INTS(ec);
 
-
-
-    // FIXME: not needed for interpreter
     // Load the return value
     mov(cb, REG0, ctx_stack_pop(ctx, 1));
 
-
-
     // Load the JIT return address
     mov(cb, REG1, member_opnd(REG_CFP, rb_control_frame_t, jit_return));
-
-
 
     // Pop the current frame (ec->cfp++)
     // Note: the return PC is already in the previous CFP
@@ -1479,14 +1470,7 @@ gen_leave(jitstate_t* jit, ctx_t* ctx)
     // The SP points one above the topmost value
     add(cb, member_opnd(REG_CFP, rb_control_frame_t, sp), imm_opnd(SIZEOF_VALUE));
     mov(cb, REG_SP, member_opnd(REG_CFP, rb_control_frame_t, sp));
-    mov(cb, mem_opnd(64, REG_SP, -SIZEOF_VALUE), REG0);
-
-
-
-
-
-
-    
+    mov(cb, mem_opnd(64, REG_SP, -SIZEOF_VALUE), REG0);  
 
     // If the return address is NULL, fall back to the interpreter
     int FALLBACK_LABEL = cb_new_label(cb, "FALLBACK");
@@ -1499,11 +1483,6 @@ gen_leave(jitstate_t* jit, ctx_t* ctx)
     // Fall back to the interpreter
     cb_write_label(cb, FALLBACK_LABEL);
     cb_link_labels(cb);
-
-
-
-
-
     cb_write_post_call_bytes(cb);
 
     return true;
