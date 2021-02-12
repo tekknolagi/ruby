@@ -2177,7 +2177,7 @@ rvargc_slot_count(size_t size)
 }
 
 static void *
-rvargc_pmalloc(size_t size, struct heap_page *page, RVALUE **freelist)
+rvargc_find_region(size_t size, struct heap_page *page, RVALUE **freelist)
 {
     int slots = (int)rvargc_slot_count(size);
     if (!*freelist) return 0;
@@ -2225,14 +2225,14 @@ static void *
 rvargc_malloc(size_t size)
 {
     rb_ractor_t *cr = GET_RACTOR();
-    return rvargc_pmalloc(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
+    return rvargc_find_region(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
 }
 
 
 static inline VALUE
 ractor_cached_free_region(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
 {
-    RVALUE *p = rvargc_pmalloc(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
+    RVALUE *p = rvargc_find_region(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
 
     if (p) {
         VALUE obj = (VALUE)p;
