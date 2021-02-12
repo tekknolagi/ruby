@@ -2241,13 +2241,19 @@ rvargc_malloc(size_t size)
 VALUE
 rb_rvargc_payload_init(VALUE obj, size_t size)
 {
-    struct RPayload *ph = (struct RPayload *)(obj + sizeof(RVALUE));
+    struct RPayload *ph = (struct RPayload *)obj;
     memset(ph, 0, size);
 
     ph->flags = T_PAYLOAD;
     ph->len = size;
 
     return (VALUE)ph + sizeof(struct RPayload);
+}
+
+void *
+rb_rvargc_payload_data_ptr(VALUE obj)
+{
+    return (void *)(obj + sizeof(RVALUE) + sizeof(struct RPayload));
 }
 
 static void
@@ -2403,6 +2409,9 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr, size_t a
          (obj = ractor_cached_free_region(objspace, cr, alloc_size)) != Qfalse)) {
 
         newobj_init(klass, flags, wb_protected, objspace, obj);
+
+        if (alloc_size > sizeof(RVALUE))
+            rb_rvargc_payload_init(obj + sizeof(RVALUE), alloc_size - sizeof(RVALUE));
     }
     else {
         RB_DEBUG_COUNTER_INC(obj_newobj_slowpath);
