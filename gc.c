@@ -559,7 +559,6 @@ struct RMoved {
 struct RPayload {
     VALUE flags;
     short len;
-    char data[];
 };
 
 typedef struct RVALUE {
@@ -2248,23 +2247,19 @@ rb_rvargc_payload_init(VALUE obj, size_t size)
     ph->flags = T_PAYLOAD;
     ph->len = size;
 
-    for (int i = 0; i < (int)rvargc_slot_count(size); i++) {
-        MARK_IN_BITMAP(GET_HEAP_PAYLOAD_BITS(obj), obj + (i * sizeof(RVALUE)));
-    }
-
-    return (VALUE)ph->data;
+    return (VALUE)ph + sizeof(struct RPayload);
 }
 
 static void
 rvargc_free(void *ptr)
 {
-    VALUE pstart = (VALUE)ptr - sizeof(struct RPayload);
-    int size = ((struct RPayload *)ptr)->len;
+    VALUE obj = (VALUE)ptr - sizeof(struct RPayload) - sizeof(RVALUE);
+    struct RPayload * pobj = (struct RPayload *)(obj + sizeof(RVALUE));
 
-    struct heap_page *page = GET_HEAP_PAGE(pstart);
+    struct heap_page *page = GET_HEAP_PAGE(obj);
 
-    for (int i = 0; i < size; i++) {
-        VALUE slot = pstart + i * sizeof(RVALUE);
+    for (int i = 0; i < (int)rvargc_slot_count(pobj->len); i++) {
+        VALUE slot = (VALUE)pobj + (i * sizeof(RVALUE));
 
         GC_ASSERT(GET_HEAP_PAGE(slot) == page);
         heap_page_add_freeobj(&rb_objspace, page, slot);
