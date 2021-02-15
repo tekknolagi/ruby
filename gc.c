@@ -2245,7 +2245,7 @@ rb_rvargc_payload_init(VALUE obj, size_t size)
     memset(ph, 0, size);
 
     ph->flags = T_PAYLOAD;
-    ph->len = size;
+    ph->len = rvargc_slot_count(size);
 
     return (VALUE)ph + sizeof(struct RPayload);
 }
