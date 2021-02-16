@@ -560,6 +560,7 @@ typedef struct RVALUE {
     union {
 	struct {
 	    VALUE flags;		/* always 0 for freed obj */
+            short len;
 	    struct RVALUE *next;
 	} free;
         struct RMoved  moved;
@@ -1689,6 +1690,18 @@ heap_allocatable_pages_set(rb_objspace_t *objspace, size_t s)
     heap_pages_expand_sorted(objspace);
 }
 
+// static inline void
+// heap_page_add_free_region(rb_objspace_t *objspace, struct heap_page *page, VALUE start, short len)
+// {
+//     ASSERT_vm_locking();
+
+//     RVALUE *p = (RVALUE *)start;
+
+//     p->as.free.flags = 0;
+//     p
+//     p->as.free.next = page->freelist;
+// }
+
 static inline void
 heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 {
@@ -1699,6 +1712,7 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
     p->as.free.flags = 0;
+    p->as.free.len = 0;
     p->as.free.next = page->freelist;
     page->freelist = p;
     asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
@@ -1809,7 +1823,7 @@ heap_pages_free_unused_pages(rb_objspace_t *objspace)
 static struct heap_page *
 heap_page_allocate(rb_objspace_t *objspace)
 {
-    RVALUE *start, *end, *p;
+    RVALUE *start, *end;
     struct heap_page *page;
     struct heap_page_body *page_body = 0;
     size_t hi, lo, mid;
@@ -1882,10 +1896,11 @@ heap_page_allocate(rb_objspace_t *objspace)
     page->total_slots = limit;
     page_body->header.page = page;
 
-    for (p = start; p != end; p++) {
-	gc_report(3, objspace, "assign_heap_page: %p is added to freelist\n", (void *)p);
-	heap_page_add_freeobj(objspace, page, (VALUE)p);
-    }
+    /* zero out slots and add the head to the freelist */
+    memset(start, 0, limit * sizeof(RVALUE));
+    start->as.free.len = limit - 1;
+    page->freelist = start;
+
     page->free_slots = limit;
 
     asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
@@ -2182,8 +2197,15 @@ ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
 
     if (p) {
         VALUE obj = (VALUE)p;
-        cr->newobj_cache.freelist = p->as.free.next;
         asan_unpoison_object(obj, true);
+        RVALUE *next;
+        if (p->as.free.len) {
+            next = p + 1;
+            next->as.free.len = p->as.free.len - 1;
+        } else {
+            next = p->as.free.next;
+        }
+        cr->newobj_cache.freelist = next;
         return obj;
     }
     else {
