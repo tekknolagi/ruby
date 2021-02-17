@@ -12727,6 +12727,11 @@ rb_mmtk_referent_objects(VALUE obj, void (*callback_object)(void *user, VALUE *a
 }
 
 void
+rb_mmtk_stacks(void (*callback_stack)(void *stack, size_t size)) {
+        callback_stack((void *)111, (size_t) 222);
+}
+
+void
 rb_mmtk_roots(void (*callback_object)(VALUE adjacent)) {
     rb_objspace_t *objspace = &rb_objspace;
 
@@ -12853,6 +12858,11 @@ rb_mmtk_referent_objects_object_callback(void *user, VALUE *adjacent) {
 }
 
 static void
+rb_mmtk_stacks_callback(void *stack, size_t size) {
+    rb_ary_push(array_helper, rb_ary_new_from_args(2, ULONG2NUM((unsigned long) stack), ULONG2NUM((unsigned long) size)));
+}
+
+static void
 rb_mmtk_root_objects_callback(VALUE v) {
     rb_ary_push(array_helper, v);
 }
@@ -12870,6 +12880,14 @@ rb_mmtk_referent_objects_helper(int argc, VALUE *argv, VALUE os)
 }
 
 static VALUE
+rb_mmtk_stacks_helper(VALUE self)
+{
+    array_helper = rb_ary_new();
+    rb_mmtk_stacks(&rb_mmtk_stacks_callback);
+    return array_helper;
+}
+
+static VALUE
 rb_mmtk_roots_helper(int argc, VALUE *argv, VALUE os)
 {
     VALUE of;
@@ -12879,12 +12897,6 @@ rb_mmtk_roots_helper(int argc, VALUE *argv, VALUE os)
     array_helper = rb_ary_new();
     rb_mmtk_roots(&rb_mmtk_root_objects_callback);
     return array_helper;
-}
-
-
-void
-rb_mmtk_stacks(void (*callback)(void *stack, size_t size)) {
-    abort();
 }
 
 void
@@ -12923,6 +12935,7 @@ Init_GC(void)
     rb_define_module_function(rb_mObjSpace, "each_object", os_each_obj, -1);
 
     rb_define_module_function(rb_mObjSpace, "rb_mmtk_referent_objects", rb_mmtk_referent_objects_helper, -1);
+    rb_define_module_function(rb_mObjSpace, "rb_mmtk_stacks", rb_mmtk_stacks_helper, 0);
     rb_define_module_function(rb_mObjSpace, "rb_mmtk_roots", rb_mmtk_roots_helper, -1);
 
     rb_define_module_function(rb_mObjSpace, "define_finalizer", define_final, -1);
