@@ -1690,18 +1690,6 @@ heap_allocatable_pages_set(rb_objspace_t *objspace, size_t s)
     heap_pages_expand_sorted(objspace);
 }
 
-// static inline void
-// heap_page_add_free_region(rb_objspace_t *objspace, struct heap_page *page, VALUE start, short len)
-// {
-//     ASSERT_vm_locking();
-
-//     RVALUE *p = (RVALUE *)start;
-
-//     p->as.free.flags = 0;
-//     p
-//     p->as.free.next = page->freelist;
-// }
-
 static inline void
 heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 {
@@ -1897,9 +1885,13 @@ heap_page_allocate(rb_objspace_t *objspace)
     page_body->header.page = page;
 
     /* zero out slots and add the head to the freelist */
-    memset(start, 0, limit * sizeof(RVALUE));
-    start->as.free.len = limit - 1;
     page->freelist = start;
+    RVALUE *p = start;
+    for (int i = limit - 1; i >= 0; i--, p++) {
+        p->as.free.flags = 0;
+        p->as.free.len = i;
+        p->as.free.next = NULL;
+    }
 
     page->free_slots = limit;
 
