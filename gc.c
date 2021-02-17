@@ -2193,7 +2193,6 @@ ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
         RVALUE *next;
         if (p->as.free.len) {
             next = p + 1;
-            next->as.free.len = p->as.free.len - 1;
         } else {
             next = p->as.free.next;
         }
