@@ -560,6 +560,7 @@ struct RPayload {
     VALUE flags;
     short len;
 };
+#define RPAYLOAD(obj) ((struct RPayload *)obj)
 
 typedef struct RVALUE {
     union {
@@ -852,7 +853,6 @@ struct heap_page {
     bits_t mark_bits[HEAP_PAGE_BITMAP_LIMIT];
     bits_t uncollectible_bits[HEAP_PAGE_BITMAP_LIMIT];
     bits_t marking_bits[HEAP_PAGE_BITMAP_LIMIT];
-    bits_t payload_bits[HEAP_PAGE_BITMAP_LIMIT];
 
     /* If set, the object is not movable */
     bits_t pinned_bits[HEAP_PAGE_BITMAP_LIMIT];
@@ -878,7 +878,6 @@ struct heap_page {
 #define GET_HEAP_UNCOLLECTIBLE_BITS(x)  (&GET_HEAP_PAGE(x)->uncollectible_bits[0])
 #define GET_HEAP_WB_UNPROTECTED_BITS(x) (&GET_HEAP_PAGE(x)->wb_unprotected_bits[0])
 #define GET_HEAP_MARKING_BITS(x)        (&GET_HEAP_PAGE(x)->marking_bits[0])
-#define GET_HEAP_PAYLOAD_BITS(x)        (&GET_HEAP_PAGE(x)->payload_bits[0])
 
 /* Aliases */
 #define rb_objspace (*rb_objspace_of(GET_VM()))
@@ -1043,7 +1042,7 @@ static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
 
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
-static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr);
+static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr, int allow_none);
 static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr, int allow_none);
 NO_SANITIZE("memory", static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr));
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
@@ -1226,12 +1225,10 @@ tick(void)
 #define RVALUE_WB_UNPROTECTED_BITMAP(obj) MARKED_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), (obj))
 #define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  MARKED_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS(obj), (obj))
 #define RVALUE_MARKING_BITMAP(obj)        MARKED_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), (obj))
-#define RVALUE_PAYLOAD_BITMAP(obj)        MARKED_IN_BITMAP(GET_HEAP_PAYLOAD_BITS(obj), (obj))
 
 #define RVALUE_PAGE_WB_UNPROTECTED(page, obj) MARKED_IN_BITMAP((page)->wb_unprotected_bits, (obj))
 #define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  MARKED_IN_BITMAP((page)->uncollectible_bits, (obj))
 #define RVALUE_PAGE_MARKING(page, obj)        MARKED_IN_BITMAP((page)->marking_bits, (obj))
-#define RVALUE_PAGE_PAYLOAD(page, obj)        MARKED_IN_BITMAP((page)->payload_bits, (obj))
 
 #define RVALUE_OLD_AGE   3
 #define RVALUE_AGE_SHIFT 5 /* FL_PROMOTED0 bit */
@@ -1249,14 +1246,33 @@ RVALUE_FLAGS_AGE(VALUE flags)
 }
 
 static int
+in_payload_p(VALUE obj)
+{
+    int i = 1;
+    struct heap_page * p = GET_HEAP_PAGE(obj);
+
+    while (BUILTIN_TYPE(obj) != T_PAYLOAD && GET_HEAP_PAGE(obj) == p) {
+        obj = obj - i * sizeof(RVALUE);
+
+        if (BUILTIN_TYPE(obj) == T_PAYLOAD && i < RPAYLOAD(obj)->len) { 
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int
 check_rvalue_consistency_force(const VALUE obj, int terminate)
 {
     rb_objspace_t *objspace = &rb_objspace;
     int err = 0;
 
     if (SPECIAL_CONST_P(obj)) {
-        fprintf(stderr, "check_rvalue_consistency: %p is a special const.\n", (void *)obj);
-        err++;
+        if(!in_payload_p(obj)) {
+            fprintf(stderr, "check_rvalue_consistency: %p is a special const.\n", (void *)obj);
+            err++;
+        }
     }
     else if (!is_pointer_to_heap(objspace, (void *)obj)) {
         /* check if it is in tomb_pages */
@@ -1288,15 +1304,19 @@ check_rvalue_consistency_force(const VALUE obj, int terminate)
             err++;
         }
         if (BUILTIN_TYPE(obj) == T_NONE) {
-            fprintf(stderr, "check_rvalue_consistency: %s is T_NONE.\n", obj_info(obj));
-            err++;
+            if (!in_payload_p(obj)) {
+                fprintf(stderr, "check_rvalue_consistency: %s is T_NONE.\n", obj_info(obj));
+                err++;
+            }
         }
         if (BUILTIN_TYPE(obj) == T_ZOMBIE) {
             fprintf(stderr, "check_rvalue_consistency: %s is T_ZOMBIE.\n", obj_info(obj));
             err++;
         }
 
-        obj_memsize_of((VALUE)obj, FALSE);
+
+        // TODO: This is pure, but we're throwing away the return value, why?
+        // obj_memsize_of((VALUE)obj, FALSE);
 
         /* check generation
          *
@@ -2241,11 +2261,13 @@ rvargc_malloc(size_t size)
 VALUE
 rb_rvargc_payload_init(VALUE obj, size_t size)
 {
+    rb_objspace_t * objspace = &rb_objspace;
     struct RPayload *ph = (struct RPayload *)obj;
     memset(ph, 0, size);
 
     ph->flags = T_PAYLOAD;
     ph->len = rvargc_slot_count(size);
+    objspace->total_allocated_objects += rvargc_slot_count(size);
 
     return (VALUE)ph + sizeof(struct RPayload);
 }
@@ -2255,26 +2277,6 @@ rb_rvargc_payload_data_ptr(VALUE obj)
 {
     return (void *)(obj + sizeof(RVALUE) + sizeof(struct RPayload));
 }
-
-static void
-rvargc_free(void *ptr)
-{
-    VALUE obj = (VALUE)ptr - sizeof(struct RPayload) - sizeof(RVALUE);
-    struct RPayload * pobj = (struct RPayload *)(obj + sizeof(RVALUE));
-
-    struct heap_page *page = GET_HEAP_PAGE(obj);
-
-    for (int i = 0; i < (int)rvargc_slot_count(pobj->len); i++) {
-        VALUE slot = (VALUE)pobj + (i * sizeof(RVALUE));
-
-        GC_ASSERT(GET_HEAP_PAGE(slot) == page);
-        heap_page_add_freeobj(&rb_objspace, page, slot);
-
-        GC_ASSERT(RVALUE_PAYLOAD_BITMAP(slot));
-        CLEAR_IN_BITMAP(page->payload_bits, slot);
-    }
-}
-
 
 static inline VALUE
 ractor_cached_free_region(rb_objspace_t *objspace, rb_ractor_t *cr, size_t size)
@@ -2360,6 +2362,10 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_t *
         }
         GC_ASSERT(obj != 0);
         newobj_init(klass, flags, wb_protected, objspace, obj);
+
+        if (alloc_size > sizeof(RVALUE))
+            rb_rvargc_payload_init(obj + sizeof(RVALUE), alloc_size - sizeof(RVALUE));
+
         gc_event_hook(objspace, RUBY_INTERNAL_EVENT_NEWOBJ, obj);
     }
     RB_VM_LOCK_LEAVE_CR_LEV(cr, &lev);
@@ -2962,12 +2968,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	rb_class_remove_from_module_subclasses(obj);
 	rb_class_remove_from_super_subclasses(obj);
 	if (RCLASS_EXT(obj))
-#if USE_RVARGC
-            rvargc_free(RCLASS_EXT(obj));
-#else
-	    xfree(RCLASS_EXT(obj));
-#endif
-	RCLASS_EXT(obj) = NULL;
+            RCLASS_EXT(obj) = NULL;
 
         (void)RB_DEBUG_COUNTER_INC_IF(obj_module_ptr, BUILTIN_TYPE(obj) == T_MODULE);
         (void)RB_DEBUG_COUNTER_INC_IF(obj_class_ptr, BUILTIN_TYPE(obj) == T_CLASS);
@@ -3133,11 +3134,6 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         cc_table_free(objspace, obj, FALSE);
 	rb_class_remove_from_module_subclasses(obj);
 	rb_class_remove_from_super_subclasses(obj);
-#if USE_RVARGC
-        rvargc_free(RCLASS_EXT(obj));
-#else
-	xfree(RCLASS_EXT(obj));
-#endif
 	RCLASS_EXT(obj) = NULL;
 
         RB_DEBUG_COUNTER_INC(obj_iclass_ptr);
@@ -3160,6 +3156,10 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
       case T_NODE:
 	UNEXPECTED_NODE(obj_free);
 	break;
+
+      //case T_PAYLOAD:
+        /* for (int i = 0; i<obj->len; i++) */
+        /*     heap_page_add_freeobj(obj + i); */
 
       case T_STRUCT:
         if ((RBASIC(obj)->flags & RSTRUCT_EMBED_LEN_MASK) ||
@@ -3467,7 +3467,6 @@ internal_object_p(VALUE obj)
 	    return 0;
 	  default:
 	    if (!p->as.basic.klass) break;
-            if (RVALUE_PAYLOAD_BITMAP(p)) break;
 	    return 0;
 	}
     }
@@ -4419,6 +4418,7 @@ obj_memsize_of(VALUE obj, int use_all_types)
 
       case T_ZOMBIE:
       case T_MOVED:
+      case T_PAYLOAD:
 	break;
 
       default:
@@ -4985,7 +4985,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     int empty_slots = 0, freed_slots = 0, final_slots = 0;
     int was_compacting = 0;
     RVALUE *p, *offset;
-    bits_t *bits, *pbits, bitset;
+    bits_t *bits, bitset;
 
     gc_report(2, objspace, "page_sweep: start.\n");
 
@@ -5009,7 +5009,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     p = sweep_page->start;
     offset = p - NUM_IN_PAGE(p);
     bits = sweep_page->mark_bits;
-    pbits = sweep_page->payload_bits;
 
     /* create guard : fill 1 out-of-range */
     bits[BITMAP_INDEX(p)] |= BITMAP_BIT(p)-1;
@@ -5020,10 +5019,11 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     }
 
     for (i=0; i < HEAP_PAGE_BITMAP_LIMIT; i++) {
-	bitset = ~bits[i] & ~pbits[i];
+	bitset = ~bits[i];
 	if (bitset) {
 	    p = offset  + i * BITS_BITLENGTH;
 	    do {
+                int inc = 1, plen = 1;
                 VALUE vp = (VALUE)p;
                 asan_unpoison_object(vp, false);
 		if (bitset & 1) {
@@ -5055,6 +5055,18 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                         break;
 
 			/* minor cases */
+                      case T_PAYLOAD:
+                        plen = RPAYLOAD(vp)->len;
+                        for (int i = 0; i < plen; i++) {
+                            VALUE pbody = vp + i * sizeof(RVALUE);
+
+                            (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)pbody, sizeof(RVALUE));
+                            heap_page_add_freeobj(objspace, sweep_page, pbody);
+                            gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(pbody));
+                            freed_slots++;
+                        }
+                        inc = plen;
+                        break;
 		      case T_MOVED:
                         if (objspace->flags.during_compacting) {
                             /* The sweep cursor shouldn't have made it to any
@@ -5094,8 +5106,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 			break;
 		    }
 		}
-		p++;
-		bitset >>= 1;
+		p += plen;
+		bitset >>= plen;
 	    } while (bitset);
 	}
     }
@@ -5774,7 +5786,7 @@ rb_gc_mark_values(long n, const VALUE *values)
     rb_objspace_t *objspace = &rb_objspace;
 
     for (i=0; i<n; i++) {
-        gc_mark_and_pin(objspace, values[i]);
+        gc_mark_and_pin(objspace, values[i], 0);
     }
 }
 
@@ -5785,7 +5797,7 @@ gc_mark_stack_values(rb_objspace_t *objspace, long n, const VALUE *values)
 
     for (i=0; i<n; i++) {
         if (is_markable_object(objspace, values[i])) {
-            gc_mark_and_pin(objspace, values[i]);
+            gc_mark_and_pin(objspace, values[i], 0);
         }
     }
 }
@@ -5809,7 +5821,7 @@ static int
 mark_value_pin(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
-    gc_mark_and_pin(objspace, (VALUE)value);
+    gc_mark_and_pin(objspace, (VALUE)value, 0);
     return ST_CONTINUE;
 }
 
@@ -5831,7 +5843,7 @@ static int
 mark_key(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
-    gc_mark_and_pin(objspace, (VALUE)key);
+    gc_mark_and_pin(objspace, (VALUE)key, 0);
     return ST_CONTINUE;
 }
 
@@ -5846,7 +5858,7 @@ static int
 pin_value(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
-    gc_mark_and_pin(objspace, (VALUE)value);
+    gc_mark_and_pin(objspace, (VALUE)value, 0);
     return ST_CONTINUE;
 }
 
@@ -5878,8 +5890,8 @@ pin_key_pin_value(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
-    gc_mark_and_pin(objspace, (VALUE)key);
-    gc_mark_and_pin(objspace, (VALUE)value);
+    gc_mark_and_pin(objspace, (VALUE)key, 0);
+    gc_mark_and_pin(objspace, (VALUE)value, 0);
     return ST_CONTINUE;
 }
 
@@ -5888,7 +5900,7 @@ pin_key_mark_value(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
-    gc_mark_and_pin(objspace, (VALUE)key);
+    gc_mark_and_pin(objspace, (VALUE)key, 0);
     gc_mark(objspace, (VALUE)value);
     return ST_CONTINUE;
 }
@@ -6091,7 +6103,7 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
           case T_NONE:
             break;
           default:
-            gc_mark_and_pin(objspace, obj);
+            gc_mark_and_pin(objspace, obj, 0);
             break;
         }
 
@@ -6222,7 +6234,7 @@ NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_n
 static void reachable_objects_from_callback(VALUE obj);
 
 static void
-gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_none)
+gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int payload_body_p)
 {
     if (LIKELY(during_gc)) {
 	rgengc_check_relation(objspace, obj);
@@ -6239,12 +6251,19 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_none)
             }
         }
 
-        if (UNLIKELY(RB_TYPE_P(obj, T_NONE) && !allow_none)) {
+        if (UNLIKELY(RB_TYPE_P(obj, T_NONE) && !payload_body_p)) {
             rp(obj);
             rb_bug("try to mark T_NONE object"); /* check here will help debugging */
         }
 	gc_aging(objspace, obj);
-	gc_grey(objspace, obj);
+
+        /* if we're in the middle of a payload body we want to mark the slot
+         * directly instead of adding it to the mark stack */
+        if (payload_body_p) {
+            MARK_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), obj);
+        } else {
+            gc_grey(objspace, obj);
+        }
     }
     else {
         reachable_objects_from_callback(obj);
@@ -6263,11 +6282,11 @@ gc_pin(rb_objspace_t *objspace, VALUE obj)
 }
 
 static inline void
-gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj)
+gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj, int payload_body_p)
 {
     if (!is_markable_object(objspace, obj)) return;
     gc_pin(objspace, obj);
-    gc_mark_ptr(objspace, obj, 0);
+    gc_mark_ptr(objspace, obj, payload_body_p);
 }
 
 static inline void
@@ -6286,7 +6305,7 @@ rb_gc_mark_movable(VALUE ptr)
 void
 rb_gc_mark(VALUE ptr)
 {
-    gc_mark_and_pin(&rb_objspace, ptr);
+    gc_mark_and_pin(&rb_objspace, ptr, 0);
 }
 
 /* CAUTION: THIS FUNCTION ENABLE *ONLY BEFORE* SWEEPING.
@@ -6390,6 +6409,17 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 }
 
 static void
+gc_mark_payload(rb_objspace_t *objspace, VALUE obj)
+{
+    GC_ASSERT(BUILTIN_TYPE(obj) == T_PAYLOAD);
+
+    for (int i = 1 ; i < RPAYLOAD(obj)->len; i++) {
+        VALUE p = obj + i * sizeof(RVALUE);
+        gc_mark_and_pin(objspace, p, 1);
+    }
+}
+
+static void
 gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 {
     register RVALUE *any = RANY(obj);
@@ -6427,6 +6457,9 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
     gc_mark(objspace, any->as.basic.klass);
 
     switch (BUILTIN_TYPE(obj)) {
+      case T_PAYLOAD:
+          gc_mark_payload(objspace, obj);
+          break;
       case T_CLASS:
       case T_MODULE:
         if (RCLASS_SUPER(obj)) {
@@ -6438,6 +6471,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
         cc_table_mark(objspace, obj);
         mark_tbl_no_pin(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
+        gc_mark_payload(objspace, (VALUE)RCLASS(obj)->ptr - sizeof(struct RPayload));
 	break;
 
       case T_ICLASS:
@@ -6450,6 +6484,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 	if (!RCLASS_EXT(obj)) break;
 	mark_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
         cc_table_mark(objspace, obj);
+        gc_mark_payload(objspace, (VALUE)RCLASS(obj)->ptr - sizeof(struct RPayload));
 	break;
 
       case T_ARRAY:
@@ -7046,11 +7081,16 @@ check_children_i(const VALUE child, void *ptr)
 static int
 verify_internal_consistency_i(void *page_start, void *page_end, size_t stride, void *ptr)
 {
+    size_t istride = stride;
     struct verify_internal_consistency_struct *data = (struct verify_internal_consistency_struct *)ptr;
     VALUE obj;
     rb_objspace_t *objspace = data->objspace;
 
     for (obj = (VALUE)page_start; obj != (VALUE)page_end; obj += stride) {
+        if (BUILTIN_TYPE(obj) == T_PAYLOAD)
+            fprintf(stderr, "\n");
+
+        stride = istride;
         void *poisoned = asan_poisoned_object_p(obj);
         asan_unpoison_object(obj, false);
 
@@ -7083,6 +7123,14 @@ verify_internal_consistency_i(void *page_start, void *page_end, size_t stride, v
 		    rb_objspace_reachable_objects_from(obj, check_color_i, (void *)data);
 		}
 	    }
+
+            /* if obj is a payload header we need to mark the other slots
+             * compromising the payload and skipt over the rest of the payload
+             * body */
+            if (BUILTIN_TYPE(obj) == T_PAYLOAD) {
+                data->live_object_count += RPAYLOAD(obj)->len - 1;
+                stride = RPAYLOAD(obj)->len * sizeof(RVALUE);
+            }
 	}
 	else {
 	    if (BUILTIN_TYPE(obj) == T_ZOMBIE) {
