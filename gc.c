@@ -1042,8 +1042,8 @@ static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
 
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
-static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr, int allow_none);
-static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr, int allow_none);
+static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr, int payload_body_p);
+static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr, int payload_body_p);
 NO_SANITIZE("memory", static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr));
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
 
@@ -2251,19 +2251,12 @@ rvargc_find_region(size_t size, struct heap_page *page, RVALUE **freelist)
     return NULL;
 }
 
-static void *
-rvargc_malloc(size_t size)
-{
-    rb_ractor_t *cr = GET_RACTOR();
-    return rvargc_find_region(size, cr->newobj_cache.using_page, &cr->newobj_cache.freelist);
-}
-
 VALUE
 rb_rvargc_payload_init(VALUE obj, size_t size)
 {
     rb_objspace_t * objspace = &rb_objspace;
     struct RPayload *ph = (struct RPayload *)obj;
-    memset(ph, 0, size);
+    memset(ph, 0, rvargc_slot_count(size) * sizeof(RVALUE));
 
     ph->flags = T_PAYLOAD;
     ph->len = rvargc_slot_count(size);
@@ -5062,7 +5055,6 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 
                             (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)pbody, sizeof(RVALUE));
                             heap_page_add_freeobj(objspace, sweep_page, pbody);
-                            gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(pbody));
                             freed_slots++;
                         }
                         inc = plen;
@@ -6230,7 +6222,7 @@ gc_aging(rb_objspace_t *objspace, VALUE obj)
     objspace->marked_slots++;
 }
 
-NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_none));
+NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int payload_body_p));
 static void reachable_objects_from_callback(VALUE obj);
 
 static void
