@@ -1044,7 +1044,7 @@ static void gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *heap);
 static inline void gc_mark(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_pin(rb_objspace_t *objspace, VALUE ptr);
 static inline void gc_mark_and_pin(rb_objspace_t *objspace, VALUE ptr);
-static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr);
+static void gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr, int allow_none);
 NO_SANITIZE("memory", static void gc_mark_maybe(rb_objspace_t *objspace, VALUE ptr));
 static void gc_mark_children(rb_objspace_t *objspace, VALUE ptr);
 
@@ -6218,11 +6218,11 @@ gc_aging(rb_objspace_t *objspace, VALUE obj)
     objspace->marked_slots++;
 }
 
-NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj));
+NOINLINE(static void gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_none));
 static void reachable_objects_from_callback(VALUE obj);
 
 static void
-gc_mark_ptr(rb_objspace_t *objspace, VALUE obj)
+gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int allow_none)
 {
     if (LIKELY(during_gc)) {
 	rgengc_check_relation(objspace, obj);
@@ -6239,7 +6239,7 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE obj)
             }
         }
 
-        if (UNLIKELY(RB_TYPE_P(obj, T_NONE))) {
+        if (UNLIKELY(RB_TYPE_P(obj, T_NONE) && !allow_none)) {
             rp(obj);
             rb_bug("try to mark T_NONE object"); /* check here will help debugging */
         }
@@ -6267,14 +6267,14 @@ gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj)
 {
     if (!is_markable_object(objspace, obj)) return;
     gc_pin(objspace, obj);
-    gc_mark_ptr(objspace, obj);
+    gc_mark_ptr(objspace, obj, 0);
 }
 
 static inline void
 gc_mark(rb_objspace_t *objspace, VALUE obj)
 {
     if (!is_markable_object(objspace, obj)) return;
-    gc_mark_ptr(objspace, obj);
+    gc_mark_ptr(objspace, obj, 0);
 }
 
 void
