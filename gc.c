@@ -6583,6 +6583,7 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(
 
     MARK_CHECKPOINT("vm");
     SET_STACK_END;
+
     rb_vm_mark(vm);
     if (vm->self) gc_mark(objspace, vm->self);
 
@@ -6605,10 +6606,12 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(
     rb_gc_mark_global_tbl();
 
     MARK_CHECKPOINT("object_id");
-    callback(objspace->next_object_id);
+
+    rb_gc_mark(objspace->next_object_id);
+
     mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
 
-    if (stress_to_class) callback(stress_to_class);
+    if (stress_to_class) rb_gc_mark(stress_to_class);
 
     MARK_CHECKPOINT("finish");
 #undef MARK_CHECKPOINT
