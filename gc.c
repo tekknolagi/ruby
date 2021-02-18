@@ -6585,8 +6585,7 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, VOID_VALUE_CALLBA
     MARK_CHECKPOINT("vm");
     SET_STACK_END;
 
-    if (!callback)
-        rb_vm_mark(vm, callback);
+    rb_vm_mark(vm, callback);
 
     if (callback) {
         callback(vm->self);

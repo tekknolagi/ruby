@@ -2535,7 +2535,7 @@ vm_mark_negative_cme(VALUE val, void *dmy)
 }
 
 void
-rb_vm_mark(void *ptr, void (*callback)(VALUE obj))
+rb_vm_mark(void *ptr, VOID_VALUE_CALLBACK)
 {
     RUBY_MARK_ENTER("vm");
     RUBY_GC_INFO("-------------------------------------------------\n");
@@ -2618,7 +2618,9 @@ rb_vm_mark(void *ptr, void (*callback)(VALUE obj))
 
         rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd, callback);
 
-        rb_id_table_foreach_values(vm->negative_cme_table, vm_mark_negative_cme, NULL);
+        if (!callback) {
+            rb_id_table_foreach_values(vm->negative_cme_table, vm_mark_negative_cme, NULL);
+        }
         for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
             const struct rb_callcache *cc = vm->global_cc_cache_table[i];
 
@@ -2638,10 +2640,10 @@ rb_vm_mark(void *ptr, void (*callback)(VALUE obj))
 
         if (!callback) {
             mjit_mark();
+            RUBY_MARK_LEAVE("vm");
         }
     }
 
-    RUBY_MARK_LEAVE("vm");
 }
 
 #undef rb_vm_register_special_exception
