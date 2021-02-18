@@ -206,6 +206,17 @@ class TestObjSpace < Test::Unit::TestCase
     }
   end
 
+  def test_trace_object_allocations_gc_stress
+    ObjectSpace.trace_object_allocations_clear # clear object_table to get rid of erroneous detection for c0
+
+    GC.stress = true # See [Bug #17599]
+    ObjectSpace.trace_object_allocations{
+      10.times { Object.new }
+    }
+  ensure
+    GC.stress = false
+  end
+
   def test_trace_object_allocations_start_stop_clear
     ObjectSpace.trace_object_allocations_clear # clear object_table to get rid of erroneous detection for obj3
     GC.disable # suppress potential object reuse. see [Bug #11271]
