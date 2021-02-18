@@ -4877,7 +4877,6 @@ gc_fill_swept_page(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *s
 static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
-    int i;
     int empty_slots = 0, freed_slots = 0, final_slots = 0;
     RVALUE *p, *offset;
     bits_t *bits, bitset;
@@ -4893,11 +4892,11 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
         else {
             /* We anticipate filling the page, so NULL out the freelist. */
             asan_unpoison_memory_region(&sweep_page->freelist, sizeof(RVALUE*), false);
-            sweep_page->freelist = NULL;
             asan_poison_memory_region(&sweep_page->freelist, sizeof(RVALUE*));
         }
     }
 
+    sweep_page->freelist = NULL;
     sweep_page->flags.before_sweep = FALSE;
 
     p = sweep_page->start;
@@ -4912,78 +4911,95 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
         bits[BITMAP_INDEX(p) + sweep_page->total_slots / BITS_BITLENGTH] |= ~(((bits_t)1 << out_of_range_bits) - 1);
     }
 
-    for (i=0; i < HEAP_PAGE_BITMAP_LIMIT; i++) {
-	bitset = ~bits[i];
-	if (bitset) {
-	    p = offset  + i * BITS_BITLENGTH;
-	    do {
-                VALUE vp = (VALUE)p;
-                asan_unpoison_object(vp, false);
-		if (bitset & 1) {
-                    switch (BUILTIN_TYPE(vp)) {
-		      default: /* majority case */
-                        gc_report(2, objspace, "page_sweep: free %p\n", (void *)p);
+    bitset = ~bits[0];
+    bitset >>= NUM_IN_PAGE(p);
+
+    RVALUE *end = p + sweep_page->total_slots;
+    while (p < end) {
+        if (!bitset) {
+            int i = (int)(p - offset);
+            int next_i = (i + BITS_BITLENGTH - 1) & -BITS_BITLENGTH;
+            GC_ASSERT(next_i % BITS_BITLENGTH == 0);
+            GC_ASSERT(next_i >= i);
+            GC_ASSERT(next_i - i <= BITS_BITLENGTH);
+            p = offset + next_i;
+
+            if (p < end) {
+                int bitmap_index = next_i / BITS_BITLENGTH;
+                GC_ASSERT(bitmap_index < HEAP_PAGE_BITMAP_LIMIT);
+                bitset = ~bits[bitmap_index];
+            }
+            else {
+                break;
+            }
+        }
+
+        if (bitset & 1) {
+            VALUE vp = (VALUE)p;
+
+            switch (BUILTIN_TYPE(vp)) {
+              default: /* majority case */
+                gc_report(2, objspace, "page_sweep: free %p\n", (void *)p);
 #if RGENGC_CHECK_MODE
-                        if (!is_full_marking(objspace)) {
-                            if (RVALUE_OLD_P(vp)) rb_bug("page_sweep: %p - old while minor GC.", (void *)p);
-                            if (rgengc_remembered_sweep(objspace, vp)) rb_bug("page_sweep: %p - remembered.", (void *)p);
-                        }
+                if (!is_full_marking(objspace)) {
+                    if (RVALUE_OLD_P(vp)) rb_bug("page_sweep: %p - old while minor GC.", (void *)p);
+                    if (rgengc_remembered_sweep(objspace, vp)) rb_bug("page_sweep: %p - remembered.", (void *)p);
+                }
 #endif
-                        if (obj_free(objspace, vp)) {
-                            final_slots++;
-                        }
-                        else {
-                            if (heap->compact_cursor) {
-                                /* We *want* to fill this slot */
-                                MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(vp), vp);
-                            }
-                            else {
-                                (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
-                                heap_page_add_freeobj(objspace, sweep_page, vp);
-                                gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
-                                freed_slots++;
-                            }
-
-                        }
-                        break;
-
-			/* minor cases */
-		      case T_MOVED:
-                        if (objspace->flags.during_compacting) {
-                            /* The sweep cursor shouldn't have made it to any
-                             * T_MOVED slots while the compact flag is enabled.
-                             * The sweep cursor and compact cursor move in
-                             * opposite directions, and when they meet references will
-                             * get updated and "during_compacting" should get disabled */
-                            rb_bug("T_MOVED shouldn't be seen until compaction is finished\n");
-                        }
-                        gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
-                        if (FL_TEST(vp, FL_FROM_FREELIST)) {
-                            empty_slots++;
-                        }
-                        else {
-                            freed_slots++;
-                        }
+                if (obj_free(objspace, vp)) {
+                    final_slots++;
+                }
+                else {
+                    if (heap->compact_cursor) {
+                        /* We *want* to fill this slot */
+                        MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(vp), vp);
+                    }
+                    else {
+                        (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
                         heap_page_add_freeobj(objspace, sweep_page, vp);
-                        break;
-		      case T_ZOMBIE:
-			/* already counted */
-			break;
-		      case T_NONE:
-                        if (heap->compact_cursor) {
-                            /* We *want* to fill this slot */
-                            MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(vp), vp);
-                        }
-                        else {
-                            empty_slots++; /* already freed */
-                        }
-			break;
-		    }
-		}
-		p++;
-		bitset >>= 1;
-	    } while (bitset);
-	}
+                        gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
+                        freed_slots++;
+                    }
+                }
+                break;
+
+            /* minor cases */
+              case T_MOVED:
+                if (objspace->flags.during_compacting) {
+                    /* The sweep cursor shouldn't have made it to any
+                        * T_MOVED slots while the compact flag is enabled.
+                        * The sweep cursor and compact cursor move in
+                        * opposite directions, and when they meet references will
+                        * get updated and "during_compacting" should get disabled */
+                    rb_bug("T_MOVED shouldn't be seen until compaction is finished\n");
+                }
+                gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
+                if (FL_TEST(vp, FL_FROM_FREELIST)) {
+                    empty_slots++;
+                }
+                else {
+                    freed_slots++;
+                }
+                heap_page_add_freeobj(objspace, sweep_page, vp);
+                break;
+              case T_ZOMBIE:
+                /* already counted */
+                break;
+              case T_NONE:
+                if (heap->compact_cursor) {
+                    /* We *want* to fill this slot */
+                    MARK_IN_BITMAP(GET_HEAP_PINNED_BITS(vp), vp);
+                }
+                else {
+                    empty_slots++; /* already freed */
+                    heap_page_add_freeobj(objspace, sweep_page, vp);
+                }
+                break;
+            }
+        }
+
+        bitset >>= 1;
+        p++;
     }
 
     if (heap->compact_cursor) {
