@@ -6537,8 +6537,12 @@ show_mark_ticks(void)
 #endif /* PRINT_ROOT_TICKS */
 
 static void
-gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
+gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(VALUE obj))
 {
+
+    if (!callback)
+        callback = &rb_gc_mark;
+
     struct gc_list *list;
     rb_execution_context_t *ec = GET_EC();
     rb_vm_t *vm = rb_ec_vm_ptr(ec);
@@ -6601,10 +6605,10 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
     rb_gc_mark_global_tbl();
 
     MARK_CHECKPOINT("object_id");
-    rb_gc_mark(objspace->next_object_id);
+    callback(objspace->next_object_id);
     mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
 
-    if (stress_to_class) rb_gc_mark(stress_to_class);
+    if (stress_to_class) callback(stress_to_class);
 
     MARK_CHECKPOINT("finish");
 #undef MARK_CHECKPOINT
@@ -6757,7 +6761,7 @@ objspace_allrefs(rb_objspace_t *objspace)
     /* traverse root objects */
     PUSH_MARK_FUNC_DATA(&mfd);
     GET_RACTOR()->mfd = &mfd;
-    gc_mark_roots(objspace, &data.category);
+    gc_mark_roots(objspace, &data.category, NULL);
     POP_MARK_FUNC_DATA();
 
     /* traverse rest objects reachable from root objects */
@@ -7235,7 +7239,7 @@ gc_marks_start(rb_objspace_t *objspace, int full_mark)
 	rgengc_rememberset_mark(objspace, heap_eden);
     }
 
-    gc_mark_roots(objspace, NULL);
+    gc_mark_roots(objspace, NULL, NULL);
 
     gc_report(1, objspace, "gc_marks_start: (%s) end, stack in %"PRIdSIZE"\n",
               full_mark ? "full" : "minor", mark_stack_size(&objspace->mark_stack));
@@ -7308,7 +7312,7 @@ gc_marks_finish(rb_objspace_t *objspace)
                    mark_stack_size(&objspace->mark_stack));
 	}
 
-	gc_mark_roots(objspace, 0);
+	gc_mark_roots(objspace, 0, NULL);
 
 	if (is_mark_stack_empty(&objspace->mark_stack) == FALSE) {
 	    gc_report(1, objspace, "gc_marks_finish: not empty (%"PRIdSIZE"). retry.\n",
@@ -10250,7 +10254,7 @@ objspace_reachable_objects_from_root(rb_objspace_t *objspace, void (func)(const 
     }, *prev_mfd = cr->mfd;
 
     cr->mfd = &mfd;
-    gc_mark_roots(objspace, &data.category);
+    gc_mark_roots(objspace, &data.category, NULL);
     cr->mfd = prev_mfd;
 }
 
@@ -12733,120 +12737,7 @@ rb_mmtk_stacks(void (*callback_stack)(void *stack, size_t size)) {
 
 void
 rb_mmtk_roots(void (*callback_object)(VALUE adjacent)) {
-    rb_objspace_t *objspace = &rb_objspace;
-
-    struct gc_list *list;
-    rb_execution_context_t *ec = GET_EC();
-    rb_vm_t *vm = rb_ec_vm_ptr(ec);
-
-    objspace->rgengc.parent_object = Qfalse;
-
-    // copied the contents of this function inline here.
-    // rb_vm_mark(vm);
-    {
-        rb_ractor_t *r = 0;
-        long i, len;
-        const VALUE *obj_ary;
-
-	list_for_each(&vm->ractor.set, r, vmlr_node) {
-            // ractor.set only contains blocking or running ractors
-            VM_ASSERT(rb_ractor_status_p(r, ractor_blocking) ||
-                      rb_ractor_status_p(r, ractor_running));
-            callback_object(rb_ractor_self(r));
-	}
-
-        callback_object(vm->mark_object_ary);
-
-        len = RARRAY_LEN(vm->mark_object_ary);
-        obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
-
-        for (i=0; i < len; i++) {
-            const VALUE *ptr;
-            long j, jlen;
-
-            //callback_object(*obj_ary);
-            jlen = RARRAY_LEN(*obj_ary);
-            ptr = RARRAY_CONST_PTR(*obj_ary);
-            for (j=0; j < jlen; j++) {
-                callback_object(*ptr++);
-            }
-            obj_ary++;
-        }
-
-        callback_object(vm->load_path);
-        callback_object(vm->load_path_snapshot);
-        callback_object(vm->load_path_check_cache);
-        callback_object(vm->expanded_load_path);
-        callback_object(vm->loaded_features);
-        callback_object(vm->loaded_features_snapshot);
-        callback_object(vm->top_self);
-        callback_object(vm->orig_progname);
-        callback_object(vm->coverages);
-        /* Prevent classes from moving */
-        
-        //rb_mark_tbl(vm->defined_module_hash); 
-        
-        // TODO: I tried replacing these with calls to st_foreach directly, but
-        // I guess I need to wrap the callback as the signature of the
-        // callbacks are different
-        // st_foreach(vm->defined_module_hash, callback_object, NULL);
-
-	if (vm->loading_table) {
-            // TODO: see above
-	    //rb_mark_tbl(vm->loading_table);
-	}
-
-	//rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd);
-        long j;
-        for (j=0; i<RUBY_NSIG; j++) {
-            gc_mark_and_pin(objspace, vm->trap_list.cmd[j]);
-        }
-
-        //rb_id_table_foreach_values(vm->negative_cme_table, callback_object, NULL);
-        for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
-            const struct rb_callcache *cc = vm->global_cc_cache_table[i];
-
-            if (cc != NULL) {
-                if (!vm_cc_invalidated_p(cc)) {
-                    callback_object((VALUE)cc);
-                }
-                else {
-                    vm->global_cc_cache_table[i] = NULL;
-                }
-            }
-        }
-
-        //mjit_mark();
-    }
-    // rb_vm_mark end
-
-    if (vm->self) 
-        callback_object(vm->self);
-
-    //mark_finalizer_tbl(objspace, finalizer_table);
-
-    //mark_current_machine_context(objspace, ec);
-
-    /* mark protected global variables */
-    for (list = global_list; list; list = list->next) {
-        callback_object(*list->varptr);
-    }
-
-    //callback
-    //rb_mark_end_proc();
-
-    //callback
-    //rb_gc_mark_global_tbl();
-
-    //callback
-    //rb_gc_mark(objspace->next_object_id);
-
-    //callback
-    //mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
-
-    //if (stress_to_class) 
-        //rb_gc_mark(stress_to_class);
-
+    gc_mark_roots(&rb_objspace, NULL, callback_object);
 }
 
 static VALUE array_helper;
