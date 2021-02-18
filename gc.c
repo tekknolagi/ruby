@@ -393,7 +393,7 @@ int ruby_rgengc_debug;
  * 5: show all references
  */
 #ifndef RGENGC_CHECK_MODE
-#define RGENGC_CHECK_MODE  0
+#define RGENGC_CHECK_MODE  1
 #endif
 
 // Note: using RUBY_ASSERT_WHEN() extend a macro in expr (info by nobu).
@@ -1691,30 +1691,45 @@ heap_allocatable_pages_set(rb_objspace_t *objspace, size_t s)
 }
 
 static inline void
-heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
+heap_page_add_free_region(rb_objspace_t *objspace, struct heap_page *page, VALUE obj, int len)
 {
     ASSERT_vm_locking();
 
     RVALUE *p = (RVALUE *)obj;
+    int i = len - 1;
 
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
-    p->as.free.flags = 0;
-    p->as.free.len = 0;
-    p->as.free.next = page->freelist;
-    page->freelist = p;
-    asan_poison_memory_region(&page->freelist, sizeof(RVALUE*));
+    while (i >= 0) {
+        p->as.free.flags = 0;
+        p->as.free.len = i;
 
-    if (RGENGC_CHECK_MODE &&
-        /* obj should belong to page */
-        !(&page->start[0] <= (RVALUE *)obj &&
-          (RVALUE *)obj   <  &page->start[page->total_slots] &&
-          obj % sizeof(RVALUE) == 0)) {
-        rb_bug("heap_page_add_freeobj: %p is not rvalue.", (void *)p);
+        gc_report(3, objspace, "heap_page_add_freeobj: add %p to freelist\n", (void *)p);
+
+#if RGENGC_CHECK_MODE
+        /* p should belong to page */
+        if (!(&page->start[0] <= p &&
+              p < &page->start[page->total_slots] &&
+              (VALUE)p % sizeof(RVALUE) == 0)) {
+            rb_bug("heap_page_add_freeobj: %p is not rvalue.", (void *)p);
+        }
+#endif
+
+        i--;
+        p++;
     }
 
-    asan_poison_object(obj);
-    gc_report(3, objspace, "heap_page_add_freeobj: add %p to freelist\n", (void *)obj);
+    p = (RVALUE *)obj + len - 1;
+    p->as.free.next = page->freelist;
+    page->freelist = p;
+
+    asan_poison_memory_region((void *)obj, sizeof(RVALUE) * len);
+}
+
+static inline void
+heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
+{
+    heap_page_add_free_region(objspace, page, obj, 1);
 }
 
 static inline bool
