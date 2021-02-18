@@ -61,6 +61,8 @@ struct rb_objspace; /* in vm_core.h */
     rb_obj_write((VALUE)(a), UNALIGNED_MEMBER_ACCESS((VALUE *)(slot)), \
                  (VALUE)(b), __FILE__, __LINE__)
 
+#define VOID_VALUE_CALLBACK void (*callback)(VALUE obj)
+
 /* gc.c */
 extern VALUE *ruby_initial_gc_stress_ptr;
 extern int ruby_disable_gc;
@@ -95,7 +97,7 @@ VALUE rb_ec_wb_protected_newobj_of(struct rb_execution_context_struct *ec, VALUE
 size_t rb_obj_memsize_of(VALUE);
 void rb_gc_verify_internal_consistency(void);
 size_t rb_obj_gc_flags(VALUE, ID[], size_t);
-void rb_gc_mark_values(long n, const VALUE *values);
+void rb_gc_mark_values(long n, const VALUE *values, VOID_VALUE_CALLBACK);
 void rb_gc_mark_vm_stack_values(long n, const VALUE *values);
 void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR_RETURNS_NONNULL RUBY_ATTR_ALLOC_SIZE((2));
 void *ruby_sized_xrealloc2(void *ptr, size_t new_count, size_t element_size, size_t old_count) RUBY_ATTR_RETURNS_NONNULL RUBY_ATTR_ALLOC_SIZE((2, 3));

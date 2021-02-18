@@ -2535,7 +2535,7 @@ vm_mark_negative_cme(VALUE val, void *dmy)
 }
 
 void
-rb_vm_mark(void *ptr)
+rb_vm_mark(void *ptr, void (*callback)(VALUE obj))
 {
     RUBY_MARK_ENTER("vm");
     RUBY_GC_INFO("-------------------------------------------------\n");
@@ -2549,10 +2549,18 @@ rb_vm_mark(void *ptr)
             // ractor.set only contains blocking or running ractors
             VM_ASSERT(rb_ractor_status_p(r, ractor_blocking) ||
                       rb_ractor_status_p(r, ractor_running));
-            rb_gc_mark(rb_ractor_self(r));
+            if (callback) {
+                callback(rb_ractor_self(r));
+            } else {
+                rb_gc_mark(rb_ractor_self(r));
+            }
 	}
 
-        rb_gc_mark_movable(vm->mark_object_ary);
+        if (callback) {
+            callback(vm->mark_object_ary);
+        } else {
+            rb_gc_mark_movable(vm->mark_object_ary);
+        }
 
         len = RARRAY_LEN(vm->mark_object_ary);
         obj_ary = RARRAY_CONST_PTR(vm->mark_object_ary);
@@ -2560,32 +2568,55 @@ rb_vm_mark(void *ptr)
             const VALUE *ptr;
             long j, jlen;
 
-            rb_gc_mark(*obj_ary);
+            if (callback) {
+                callback(*obj_ary);
+            } else {
+                rb_gc_mark(*obj_ary);
+            }
             jlen = RARRAY_LEN(*obj_ary);
             ptr = RARRAY_CONST_PTR(*obj_ary);
             for (j=0; j < jlen; j++) {
-                rb_gc_mark(*ptr++);
+                if (callback) {
+                    callback(*ptr++);
+                } else {
+                    rb_gc_mark(*ptr++);
+                }
             }
             obj_ary++;
         }
 
-        rb_gc_mark_movable(vm->load_path);
-        rb_gc_mark_movable(vm->load_path_snapshot);
-        RUBY_MARK_MOVABLE_UNLESS_NULL(vm->load_path_check_cache);
-        rb_gc_mark_movable(vm->expanded_load_path);
-        rb_gc_mark_movable(vm->loaded_features);
-        rb_gc_mark_movable(vm->loaded_features_snapshot);
-        rb_gc_mark_movable(vm->top_self);
-        rb_gc_mark_movable(vm->orig_progname);
-        RUBY_MARK_MOVABLE_UNLESS_NULL(vm->coverages);
+        if (callback) {
+            callback(vm->load_path);
+            callback(vm->load_path_snapshot);
+            callback(vm->load_path_check_cache);
+            callback(vm->expanded_load_path);
+            callback(vm->loaded_features);
+            callback(vm->loaded_features_snapshot);
+            callback(vm->top_self);
+            callback(vm->orig_progname);
+            callback(vm->coverages);
+        } else {
+            rb_gc_mark_movable(vm->load_path);
+            rb_gc_mark_movable(vm->load_path_snapshot);
+            RUBY_MARK_MOVABLE_UNLESS_NULL(vm->load_path_check_cache);
+            rb_gc_mark_movable(vm->expanded_load_path);
+            rb_gc_mark_movable(vm->loaded_features);
+            rb_gc_mark_movable(vm->loaded_features_snapshot);
+            rb_gc_mark_movable(vm->top_self);
+            rb_gc_mark_movable(vm->orig_progname);
+            RUBY_MARK_MOVABLE_UNLESS_NULL(vm->coverages);
+        }
         /* Prevent classes from moving */
-        rb_mark_tbl(vm->defined_module_hash);
+        if (!callback) {
+            // TODO: don't havea good solution yet for running a callback on the contents of a table.
+            rb_mark_tbl(vm->defined_module_hash);
 
-	if (vm->loading_table) {
-	    rb_mark_tbl(vm->loading_table);
-	}
+            if (vm->loading_table) {
+                rb_mark_tbl(vm->loading_table);
+            }
+        }
 
-	rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd);
+        rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd, callback);
 
         rb_id_table_foreach_values(vm->negative_cme_table, vm_mark_negative_cme, NULL);
         for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
@@ -2593,7 +2624,11 @@ rb_vm_mark(void *ptr)
 
             if (cc != NULL) {
                 if (!vm_cc_invalidated_p(cc)) {
-                    rb_gc_mark((VALUE)cc);
+                    if (callback) {
+                        callback((VALUE)cc);
+                    } else {
+                        rb_gc_mark((VALUE)cc);
+                    }
                 }
                 else {
                     vm->global_cc_cache_table[i] = NULL;
@@ -2601,7 +2636,9 @@ rb_vm_mark(void *ptr)
             }
         }
 
-        mjit_mark();
+        if (!callback) {
+            mjit_mark();
+        }
     }
 
     RUBY_MARK_LEAVE("vm");

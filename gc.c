@@ -5644,13 +5644,17 @@ gc_mark_values(rb_objspace_t *objspace, long n, const VALUE *values)
 }
 
 void
-rb_gc_mark_values(long n, const VALUE *values)
+rb_gc_mark_values(long n, const VALUE *values, VOID_VALUE_CALLBACK)
 {
     long i;
     rb_objspace_t *objspace = &rb_objspace;
 
     for (i=0; i<n; i++) {
-        gc_mark_and_pin(objspace, values[i]);
+        if (callback) {
+            callback(values[i]);
+        } else {
+            gc_mark_and_pin(objspace, values[i]);
+        }
     }
 }
 
@@ -6537,7 +6541,7 @@ show_mark_ticks(void)
 #endif /* PRINT_ROOT_TICKS */
 
 static void
-gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(VALUE obj))
+gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, VOID_VALUE_CALLBACK)
 {
 
     struct gc_list *list;
@@ -6582,7 +6586,7 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(
     SET_STACK_END;
 
     if (!callback)
-        rb_vm_mark(vm);
+        rb_vm_mark(vm, callback);
 
     if (callback) {
         callback(vm->self);
@@ -12758,8 +12762,8 @@ rb_mmtk_stacks(void (*callback_stack)(void *stack, size_t size)) {
 }
 
 void
-rb_mmtk_roots(void (*callback_object)(VALUE adjacent)) {
-    gc_mark_roots(&rb_objspace, NULL, callback_object);
+rb_mmtk_roots(VOID_VALUE_CALLBACK) {
+    gc_mark_roots(&rb_objspace, NULL, callback);
 }
 
 static VALUE array_helper;
