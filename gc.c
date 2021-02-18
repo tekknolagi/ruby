@@ -6540,9 +6540,6 @@ static void
 gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(VALUE obj))
 {
 
-    if (!callback)
-        callback = &rb_gc_mark;
-
     struct gc_list *list;
     rb_execution_context_t *ec = GET_EC();
     rb_vm_t *vm = rb_ec_vm_ptr(ec);
@@ -6584,36 +6581,58 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp, void (*callback)(
     MARK_CHECKPOINT("vm");
     SET_STACK_END;
 
-    rb_vm_mark(vm);
-    if (vm->self) gc_mark(objspace, vm->self);
+    if (!callback)
+        rb_vm_mark(vm);
 
-    MARK_CHECKPOINT("finalizers");
-    mark_finalizer_tbl(objspace, finalizer_table);
+    if (callback) {
+        callback(vm->self);
+    } else {
+        if (vm->self) gc_mark(objspace, vm->self);
+    }
 
-    MARK_CHECKPOINT("machine_context");
-    mark_current_machine_context(objspace, ec);
+    if (!callback) {
+        MARK_CHECKPOINT("finalizers");
+        mark_finalizer_tbl(objspace, finalizer_table);
+    }
+
+    if (!callback) {
+        MARK_CHECKPOINT("machine_context");
+        mark_current_machine_context(objspace, ec);
+    }
 
     /* mark protected global variables */
     MARK_CHECKPOINT("global_list");
     for (list = global_list; list; list = list->next) {
-        gc_mark_maybe(objspace, *list->varptr);
+        if (callback) {
+            callback(*list->varptr);
+        } else {
+            gc_mark_maybe(objspace, *list->varptr);
+        }
     }
 
-    MARK_CHECKPOINT("end_proc");
-    rb_mark_end_proc();
+    if (!callback){
+        MARK_CHECKPOINT("end_proc");
+        rb_mark_end_proc();
 
-    MARK_CHECKPOINT("global_tbl");
-    rb_gc_mark_global_tbl();
+        MARK_CHECKPOINT("global_tbl");
+        rb_gc_mark_global_tbl();
 
-    MARK_CHECKPOINT("object_id");
+        MARK_CHECKPOINT("object_id");
+    }
 
-    rb_gc_mark(objspace->next_object_id);
+    if (callback) {
+        callback(objspace->next_object_id);
+    }else{
+        rb_gc_mark(objspace->next_object_id);
+    }
 
-    mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
+    if(!callback) {
+        mark_tbl_no_pin(objspace, objspace->obj_to_id_tbl); /* Only mark ids */
 
-    if (stress_to_class) rb_gc_mark(stress_to_class);
+        if (stress_to_class) rb_gc_mark(stress_to_class);
 
-    MARK_CHECKPOINT("finish");
+        MARK_CHECKPOINT("finish");
+    }
 #undef MARK_CHECKPOINT
 }
 
