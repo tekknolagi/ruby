@@ -4929,6 +4929,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     bitset = ~bits[0];
     bitset >>= NUM_IN_PAGE(p);
 
+    RVALUE *free_region_head = NULL;
+    int free_region_len = 0;
     RVALUE *end = p + sweep_page->total_slots;
     while (p < end) {
         if (!bitset) {
@@ -4940,6 +4942,15 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
             p = offset + next_i;
 
             if (p < end) {
+                if (i != next_i) {
+                    /* slots will be skipped, so add the free region to the page */
+                    if (free_region_len > 0) {
+                        heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+                        free_region_head = NULL;
+                        free_region_len = 0;
+                    }
+                }
+
                 int bitmap_index = next_i / BITS_BITLENGTH;
                 GC_ASSERT(bitmap_index < HEAP_PAGE_BITMAP_LIMIT);
                 bitset = ~bits[bitmap_index];
@@ -4949,6 +4960,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
             }
         }
 
+        bool free = FALSE;
         if (bitset & 1) {
             VALUE vp = (VALUE)p;
 
@@ -4971,7 +4983,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                     }
                     else {
                         (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
-                        heap_page_add_freeobj(objspace, sweep_page, vp);
+                        free = TRUE;
                         gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(vp));
                         freed_slots++;
                     }
@@ -4995,7 +5007,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 else {
                     freed_slots++;
                 }
-                heap_page_add_freeobj(objspace, sweep_page, vp);
+                free = TRUE;
                 break;
               case T_ZOMBIE:
                 /* already counted */
@@ -5007,14 +5019,34 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                 }
                 else {
                     empty_slots++; /* already freed */
-                    heap_page_add_freeobj(objspace, sweep_page, vp);
+                    free = TRUE;
                 }
                 break;
             }
         }
 
+        if (free) {
+            if (free_region_len == 0) {
+                free_region_head = p;
+            }
+            free_region_len++;
+        }
+        else {
+            if (free_region_len > 0) {
+                heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+                free_region_head = NULL;
+                free_region_len = 0;
+            }
+        }
+
         bitset >>= 1;
         p++;
+    }
+
+    if (free_region_len > 0) {
+        heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+        free_region_head = NULL;
+        free_region_len = 0;
     }
 
     if (heap->compact_cursor) {
