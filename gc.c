@@ -2192,13 +2192,18 @@ ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
         asan_unpoison_object(obj, true);
 
         RVALUE *next;
+        int next_len = 0;
         if (p->as.free.len) {
             next = p + 1;
+            next_len = p->as.free.len - 1;
         } else {
             next = p->as.free.next;
+            if (next) {
+                next_len = next->as.free.len;
+            }
         }
         cr->newobj_cache.freelist = next;
-        cr->newobj_cache.region_len = next ? next->as.free.len : 0;
+        cr->newobj_cache.region_len = next_len;
         return obj;
     } else {
         return Qfalse;
