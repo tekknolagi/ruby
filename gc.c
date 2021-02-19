@@ -4924,7 +4924,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     RVALUE *free_region_head = NULL;
     int free_region_len = 0;
     RVALUE *end = p + sweep_page->total_slots;
-    while (p < end) {
+    while (true) {
         if (!bitset) {
             i++;
             RVALUE *next_p = offset + i * BITS_BITLENGTH;
