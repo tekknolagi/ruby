@@ -141,6 +141,7 @@ struct rb_ractor_struct {
 
     struct {
         struct RVALUE *freelist;
+        int region_len;
         struct heap_page *using_page;
     } newobj_cache;
 

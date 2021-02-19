@@ -2201,10 +2201,19 @@ static inline VALUE
 ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
 {
     RVALUE *p = cr->newobj_cache.freelist;
+    VALUE obj = (VALUE)p;
 
-    if (p) {
-        VALUE obj = (VALUE)p;
+    if (cr->newobj_cache.region_len) {
+        GC_ASSERT(p != NULL);
+        GC_ASSERT(p->as.free.len == cr->newobj_cache.region_len);
         asan_unpoison_object(obj, true);
+
+        cr->newobj_cache.freelist += 1;
+        cr->newobj_cache.region_len--;
+        return obj;
+    } else if (p) {
+        asan_unpoison_object(obj, true);
+
         RVALUE *next;
         if (p->as.free.len) {
             next = p + 1;
@@ -2212,9 +2221,9 @@ ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
             next = p->as.free.next;
         }
         cr->newobj_cache.freelist = next;
+        cr->newobj_cache.region_len = next ? next->as.free.len : 0;
         return obj;
-    }
-    else {
+    } else {
         return Qfalse;
     }
 }
@@ -5157,6 +5166,7 @@ gc_sweep_start_heap(rb_objspace_t *objspace, rb_heap_t *heap)
         }
 
         r->newobj_cache.using_page = NULL;
+        r->newobj_cache.region_len = 0;
         r->newobj_cache.freelist = NULL;
     }
 }
