@@ -4804,7 +4804,7 @@ static int
 gc_fill_swept_page(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page, int *freed_slots, int *empty_slots)
 {
     /* Find any pinned but not marked objects and try to fill those slots */
-    int i;
+    int i = 0;
     int moved_slots = 0;
     int finished_compacting = 0;
     bits_t *mark_bits, *pin_bits;
@@ -4821,58 +4821,104 @@ gc_fill_swept_page(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *s
 
     unlock_page_body(objspace, GET_PAGE_BODY(cursor->start));
 
-    for (i=0; i < HEAP_PAGE_BITMAP_LIMIT; i++) {
-        /* *Want to move* objects are pinned but not marked. */
-        bitset = pin_bits[i] & ~mark_bits[i];
+    bitset = pin_bits[i] & ~mark_bits[i];
+    bitset >>= NUM_IN_PAGE(p);
 
-        if (bitset) {
-            p = offset + i * BITS_BITLENGTH;
-            do {
-                if (bitset & 1) {
-                    VALUE dest = (VALUE)p;
+    RVALUE *free_region_head = NULL;
+    int free_region_len = 0;
+    RVALUE *end = p + sweep_page->total_slots;
+    while (true) {
+        if (!bitset) {
+            i++;
+            RVALUE *next_p = offset + i * BITS_BITLENGTH;
 
-                    GC_ASSERT(MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(dest), dest));
-                    GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(dest), dest));
+            if (next_p < end) {
+                if (p != next_p) {
+                    /* slots will be skipped, so add the free region to the page */
+                    if (free_region_len > 0) {
+                        heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+                        free_region_head = NULL;
+                        free_region_len = 0;
+                    }
+                }
 
-                    CLEAR_IN_BITMAP(GET_HEAP_PINNED_BITS(dest), dest);
+                p = next_p;
+                bitset = pin_bits[i] & ~mark_bits[i];
+            }
+            else {
+                break;
+            }
+        }
 
-                    if (finished_compacting) {
+        bool free = FALSE;
+        if (bitset & 1) {
+            VALUE dest = (VALUE)p;
+
+            GC_ASSERT(MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(dest), dest));
+            GC_ASSERT(!MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(dest), dest));
+
+            CLEAR_IN_BITMAP(GET_HEAP_PINNED_BITS(dest), dest);
+
+            if (finished_compacting) {
+                if (BUILTIN_TYPE(dest) == T_NONE) {
+                    (*empty_slots)++;
+                }
+                else {
+                    (*freed_slots)++;
+                    p->as.free.flags = 0;
+                }
+                (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)dest, sizeof(RVALUE));
+                free = TRUE;
+            }
+            else {
+                /* Zombie slots don't get marked, but we can't reuse
+                    * their memory until they have their finalizers run.*/
+                if (BUILTIN_TYPE(dest) != T_ZOMBIE) {
+                    if(!try_move(objspace, heap, sweep_page, dest)) {
+                        finished_compacting = 1;
+                        (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
+                        gc_report(5, objspace, "Quit compacting, couldn't find an object to move\n");
                         if (BUILTIN_TYPE(dest) == T_NONE) {
                             (*empty_slots)++;
                         }
                         else {
                             (*freed_slots)++;
+                            p->as.free.flags = 0;
                         }
-                        (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)dest, sizeof(RVALUE));
-                        heap_page_add_freeobj(objspace, sweep_page, dest);
+                        free = TRUE;
+                        gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(dest));
                     }
                     else {
-                        /* Zombie slots don't get marked, but we can't reuse
-                         * their memory until they have their finalizers run.*/
-                        if (BUILTIN_TYPE(dest) != T_ZOMBIE) {
-                            if(!try_move(objspace, heap, sweep_page, dest)) {
-                                finished_compacting = 1;
-                                (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
-                                gc_report(5, objspace, "Quit compacting, couldn't find an object to move\n");
-                                if (BUILTIN_TYPE(dest) == T_NONE) {
-                                    (*empty_slots)++;
-                                }
-                                else {
-                                    (*freed_slots)++;
-                                }
-                                heap_page_add_freeobj(objspace, sweep_page, dest);
-                                gc_report(3, objspace, "page_sweep: %s is added to freelist\n", obj_info(dest));
-                            }
-                            else {
-                                moved_slots++;
-                            }
-                        }
+                        moved_slots++;
                     }
                 }
-                p++;
-                bitset >>= 1;
-            } while (bitset);
+            }
         }
+
+
+        if (free) {
+            GC_ASSERT(BUILTIN_TYPE((VALUE)p) == T_NONE);
+            if (free_region_len == 0) {
+                free_region_head = p;
+            }
+            free_region_len++;
+        }
+        else {
+            if (free_region_len > 0) {
+                heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+                free_region_head = NULL;
+                free_region_len = 0;
+            }
+        }
+
+        bitset >>= 1;
+        p++;
+    }
+
+    if (free_region_len > 0) {
+        heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
+        free_region_head = NULL;
+        free_region_len = 0;
     }
 
     lock_page_body(objspace, GET_PAGE_BODY(heap->compact_cursor->start));
