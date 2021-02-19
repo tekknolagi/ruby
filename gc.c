@@ -1695,33 +1695,15 @@ heap_page_add_free_region(rb_objspace_t *objspace, struct heap_page *page, VALUE
 {
     ASSERT_vm_locking();
 
-    RVALUE *p = (RVALUE *)obj;
-    int i = len - 1;
-
     asan_unpoison_memory_region(&page->freelist, sizeof(RVALUE*), false);
 
-    while (i >= 0) {
-        p->as.free.flags = 0;
-        p->as.free.len = i;
+    RVALUE *start = (RVALUE *)obj;
+    RVALUE *end = (RVALUE *)obj + len - 1;
 
-        gc_report(3, objspace, "heap_page_add_freeobj: add %p to freelist\n", (void *)p);
-
-#if RGENGC_CHECK_MODE
-        /* p should belong to page */
-        if (!(&page->start[0] <= p &&
-              p < &page->start[page->total_slots] &&
-              (VALUE)p % sizeof(RVALUE) == 0)) {
-            rb_bug("heap_page_add_freeobj: %p is not rvalue.", (void *)p);
-        }
-#endif
-
-        i--;
-        p++;
-    }
-
-    p = (RVALUE *)obj + len - 1;
-    p->as.free.next = page->freelist;
-    page->freelist = (RVALUE *)obj;
+    memset(start, 0, len * sizeof(RVALUE));
+    start->as.free.len = len - 1;
+    end->as.free.next = page->freelist;
+    page->freelist = (RVALUE *)start;
 
     asan_poison_memory_region((void *)obj, sizeof(RVALUE) * len);
 }
@@ -1900,13 +1882,9 @@ heap_page_allocate(rb_objspace_t *objspace)
     page_body->header.page = page;
 
     /* zero out slots and add the head to the freelist */
+    memset(start, 0, limit * sizeof(RVALUE));
+    start->as.free.len = limit - 1;
     page->freelist = start;
-    RVALUE *p = start;
-    for (int i = limit - 1; i >= 0; i--, p++) {
-        p->as.free.flags = 0;
-        p->as.free.len = i;
-        p->as.free.next = NULL;
-    }
 
     page->free_slots = limit;
 
@@ -2205,7 +2183,6 @@ ractor_cached_freeobj(rb_objspace_t *objspace, rb_ractor_t *cr)
 
     if (cr->newobj_cache.region_len) {
         GC_ASSERT(p != NULL);
-        GC_ASSERT(p->as.free.len == cr->newobj_cache.region_len);
         asan_unpoison_object(obj, true);
 
         cr->newobj_cache.freelist += 1;
