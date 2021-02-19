@@ -393,7 +393,7 @@ int ruby_rgengc_debug;
  * 5: show all references
  */
 #ifndef RGENGC_CHECK_MODE
-#define RGENGC_CHECK_MODE  1
+#define RGENGC_CHECK_MODE  0
 #endif
 
 // Note: using RUBY_ASSERT_WHEN() extend a macro in expr (info by nobu).
@@ -1721,7 +1721,7 @@ heap_page_add_free_region(rb_objspace_t *objspace, struct heap_page *page, VALUE
 
     p = (RVALUE *)obj + len - 1;
     p->as.free.next = page->freelist;
-    page->freelist = p;
+    page->freelist = (RVALUE *)obj;
 
     asan_poison_memory_region((void *)obj, sizeof(RVALUE) * len);
 }
@@ -4892,6 +4892,7 @@ gc_fill_swept_page(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *s
 static inline int
 gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_page)
 {
+    int i = 0;
     int empty_slots = 0, freed_slots = 0, final_slots = 0;
     RVALUE *p, *offset;
     bits_t *bits, bitset;
@@ -4934,15 +4935,11 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
     RVALUE *end = p + sweep_page->total_slots;
     while (p < end) {
         if (!bitset) {
-            int i = (int)(p - offset);
-            int next_i = (i + BITS_BITLENGTH - 1) & -BITS_BITLENGTH;
-            GC_ASSERT(next_i % BITS_BITLENGTH == 0);
-            GC_ASSERT(next_i >= i);
-            GC_ASSERT(next_i - i <= BITS_BITLENGTH);
-            p = offset + next_i;
+            i++;
+            RVALUE *next_p = offset + i * BITS_BITLENGTH;
 
-            if (p < end) {
-                if (i != next_i) {
+            if (next_p < end) {
+                if (p != next_p) {
                     /* slots will be skipped, so add the free region to the page */
                     if (free_region_len > 0) {
                         heap_page_add_free_region(objspace, sweep_page, (VALUE)free_region_head, free_region_len);
@@ -4951,9 +4948,8 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
                     }
                 }
 
-                int bitmap_index = next_i / BITS_BITLENGTH;
-                GC_ASSERT(bitmap_index < HEAP_PAGE_BITMAP_LIMIT);
-                bitset = ~bits[bitmap_index];
+                p = next_p;
+                bitset = ~bits[i];
             }
             else {
                 break;
