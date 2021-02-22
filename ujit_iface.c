@@ -26,10 +26,12 @@ VALUE cUjitDisasmInsn;
 
 bool rb_ujit_enabled;
 
+#if RUBY_DEBUG
 static int64_t vm_insns_count = 0;
 int64_t rb_ujit_exec_insns_count = 0;
 static int64_t exit_op_count[VM_INSTRUCTION_SIZE] = { 0 };
 int64_t rb_compiled_iseq_count = 0;
+#endif
 
 // Machine code blocks (executable memory)
 extern codeblock_t *cb;

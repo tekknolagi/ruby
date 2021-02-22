@@ -175,8 +175,10 @@ add_block_version(blockid_t blockid, block_t* block)
             rb_bug("allocation failed");
         }
 
+#if RUBY_DEBUG
         // First block compiled for this iseq
         rb_compiled_iseq_count++;
+#endif
     }
 
     block_t *first_version = get_first_version(iseq, blockid.idx);
