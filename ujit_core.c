@@ -603,9 +603,12 @@ void
 ujit_free_block(block_t *block)
 {
     ujit_unlink_method_lookup_dependency(block);
+    ujit_block_assumptions_free(block);
+
     rb_darray_free(block->incoming);
-    free(block);
     rb_darray_free(block->gc_object_offsets);
+
+    free(block);
 }
 
 // Invalidate one specific block version

@@ -59,19 +59,20 @@ jit_get_arg(jitstate_t* jit, size_t arg_idx)
     return *(jit->pc + arg_idx + 1);
 }
 
-// Load a pointer to a GC'd object into a register and keep track of the reference
+// Load a VALUE into a register and keep track of the reference if it is on the GC heap.
 static void
 jit_mov_gc_ptr(jitstate_t* jit, codeblock_t* cb, x86opnd_t reg, VALUE ptr)
 {
     RUBY_ASSERT(reg.type == OPND_REG && reg.num_bits == 64);
-    RUBY_ASSERT(!SPECIAL_CONST_P(ptr));
 
     mov(cb, reg, const_ptr_opnd((void*)ptr));
     // The pointer immediate is encoded as the last part of the mov written out.
     uint32_t ptr_offset = cb->write_pos - sizeof(VALUE);
 
-    if (!rb_darray_append(&jit->block->gc_object_offsets, ptr_offset)) {
-        rb_bug("allocation failed");
+    if (SPECIAL_CONST_P(ptr)) {
+        if (!rb_darray_append(&jit->block->gc_object_offsets, ptr_offset)) {
+            rb_bug("allocation failed");
+        }
     }
 }
 
@@ -1538,6 +1539,46 @@ gen_leave(jitstate_t* jit, ctx_t* ctx)
     return true;
 }
 
+RUBY_EXTERN rb_serial_t ruby_vm_global_constant_state;
+static bool
+gen_opt_getinlinecache(jitstate_t *jit, ctx_t *ctx)
+{
+    VALUE jump_offset = jit_get_arg(jit, 0);
+    VALUE const_cache_as_value = jit_get_arg(jit, 1);
+    IC ic = (IC)const_cache_as_value;
+
+    // See vm_ic_hit_p().
+    struct iseq_inline_constant_cache_entry *ice = ic->entry;
+    if (!ice) return false; // cache not filled
+    if (ice->ic_serial != ruby_vm_global_constant_state) {
+        // Cache miss at compile time.
+        return false;
+    }
+    if (ice->ic_cref) {
+        // Only compile for caches that don't care about lexical scope.
+        return false;
+    }
+
+    // Optimize for single ractor mode.
+    if (!assume_single_ractor_mode(jit->block)) return false;
+
+    // Invalidate output code on any and all constant writes
+    if (!assume_stable_global_constant_state(jit->block)) return false;
+
+    x86opnd_t stack_top = ctx_stack_push(ctx, T_NONE);
+    jit_mov_gc_ptr(jit, cb, REG0, ice->value);
+    mov(cb, stack_top, REG0);
+
+    // Jump over the code for filling the cache
+    uint32_t jump_idx = jit_next_insn_idx(jit) + (int32_t)jump_offset;
+    gen_direct_jump(
+        ctx,
+        (blockid_t){ .iseq = jit->iseq,  .idx = jump_idx }
+    );
+
+    return true;
+}
+
 void ujit_reg_op(int opcode, codegen_fn gen_fn, bool is_branch)
 {
     // Check that the op wasn't previously registered
@@ -1588,6 +1629,8 @@ ujit_init_codegen(void)
     ujit_reg_op(BIN(opt_and), gen_opt_and, false);
     ujit_reg_op(BIN(opt_minus), gen_opt_minus, false);
     ujit_reg_op(BIN(opt_plus), gen_opt_plus, false);
+
+    ujit_reg_op(BIN(opt_getinlinecache), gen_opt_getinlinecache, true);
     ujit_reg_op(BIN(branchif), gen_branchif, true);
     ujit_reg_op(BIN(branchunless), gen_branchunless, true);
     ujit_reg_op(BIN(jump), gen_jump, true);

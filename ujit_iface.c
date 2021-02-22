@@ -133,44 +133,80 @@ struct ujit_root_struct {
     int unused; // empty structs are not legal in C99
 };
 
-// Map cme_or_cc => [[iseq, offset]]. An entry in the map means compiled code at iseq[offset]
-// is only valid when cme_or_cc is valid
+static void
+block_array_shuffle_remove(rb_ujit_block_array_t blocks, block_t *to_remove) {
+    block_t **elem;
+    rb_darray_foreach(blocks, i, elem) {
+        if (*elem == to_remove) {
+            // Remove the current element by moving the last element here then popping.
+            *elem = rb_darray_get(blocks, rb_darray_size(blocks) - 1);
+            rb_darray_pop_back(blocks);
+            break;
+        }
+    }
+}
+
+// Map cme_or_cc => [block]
 static st_table *method_lookup_dependency;
-
-struct compiled_region {
-    block_t *block;
-};
-
-typedef rb_darray(struct compiled_region) block_array_t;
 
 static int
 add_lookup_dependency_i(st_data_t *key, st_data_t *value, st_data_t data, int existing)
 {
-    struct compiled_region *region = (struct compiled_region *)data;
+    block_t *new_block = (block_t *)data;
 
-    block_array_t regions = NULL;
+    rb_ujit_block_array_t blocks = NULL;
     if (existing) {
-        regions = (block_array_t )*value;
+        blocks = (rb_ujit_block_array_t)*value;
     }
-    if (!rb_darray_append(&regions, *region)) {
+    if (!rb_darray_append(&blocks, new_block)) {
         rb_bug("ujit: failed to add method lookup dependency"); // TODO: we could bail out of compiling instead
     }
 
-    *value = (st_data_t)regions;
+    *value = (st_data_t)blocks;
     return ST_CONTINUE;
 }
 
-// Remember that the currently compiling region is only valid while cme and cc are valid
+// Remember that the currently compiling block is only valid while cme and cc are valid
 void
 assume_method_lookup_stable(const struct rb_callcache *cc, const rb_callable_method_entry_t *cme, block_t *block)
 {
     RUBY_ASSERT(block != NULL);
     RUBY_ASSERT(block->dependencies.cc == 0 && block->dependencies.cme == 0);
-    struct compiled_region region = { .block = block };
-    st_update(method_lookup_dependency, (st_data_t)cme, add_lookup_dependency_i, (st_data_t)&region);
+    st_update(method_lookup_dependency, (st_data_t)cme, add_lookup_dependency_i, (st_data_t)block);
     block->dependencies.cme = (VALUE)cme;
-    st_update(method_lookup_dependency, (st_data_t)cc, add_lookup_dependency_i, (st_data_t)&region);
+    st_update(method_lookup_dependency, (st_data_t)cc, add_lookup_dependency_i, (st_data_t)block);
     block->dependencies.cc = (VALUE)cc;
+}
+
+static rb_ujit_block_array_t blocks_assuming_single_ractor_mode = NULL;
+
+RBIMPL_ATTR_NODISCARD()
+bool
+assume_single_ractor_mode(block_t *block) {
+    if (block->assume_single_ractor_mode) return true;
+
+    if (rb_multi_ractor_p()) return false;
+
+    if (rb_darray_append(&blocks_assuming_single_ractor_mode, block)) {
+        block->assume_single_ractor_mode = true;
+        return true;
+    }
+    return false;
+}
+
+static rb_ujit_block_array_t blocks_assuming_stable_global_constant_state = NULL;
+
+// Assume that the global constant state has not changed since call to this function.
+RBIMPL_ATTR_NODISCARD()
+bool
+assume_stable_global_constant_state(block_t *block) {
+    if (block->assume_stable_global_constant_state) return true;
+
+    if (rb_darray_append(&blocks_assuming_stable_global_constant_state, block)) {
+        block->assume_stable_global_constant_state = true;
+        return true;
+    }
+    return false;
 }
 
 static int
@@ -257,11 +293,11 @@ rb_ujit_method_lookup_change(VALUE cme_or_cc)
     // Invalidate all regions that depend on the cme or cc
     st_data_t key = (st_data_t)cme_or_cc, image;
     if (st_delete(method_lookup_dependency, &key, &image)) {
-        block_array_t array = (void *)image;
-        struct compiled_region *elem;
+        rb_ujit_block_array_t array = (void *)image;
+        block_t **elem;
 
         rb_darray_foreach(array, i, elem) {
-            invalidate_block_version(elem->block);
+            invalidate_block_version(*elem);
         }
 
         rb_darray_free(array);
@@ -276,19 +312,9 @@ remove_method_lookup_dependency(VALUE cc_or_cme, block_t *block)
 {
     st_data_t key = (st_data_t)cc_or_cme, image;
     if (st_lookup(method_lookup_dependency, key, &image)) {
-        block_array_t array = (void *)image;
-        struct compiled_region *elem;
+        rb_ujit_block_array_t array = (void *)image;
 
-        // Find the block we are removing
-        rb_darray_foreach(array, i, elem) {
-            if (elem->block == block) {
-                // Remove the current element by moving the last element here.
-                // Order in the region array doesn't matter.
-                *elem = rb_darray_get(array, rb_darray_size(array) - 1);
-                rb_darray_pop_back(array);
-                break;
-            }
-        }
+        block_array_shuffle_remove(array, block);
 
         if (rb_darray_size(array) == 0) {
             st_delete(method_lookup_dependency, &key, NULL);
@@ -302,6 +328,13 @@ ujit_unlink_method_lookup_dependency(block_t *block)
 {
     if (block->dependencies.cc) remove_method_lookup_dependency(block->dependencies.cc, block);
     if (block->dependencies.cme) remove_method_lookup_dependency(block->dependencies.cme, block);
+}
+
+void
+ujit_block_assumptions_free(block_t *block)
+{
+    if (block->assume_single_ractor_mode) block_array_shuffle_remove(blocks_assuming_single_ractor_mode, block);
+    if (block->assume_stable_global_constant_state) block_array_shuffle_remove(blocks_assuming_stable_global_constant_state, block);
 }
 
 void
@@ -419,7 +452,21 @@ rb_ujit_bop_redefined(VALUE klass, const rb_method_entry_t *me, enum ruby_basic_
 void
 rb_ujit_constant_state_changed(void)
 {
-    //fprintf(stderr, "bop redefined\n");
+    block_t **element;
+    rb_darray_foreach(blocks_assuming_stable_global_constant_state, i, element) {
+        block_t *block = *element;
+        invalidate_block_version(block);
+    }
+}
+
+void
+rb_ujit_before_ractor_spawn(void)
+{
+    block_t **element;
+    rb_darray_foreach(blocks_assuming_single_ractor_mode, i, element) {
+        block_t *block = *element;
+        invalidate_block_version(block);
+    }
 }
 
 #if HAVE_LIBCAPSTONE
