@@ -69,7 +69,7 @@ jit_mov_gc_ptr(jitstate_t* jit, codeblock_t* cb, x86opnd_t reg, VALUE ptr)
     // The pointer immediate is encoded as the last part of the mov written out.
     uint32_t ptr_offset = cb->write_pos - sizeof(VALUE);
 
-    if (SPECIAL_CONST_P(ptr)) {
+    if (!SPECIAL_CONST_P(ptr)) {
         if (!rb_darray_append(&jit->block->gc_object_offsets, ptr_offset)) {
             rb_bug("allocation failed");
         }
