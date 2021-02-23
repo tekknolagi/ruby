@@ -1630,6 +1630,7 @@ ujit_init_codegen(void)
     ujit_reg_op(BIN(opt_minus), gen_opt_minus, false);
     ujit_reg_op(BIN(opt_plus), gen_opt_plus, false);
 
+    // Map branch instruction opcodes to codegen functions
     ujit_reg_op(BIN(opt_getinlinecache), gen_opt_getinlinecache, true);
     ujit_reg_op(BIN(branchif), gen_branchif, true);
     ujit_reg_op(BIN(branchunless), gen_branchunless, true);
