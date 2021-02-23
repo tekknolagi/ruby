@@ -1248,15 +1248,29 @@ RVALUE_FLAGS_AGE(VALUE flags)
 static int
 in_payload_p(VALUE obj)
 {
-    int i = 1;
+    int i = 0;
     struct heap_page * p = GET_HEAP_PAGE(obj);
+    uintptr_t original_obj = (uintptr_t)obj;
 
-    while (BUILTIN_TYPE(obj) != T_PAYLOAD && GET_HEAP_PAGE(obj) == p) {
+    while (BUILTIN_TYPE(obj) != T_PAYLOAD) {
+        if(GET_HEAP_PAGE(obj) != p)
+            break;
+ 
+        i++;
         obj = obj - i * sizeof(RVALUE);
+    }
 
-        if (BUILTIN_TYPE(obj) == T_PAYLOAD && i < RPAYLOAD(obj)->len) { 
-            return true;
-        }
+    if (obj == original_obj)
+        return true;
+
+    if (GET_HEAP_PAGE(obj) != p) {
+        return false;
+    }
+
+    GC_ASSERT(BUILTIN_TYPE(obj) == T_PAYLOAD);
+    if ((uintptr_t)obj <= original_obj &&
+            original_obj < ((uintptr_t)obj + (RPAYLOAD(obj)->len * sizeof(RVALUE)))) {
+        return true;
     }
 
     return false;
@@ -6229,7 +6243,8 @@ static void
 gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int payload_body_p)
 {
     if (LIKELY(during_gc)) {
-	rgengc_check_relation(objspace, obj);
+        if(!payload_body_p)
+            rgengc_check_relation(objspace, obj);
 	if (!gc_mark_set(objspace, obj)) return; /* already marked */
 
         if (0) { // for debug GC marking miss
@@ -6247,7 +6262,8 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE obj, int payload_body_p)
             rp(obj);
             rb_bug("try to mark T_NONE object"); /* check here will help debugging */
         }
-	gc_aging(objspace, obj);
+        if (!payload_body_p)
+            gc_aging(objspace, obj);
 
         /* if we're in the middle of a payload body we want to mark the slot
          * directly instead of adding it to the mark stack */
@@ -6285,7 +6301,12 @@ static inline void
 gc_mark(rb_objspace_t *objspace, VALUE obj)
 {
     if (!is_markable_object(objspace, obj)) return;
-    gc_mark_ptr(objspace, obj, 0);
+
+    if (BUILTIN_TYPE(obj) == T_PAYLOAD) {
+        gc_mark_ptr(objspace, obj, 1);
+    } else {
+        gc_mark_ptr(objspace, obj, 0);
+    }
 }
 
 void
@@ -6463,7 +6484,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
         cc_table_mark(objspace, obj);
         mark_tbl_no_pin(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
-        gc_mark_payload(objspace, (VALUE)RCLASS(obj)->ptr - sizeof(struct RPayload));
+        gc_mark(objspace, (VALUE)((uintptr_t)RCLASS(obj)->ptr - sizeof(struct RPayload)));
 	break;
 
       case T_ICLASS:
@@ -6476,7 +6497,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 	if (!RCLASS_EXT(obj)) break;
 	mark_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
         cc_table_mark(objspace, obj);
-        gc_mark_payload(objspace, (VALUE)RCLASS(obj)->ptr - sizeof(struct RPayload));
+        gc_mark(objspace, (VALUE)((uintptr_t)RCLASS(obj)->ptr - sizeof(struct RPayload)));
 	break;
 
       case T_ARRAY:
