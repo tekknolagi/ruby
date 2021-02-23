@@ -183,6 +183,7 @@ class_alloc(VALUE flags, VALUE klass)
 
 #if USE_RVARGC
     obj->ptr = rb_rvargc_payload_data_ptr((VALUE)obj);
+    fprintf(stderr, "creating T_CLASS obj %p with T_PAYLOAD %p\n", (void *)obj, (void *)obj->ptr);
 #else
     obj->ptr = ZALLOC(rb_classext_t);
 #endif
