@@ -26,9 +26,9 @@ VALUE cUjitDisasmInsn;
 
 #if RUBY_DEBUG
 static int64_t vm_insns_count = 0;
-int64_t rb_ujit_exec_insns_count = 0;
 static int64_t exit_op_count[VM_INSTRUCTION_SIZE] = { 0 };
 int64_t rb_compiled_iseq_count = 0;
+struct rb_ujit_runtime_counters ujit_runtime_counters = { 0 };
 #endif
 
 // Machine code blocks (executable memory)
@@ -582,6 +582,88 @@ print_insn_count_buffer(const struct insn_count *buffer, int how_many, int left_
     }
 }
 
+struct counter_printing {
+    char *counter_reader;
+    char *const counter_reader_end;
+    const int longest_name_len;
+};
+
+static void
+longest_counter_name_i(char *counter_name, int len, void *data)
+{
+    int *longest = data;
+    if (len > *longest) *longest = len;
+}
+
+static void
+print_counter_value_i(char *counter_name, int len, void *data)
+{
+    struct counter_printing *printing = data;
+    int padding = printing->longest_name_len - len;
+
+    int64_t counter_value;
+    if ((printing->counter_reader + sizeof(int64_t) - 1) >= printing->counter_reader_end) {
+        return;
+    }
+    memcpy(&counter_value, printing->counter_reader, sizeof(int64_t));
+
+    fprintf(stderr, "    %.*s", len, counter_name);
+    for (int i = 0; i < padding; i++) fputc(' ', stderr);
+    fprintf(stderr, "%10" PRId64 "\n", counter_value);
+
+    printing->counter_reader += sizeof(int64_t);
+}
+
+static void
+counter_name_foreach(void (*callback)(char *, int, void *), void *data)
+{
+    char *name_reader = ujit_counter_names;
+    char *counter_name_end = ujit_counter_names + sizeof(ujit_counter_names);
+    while (name_reader < counter_name_end) {
+        if (*name_reader == ',' || *name_reader == ' ' || *name_reader == '\0') {
+            name_reader++;
+            continue;
+        }
+
+        int name_len;
+        char *name_end;
+        {
+            name_end = strchr(name_reader, ',');
+            if (name_end == NULL) name_end = strchr(name_reader, '\0');
+            if (name_end == NULL) break;
+            name_len = (int)(name_end - name_reader);
+        }
+
+        callback(name_reader, name_len, data);
+
+        name_reader = name_end;
+    }
+}
+
+static void
+print_runtime_counters(void)
+{
+    fprintf(stderr, "Runtime counters:\n");
+    if (sizeof(ujit_runtime_counters) % sizeof(int64_t) != 0) {
+        // Should not happen on SysV x86-64
+        fprintf(stderr, "    Not printing because the struct storing the counters have padding\n");
+        return;
+    }
+
+    int longest_name_len = 0;
+    counter_name_foreach(longest_counter_name_i, &longest_name_len);
+
+
+    char *counter_reader = (char *)&ujit_runtime_counters;
+    char *counter_reader_end = counter_reader + sizeof(ujit_runtime_counters);
+    struct counter_printing printing = {
+        .counter_reader = counter_reader,
+        .counter_reader_end = counter_reader_end,
+        .longest_name_len = longest_name_len
+    };
+    counter_name_foreach(print_counter_value_i, &printing);
+}
+
 __attribute__((destructor))
 static void
 print_ujit_stats(void)
@@ -590,16 +672,17 @@ print_ujit_stats(void)
 
     const struct insn_count *sorted_exit_ops = sort_insn_count_array(exit_op_count);
 
-    double total_insns_count = vm_insns_count + rb_ujit_exec_insns_count;
-    double ratio = rb_ujit_exec_insns_count / total_insns_count;
+    double total_insns_count = vm_insns_count + ujit_runtime_counters.exec_instruction;
+    double ratio = ujit_runtime_counters.exec_instruction / total_insns_count;
 
     fprintf(stderr, "compiled_iseq_count:   %10" PRId64 "\n", rb_compiled_iseq_count);
     fprintf(stderr, "main_block_code_size:  %6.1f MiB\n", ((double)cb->write_pos) / 1048576.0);
     fprintf(stderr, "side_block_code_size:  %6.1f MiB\n", ((double)ocb->write_pos) / 1048576.0);
     fprintf(stderr, "vm_insns_count:        %10" PRId64 "\n", vm_insns_count);
-    fprintf(stderr, "ujit_exec_insns_count: %10" PRId64 "\n", rb_ujit_exec_insns_count);
+    fprintf(stderr, "ujit_exec_insns_count: %10" PRId64 "\n", ujit_runtime_counters.exec_instruction);
     fprintf(stderr, "ratio_in_ujit:         %9.1f%%\n", ratio * 100);
     print_insn_count_buffer(sorted_exit_ops, 10, 4);
+    print_runtime_counters();
 }
 #endif // if RUBY_DEBUG
 

@@ -21,9 +21,46 @@ struct rb_callcache;
 #define rb_callcache rb_callcache
 #endif
 
+#define UJIT_DECLARE_COUNTERS(...) struct rb_ujit_runtime_counters { \
+    int64_t __VA_ARGS__; \
+}; \
+static char ujit_counter_names[] = #__VA_ARGS__;
+
+UJIT_DECLARE_COUNTERS(
+    exec_instruction,
+
+    swb_callsite_not_simple,
+    swb_kw_splat,
+    swb_ic_empty,
+    swb_invalid_cme,
+    swb_protected,
+    swb_ivar_set_method,
+    swb_ivar_get_method,
+    swb_zsuper_method,
+    swb_alias_method,
+    swb_undef_method,
+    swb_optimized_method,
+    swb_missing_method,
+    swb_bmethod,
+    swb_refined_method,
+    swb_unknown_method_type,
+    swb_cfunc_ruby_array_varg,
+    swb_cfunc_argc_mismatch,
+    swb_cfunc_toomany_args,
+    swb_iseq_tailcall,
+    swb_iseq_argc_mismatch,
+    swb_iseq_not_simple,
+    swb_not_implemented_method,
+    swb_se_receiver_not_heap,
+    swb_se_cf_overflow,
+    swb_se_cc_klass_differ
+)
+
+#undef UJIT_DECLARE_COUNTERS
+
 RUBY_EXTERN struct rb_ujit_options rb_ujit_opts;
-RUBY_EXTERN int64_t rb_ujit_exec_insns_count;
 RUBY_EXTERN int64_t rb_compiled_iseq_count;
+RUBY_EXTERN struct rb_ujit_runtime_counters ujit_runtime_counters;
 
 void cb_write_pre_call_bytes(codeblock_t* cb);
 void cb_write_post_call_bytes(codeblock_t* cb);
