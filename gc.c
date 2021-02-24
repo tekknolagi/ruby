@@ -6111,8 +6111,11 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
           case T_ZOMBIE:
           case T_NONE:
             break;
-          case T_PAYLOAD:
-            gc_mark_payload(objspace, obj);
+          case T_CLASS:
+          case T_ICLASS:
+          case T_MODULE:
+            gc_mark_and_pin(objspace, obj, 0);
+            gc_mark_payload(objspace, (uintptr_t)RCLASS(obj)->ptr - sizeof(struct RPayload));
             break;
           default:
             gc_mark_and_pin(objspace, obj, 0);
