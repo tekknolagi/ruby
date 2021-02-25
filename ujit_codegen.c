@@ -938,6 +938,41 @@ gen_opt_plus(jitstate_t* jit, ctx_t* ctx)
     return true;
 }
 
+static bool
+gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
+{
+    // Create a size-exit to fall back to the interpreter
+    // Note: we generate the side-exit before popping operands from the stack
+    uint8_t* side_exit = ujit_side_exit(jit, ctx);
+
+    // If someone redefined nil? on NilClass, we'll never JIT this instruction
+    if (!BASIC_OP_UNREDEFINED_P(BOP_NIL_P, NIL_REDEFINED_OP_FLAG)) {
+        return false;
+    }
+
+    x86opnd_t arg0 = ctx_stack_pop(ctx, 1);
+
+    cmp(cb, arg0, imm_opnd(Qnil));
+
+    jne_ptr(cb, side_exit);
+
+    // If the operand is Qnil, check that nil? hasn't been redefined
+    mov(cb, RAX, const_ptr_opnd(ruby_current_vm_ptr));
+    test(
+        cb,
+        member_opnd_idx(RAX, rb_vm_t, redefined_flag, BOP_NIL_P),
+        imm_opnd(NIL_REDEFINED_OP_FLAG)
+    );
+    // If it has been redefined, fall back to the interpreter
+    jnz_ptr(cb, side_exit);
+
+    // nil? confirmed
+    x86opnd_t dst = ctx_stack_push(ctx, T_TRUE);
+    mov(cb, dst, imm_opnd(Qtrue));
+
+    return true;
+}
+
 void
 gen_branchif_branch(codeblock_t* cb, uint8_t* target0, uint8_t* target1, uint8_t shape)
 {
@@ -1651,6 +1686,7 @@ ujit_init_codegen(void)
     ujit_reg_op(BIN(opt_and), gen_opt_and, false);
     ujit_reg_op(BIN(opt_minus), gen_opt_minus, false);
     ujit_reg_op(BIN(opt_plus), gen_opt_plus, false);
+    ujit_reg_op(BIN(opt_nil_p), gen_opt_nil_p, false);
 
     // Map branch instruction opcodes to codegen functions
     ujit_reg_op(BIN(opt_getinlinecache), gen_opt_getinlinecache, true);
