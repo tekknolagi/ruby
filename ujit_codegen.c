@@ -941,20 +941,26 @@ gen_opt_plus(jitstate_t* jit, ctx_t* ctx)
 static bool
 gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
 {
-    // Create a size-exit to fall back to the interpreter
-    // Note: we generate the side-exit before popping operands from the stack
-    uint8_t* side_exit = ujit_side_exit(jit, ctx);
-
     // If someone redefined nil? on NilClass, we'll never JIT this instruction
     if (!BASIC_OP_UNREDEFINED_P(BOP_NIL_P, NIL_REDEFINED_OP_FLAG)) {
         return false;
     }
 
+    // Create a size-exit to fall back to the interpreter
+    // Note: we generate the side-exit before popping operands from the stack
+    uint8_t* side_exit = ujit_side_exit(jit, ctx);
+
+    struct rb_call_data * cd = (struct rb_call_data *)jit_get_arg(jit, 0);
+
+    assume_method_lookup_stable(cd->cc, vm_cc_cme(cd->cc), jit->block);
+
     x86opnd_t arg0 = ctx_stack_pop(ctx, 1);
 
     cmp(cb, arg0, imm_opnd(Qnil));
+    int NOT_Qnil = cb_new_label(cb, "NOT_Qnil");
+    int DONE = cb_new_label(cb, "DONE");
 
-    jne_ptr(cb, side_exit);
+    jne_label(cb, NOT_Qnil);
 
     // If the operand is Qnil, check that nil? hasn't been redefined
     mov(cb, RAX, const_ptr_opnd(ruby_current_vm_ptr));
@@ -969,6 +975,26 @@ gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
     // nil? confirmed
     x86opnd_t dst = ctx_stack_push(ctx, T_TRUE);
     mov(cb, dst, imm_opnd(Qtrue));
+
+    // FIXME: why can't we use `jmp` ?
+    cmp(cb, RAX, RAX);
+    je_label(cb, DONE);
+
+    cb_write_label(cb, NOT_Qnil);
+
+    mov(cb, REG0, arg0);
+
+    // Pointer to the klass field of the receiver &(recv->klass)
+    x86opnd_t klass_opnd = mem_opnd(64, REG0, offsetof(struct RBasic, klass));
+
+    // Bail if receiver class is different from compile-time call cache class
+    jit_mov_gc_ptr(jit, cb, REG1, (VALUE)cd->cc->klass);
+    cmp(cb, klass_opnd, REG1);
+    jne_ptr(cb, side_exit);
+    mov(cb, dst, imm_opnd(Qfalse));
+
+    cb_write_label(cb, DONE);
+    cb_link_labels(cb);
 
     return true;
 }
