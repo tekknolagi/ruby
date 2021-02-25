@@ -13,7 +13,6 @@
 #include "ujit_codegen.h"
 #include "ujit_core.h"
 #include "ujit_hooks.inc"
-#include "ujit.rbinc"
 #include "darray.h"
 
 #if HAVE_LIBCAPSTONE
@@ -506,6 +505,82 @@ ujit_disasm(VALUE self, VALUE code, VALUE from)
 }
 #endif
 
+static void
+counter_name_foreach(void (*callback)(char *, int, void *), void *data)
+{
+    char *name_reader = ujit_counter_names;
+    char *counter_name_end = ujit_counter_names + sizeof(ujit_counter_names);
+    while (name_reader < counter_name_end) {
+        if (*name_reader == ',' || *name_reader == ' ' || *name_reader == '\0') {
+            name_reader++;
+            continue;
+        }
+
+        int name_len;
+        char *name_end;
+        {
+            name_end = strchr(name_reader, ',');
+            if (name_end == NULL) name_end = strchr(name_reader, '\0');
+            if (name_end == NULL) break;
+            name_len = (int)(name_end - name_reader);
+        }
+
+        callback(name_reader, name_len, data);
+
+        name_reader = name_end;
+    }
+}
+
+
+struct collect_counters {
+    char *counter_reader;
+    char *counter_reader_end;
+    VALUE hash;
+};
+
+
+static void
+collect_counters_i(char *name, int len, void *data)
+{
+    struct collect_counters *collect = data;
+    if (collect->counter_reader + sizeof(int64_t) - 1 >= collect->counter_reader_end) {
+        return;
+    }
+    int64_t counter_value;
+    memcpy(&counter_value, collect->counter_reader, sizeof(int64_t));
+    collect->counter_reader += sizeof(int64_t);
+
+    VALUE key = ID2SYM(rb_intern2(name, len));
+    VALUE value = LONG2FIX((long)counter_value);
+    rb_hash_aset(collect->hash, key, value);
+}
+
+
+static VALUE
+runtime_counters_to_hash(rb_execution_context_t *ec, VALUE self)
+{
+    VALUE hash = rb_hash_new();
+#if RUBY_DEBUG
+    RB_VM_LOCK_ENTER();
+    {
+        // Using char * here because it's the way blessed by the standard to
+        // look at the content of a struct.
+        char *counter_reader = (char *)&ujit_runtime_counters;
+        char *counter_reader_end = counter_reader + sizeof(ujit_runtime_counters);
+        struct collect_counters collect = {
+            .counter_reader = counter_reader,
+            .counter_reader_end = counter_reader_end,
+            .hash = hash
+        };
+        counter_name_foreach(collect_counters_i, &collect);
+    }
+    RB_VM_LOCK_LEAVE();
+#endif
+    return hash;
+}
+
+#include "ujit.rbinc"
+
 #if RUBY_DEBUG
 // implementation for --ujit-stats
 
@@ -615,32 +690,6 @@ print_counter_value_i(char *counter_name, int len, void *data)
 }
 
 static void
-counter_name_foreach(void (*callback)(char *, int, void *), void *data)
-{
-    char *name_reader = ujit_counter_names;
-    char *counter_name_end = ujit_counter_names + sizeof(ujit_counter_names);
-    while (name_reader < counter_name_end) {
-        if (*name_reader == ',' || *name_reader == ' ' || *name_reader == '\0') {
-            name_reader++;
-            continue;
-        }
-
-        int name_len;
-        char *name_end;
-        {
-            name_end = strchr(name_reader, ',');
-            if (name_end == NULL) name_end = strchr(name_reader, '\0');
-            if (name_end == NULL) break;
-            name_len = (int)(name_end - name_reader);
-        }
-
-        callback(name_reader, name_len, data);
-
-        name_reader = name_end;
-    }
-}
-
-static void
 print_runtime_counters(void)
 {
     fprintf(stderr, "Runtime counters:\n");
@@ -682,7 +731,7 @@ print_ujit_stats(void)
     fprintf(stderr, "ujit_exec_insns_count: %10" PRId64 "\n", ujit_runtime_counters.exec_instruction);
     fprintf(stderr, "ratio_in_ujit:         %9.1f%%\n", ratio * 100);
     print_insn_count_buffer(sorted_exit_ops, 10, 4);
-    print_runtime_counters();
+    //print_runtime_counters();
 }
 #endif // if RUBY_DEBUG
 
@@ -809,6 +858,10 @@ rb_ujit_init(struct rb_ujit_options *options)
     rb_define_method(cUjitDisasm, "disasm", ujit_disasm, 2);
     cUjitDisasmInsn = rb_struct_define_under(cUjitDisasm, "Insn", "address", "mnemonic", "op_str", NULL);
 #endif
+
+    if (RUBY_DEBUG && rb_ujit_opts.gen_stats) {
+        rb_define_const(mUjit, "GEN_STATS", Qtrue);
+    }
 
     // Initialize the GC hooks
     method_lookup_dependency = st_init_numtable();
