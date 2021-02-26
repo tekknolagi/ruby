@@ -1049,7 +1049,7 @@ gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
     jnz_ptr(cb, side_exit);
 
     // nil? confirmed
-    x86opnd_t dst = ctx_stack_push(ctx, T_TRUE);
+    x86opnd_t dst = ctx_stack_push(ctx, T_NONE);
     mov(cb, dst, imm_opnd(Qtrue));
     jmp_label(cb, DONE);
 
