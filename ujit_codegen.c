@@ -938,6 +938,82 @@ gen_opt_plus(jitstate_t* jit, ctx_t* ctx)
     return true;
 }
 
+static void
+ujit_rb_class_of(jitstate_t* jit, ctx_t* ctx, x86opnd_t src, x86opnd_t dst)
+{
+    int DONE = cb_new_label(cb, "DONE");
+    int RETURN_FALSE_CLASS = cb_new_label(cb, "RETURN_FALSE_CLASS");
+    int RETURN_NIL_CLASS = cb_new_label(cb, "RETURN_NIL_CLASS");
+    int RETURN_HEAP_CLASS = cb_new_label(cb, "RETURN_HEAP_CLASS");
+    int RETURN_TRUE_CLASS = cb_new_label(cb, "RETURN_TRUE_CLASS");
+    int RETURN_FIXNUM_CLASS = cb_new_label(cb, "RETURN_FIXNUM_CLASS");
+    int RETURN_SYMBOL_CLASS = cb_new_label(cb, "RETURN_SYMBOL_CLASS");
+    int RETURN_FLONUM_CLASS = cb_new_label(cb, "RETURN_FLONUM_CLASS");
+
+    // Is this false?  Qfalse == 0
+    test(cb, src, src);
+    je_label(cb, RETURN_FALSE_CLASS);
+
+    // Is this nil?
+    cmp(cb, src, imm_opnd(Qnil));
+    je_label(cb, RETURN_NIL_CLASS);
+
+    // Is this a heap pointer?
+    test(cb, src, imm_opnd(RUBY_IMMEDIATE_MASK));
+    je_label(cb, RETURN_HEAP_CLASS);
+
+    // Is this Qtrue?
+    cmp(cb, src, imm_opnd(Qtrue));
+    je_label(cb, RETURN_TRUE_CLASS);
+
+    // Is this a fixnum?
+    test(cb, src, imm_opnd(RUBY_FIXNUM_FLAG));
+    je_label(cb, RETURN_FIXNUM_CLASS);
+
+    // Is this a symbol?
+    const VALUE mask = ~(RBIMPL_VALUE_FULL << RUBY_SPECIAL_SHIFT);
+
+    and(cb, src, imm_opnd(mask));
+    cmp(cb, src, imm_opnd(RUBY_SYMBOL_FLAG));
+    je_label(cb, RETURN_SYMBOL_CLASS);
+
+    // Is this a flonum?
+    test(cb, src, imm_opnd(RUBY_FLONUM_FLAG));
+    je_label(cb, RETURN_FLONUM_CLASS);
+
+    // IT IS SUPER BROKEN!!
+    int3(cb);
+
+    cb_write_label(cb, RETURN_FALSE_CLASS);
+    mov(cb, dst, imm_opnd(rb_cFalseClass));
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_NIL_CLASS);
+    mov(cb, dst, imm_opnd(rb_cNilClass));
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_HEAP_CLASS);
+    x86opnd_t klass_opnd = mem_opnd(64, src, offsetof(struct RBasic, klass));
+    mov(cb, dst, klass_opnd);
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_TRUE_CLASS);
+    mov(cb, dst, imm_opnd(rb_cTrueClass));
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_FIXNUM_CLASS);
+    mov(cb, dst, imm_opnd(rb_cInteger));
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_SYMBOL_CLASS);
+    mov(cb, dst, imm_opnd(rb_cSymbol));
+    jmp_label(cb, DONE);
+
+    cb_write_label(cb, RETURN_FLONUM_CLASS);
+    mov(cb, dst, imm_opnd(rb_cFloat));
+    cb_write_label(cb, DONE);
+}
+
 static bool
 gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
 {
@@ -975,22 +1051,18 @@ gen_opt_nil_p(jitstate_t* jit, ctx_t* ctx)
     // nil? confirmed
     x86opnd_t dst = ctx_stack_push(ctx, T_TRUE);
     mov(cb, dst, imm_opnd(Qtrue));
-
-    // FIXME: why can't we use `jmp` ?
-    cmp(cb, RAX, RAX);
-    je_label(cb, DONE);
+    jmp_label(cb, DONE);
 
     cb_write_label(cb, NOT_Qnil);
-
     mov(cb, REG0, arg0);
 
-    // Pointer to the klass field of the receiver &(recv->klass)
-    x86opnd_t klass_opnd = mem_opnd(64, REG0, offsetof(struct RBasic, klass));
+    ujit_rb_class_of(jit, ctx, REG0, REG1);
 
     // Bail if receiver class is different from compile-time call cache class
-    jit_mov_gc_ptr(jit, cb, REG1, (VALUE)cd->cc->klass);
-    cmp(cb, klass_opnd, REG1);
+    jit_mov_gc_ptr(jit, cb, REG0, (VALUE)cd->cc->klass);
+    cmp(cb, REG0, REG1);
     jne_ptr(cb, side_exit);
+
     mov(cb, dst, imm_opnd(Qfalse));
 
     cb_write_label(cb, DONE);
