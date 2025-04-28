@@ -3719,7 +3719,7 @@ mod opt_tests {
             bb0():
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, Foo::Bar::C)
-              v5:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v5:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               Return v5
         "#]]);
     }
@@ -3736,10 +3736,10 @@ mod opt_tests {
             bb0():
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, C)
-              v16:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v16:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v2:NilClassExact = Const Value(nil)
               Jump bb1(v2, v16)
-            bb1(v4:NilClassExact, v5:BasicObject[VALUE(0x1008)]):
+            bb1(v4:NilClassExact, v5:Class[VALUE(0x1008)]):
               v8:BasicObject = SendWithoutBlock v5, :new
               Jump bb2(v8, v4)
             bb2(v10:BasicObject, v11:NilClassExact):
