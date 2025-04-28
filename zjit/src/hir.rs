@@ -341,7 +341,7 @@ pub enum Insn {
     // Ignoring keyword arguments etc for now
     SendWithoutBlock { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
     Send { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
-    SendWithoutBlockDirect { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, iseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
+    SendWithoutBlockDirect { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, cme: CmePtr, args: Vec<InsnId>, state: InsnId },
 
     // Control flow instructions
     Return { val: InsnId },
@@ -455,8 +455,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::SendWithoutBlockDirect { self_val, call_info, iseq, args, .. } => {
-                write!(f, "SendWithoutBlockDirect {self_val}, :{} ({:?})", call_info.method_name, self.ptr_map.map_ptr(iseq))?;
+            Insn::SendWithoutBlockDirect { self_val, call_info, cme, args, .. } => {
+                write!(f, "SendWithoutBlockDirect {self_val}, :{} ({:?})", call_info.method_name, self.ptr_map.map_ptr(cme))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
                 }
@@ -796,11 +796,11 @@ impl Function {
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: *state,
             },
-            SendWithoutBlockDirect { self_val, call_info, cd, iseq, args, state } => SendWithoutBlockDirect {
+            SendWithoutBlockDirect { self_val, call_info, cd, cme, args, state } => SendWithoutBlockDirect {
                 self_val: find!(*self_val),
                 call_info: call_info.clone(),
                 cd: *cd,
-                iseq: *iseq,
+                cme: *cme,
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: *state,
             },
@@ -986,7 +986,7 @@ impl Function {
     }
 
     /// Rewrite SendWithoutBlock opcodes into SendWithoutBlockDirect opcodes if we know the target
-    /// ISEQ statically. This removes run-time method lookups and opens the door for inlining.
+    /// CME statically. This removes run-time method lookups and opens the door for inlining.
     fn optimize_direct_sends(&mut self) {
         let payload = get_or_create_iseq_payload(self.iseq);
         for block in self.rpo() {
@@ -1039,16 +1039,14 @@ impl Function {
                         // It allows you to use a faster ISEQ if possible.
                         cme = unsafe { rb_check_overloaded_cme(cme, ci) };
                         let def_type = unsafe { get_cme_def_type(cme) };
-                        if def_type != VM_METHOD_TYPE_ISEQ {
-                            // TODO(max): Allow non-iseq; cache cme
+                        if !(def_type == VM_METHOD_TYPE_ISEQ || def_type == VM_METHOD_TYPE_CFUNC) {
                             self.push_insn_id(block, insn_id); continue;
                         }
                         self.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass, method: mid }));
-                        let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
                         if let Some(expected) = guard_equal_to {
                             self_val = self.push_insn(block, Insn::GuardBitEquals { val: self_val, expected, state });
                         }
-                        let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { self_val, call_info, cd, iseq, args, state });
+                        let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { self_val, call_info, cd, cme, args, state });
                         self.make_equal_to(insn_id, send_direct);
                     }
                     Insn::GetConstantPath { ic } => {
@@ -3582,7 +3580,7 @@ mod opt_tests {
             bb0():
               v2:ArrayExact = NewArray
               PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
-              v7:BasicObject = CCall itself@0x1010, v2
+              v7:BasicObject = SendWithoutBlockDirect v2, :itself (0x1010)
               Return v7
         "#]]);
     }
@@ -3600,8 +3598,9 @@ mod opt_tests {
             bb0():
               v1:Fixnum[1] = Const Value(1)
               v2:Fixnum[0] = Const Value(0)
-              v4:BasicObject = SendWithoutBlock v1, :itself, v2
-              Return v4
+              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008)
+              v7:BasicObject = SendWithoutBlockDirect v1, :itself (0x1010), v2
+              Return v7
         "#]]);
     }
 
@@ -3653,7 +3652,7 @@ mod opt_tests {
               v1:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v2:StringExact = StringCopy v1
               PatchPoint MethodRedefined(String@0x1008, bytesize@0x1010)
-              v7:Fixnum = CCall bytesize@0x1018, v2
+              v7:BasicObject = SendWithoutBlockDirect v2, :bytesize (0x1018)
               Return v7
         "#]]);
     }
