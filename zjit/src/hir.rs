@@ -1600,6 +1600,10 @@ fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
                 let offset = get_arg(pc, 0).as_i64();
                 jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
             }
+            YARVINSN_opt_new => {
+                let offset = get_arg(pc, 1).as_i64();
+                jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
+            }
             YARVINSN_leave | YARVINSN_opt_invokebuiltin_delegate_leave => {
                 if insn_idx < iseq_size {
                     jump_targets.insert(insn_idx);
@@ -1799,6 +1803,17 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         target: BranchEdge { target, args: state.as_args() }
                     });
                     queue.push_back((state.clone(), target, target_idx));
+                }
+                YARVINSN_opt_new => {
+                    let offset = get_arg(pc, 1).as_i64();
+                    // TODO(max): Check interrupts
+                    let target_idx = insn_idx_at_offset(insn_idx, offset);
+                    let target = insn_idx_to_block[&target_idx];
+                    let _branch_id = fun.push_insn(block, Insn::Jump(
+                        BranchEdge { target, args: state.as_args() }
+                    ));
+                    queue.push_back((state.clone(), target, target_idx));
+                    break;  // Don't enqueue the next block as a successor
                 }
                 YARVINSN_jump => {
                     let offset = get_arg(pc, 0).as_i64();
@@ -2796,6 +2811,26 @@ mod tests {
         ");
         assert_compile_fails("test", ParseError::UnknownOpcode("sendforward".into()))
     }
+
+    #[test]
+    fn test_opt_new() {
+        eval("
+            class C; end
+            def test = C.new
+        ");
+        assert_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              v1:BasicObject = GetConstantPath 0x1000
+              v2:NilClassExact = Const Value(nil)
+              Jump bb1(v2, v1)
+            bb1(v4:NilClassExact, v5:BasicObject):
+              v8:BasicObject = SendWithoutBlock v5, :new
+              Jump bb2(v8, v4)
+            bb2(v10:BasicObject, v11:NilClassExact):
+              Return v10
+        "#]]);
+    }
 }
 
 #[cfg(test)]
@@ -3686,6 +3721,29 @@ mod opt_tests {
               PatchPoint StableConstantNames(0x1000, Foo::Bar::C)
               v5:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               Return v5
+        "#]]);
+    }
+
+    #[test]
+    fn test_opt_new() {
+        eval("
+            class C; end
+            def test = C.new
+            test
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test:
+            bb0():
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, C)
+              v16:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v2:NilClassExact = Const Value(nil)
+              Jump bb1(v2, v16)
+            bb1(v4:NilClassExact, v5:BasicObject[VALUE(0x1008)]):
+              v8:BasicObject = SendWithoutBlock v5, :new
+              Jump bb2(v8, v4)
+            bb2(v10:BasicObject, v11:NilClassExact):
+              Return v10
         "#]]);
     }
 }
