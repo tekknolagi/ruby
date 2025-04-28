@@ -68,6 +68,9 @@ def base_type name
   [type, exact]
 end
 
+module_, _ = base_type "Module"
+# Class cannot be subclassed, at least from Ruby code
+module_.subtype "Class"
 base_type "String"
 base_type "Array"
 base_type "Hash"

@@ -189,6 +189,9 @@ impl Type {
         else if val.class_of() == unsafe { rb_cObject } {
             Type { bits: bits::ObjectExact, spec: Specialization::Object(val) }
         }
+        else if val.class_p() {
+            Type { bits: bits::Class, spec: Specialization::Object(val) }
+        }
         else {
             // TODO(max): Add more cases for inferring type bits from built-in types
             Type { bits: bits::BasicObject, spec: Specialization::Object(val) }

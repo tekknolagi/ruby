@@ -427,6 +427,10 @@ impl VALUE {
         self.class_of() == unsafe { rb_cString }
     }
 
+    pub fn class_p(self) -> bool {
+        unsafe { RB_TYPE_P(self, RUBY_T_CLASS) }
+    }
+
     /// Read the flags bits from the RBasic object, then return a Ruby type enum (e.g. RUBY_T_ARRAY)
     pub fn builtin_type(self) -> ruby_value_type {
         (self.builtin_flags() & (RUBY_T_MASK as usize)) as ruby_value_type

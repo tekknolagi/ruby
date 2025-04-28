@@ -3999,7 +3999,7 @@ mod opt_tests {
             bb0():
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, Foo::Bar::C)
-              v5:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v5:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               Return v5
         "#]]);
     }
@@ -4016,10 +4016,10 @@ mod opt_tests {
             bb0():
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, C)
-              v17:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v17:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v2:NilClassExact = Const Value(nil)
               Jump bb1(v2, v17)
-            bb1(v4:NilClassExact, v5:BasicObject[VALUE(0x1008)]):
+            bb1(v4:NilClassExact, v5:Class[VALUE(0x1008)]):
               PatchPoint MethodRedefined(Class@0x1010, new@0x1018)
               v20:BasicObject = CallCFunc 0x1020 (:new), v5
               Jump bb2(v20, v4)
@@ -4044,11 +4044,11 @@ mod opt_tests {
             bb0():
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, C)
-              v19:BasicObject[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v19:Class[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v2:NilClassExact = Const Value(nil)
               v3:Fixnum[1] = Const Value(1)
               Jump bb1(v2, v19, v3)
-            bb1(v5:NilClassExact, v6:BasicObject[VALUE(0x1008)], v7:Fixnum[1]):
+            bb1(v5:NilClassExact, v6:Class[VALUE(0x1008)], v7:Fixnum[1]):
               PatchPoint MethodRedefined(Class@0x1010, new@0x1018)
               v22:BasicObject = CallCFunc 0x1020 (:new), v6, v7
               Jump bb2(v22, v5)
