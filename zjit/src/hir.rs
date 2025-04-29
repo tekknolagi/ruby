@@ -1674,6 +1674,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     queue.push_back((entry_state, fun.entry_block, /*insn_idx=*/0_u32));
 
     let mut visited = HashSet::new();
+    let payload = get_or_create_iseq_payload(iseq);
 
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     while let Some((incoming_state, block, mut insn_idx)) = queue.pop_front() {
@@ -1708,6 +1709,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 .try_into()
                 .unwrap();
             // Move to the next instruction to compile
+            let current_insn_idx = insn_idx;
             insn_idx += insn_len(opcode as usize);
 
             match opcode {
@@ -1761,7 +1763,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_branchunless => {
                     let offset = get_arg(pc, 0).as_i64();
-                    let val = state.stack_pop()?;
+                    let mut val = state.stack_pop()?;
+                    if let Some([cond_type]) = payload.get_operand_types(current_insn_idx as usize) {
+                        let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.clone() });
+                        val = fun.push_insn(block, Insn::GuardType { val, guard_type: cond_type.unspecialized(), state: exit_id });
+                    }
                     let test_id = fun.push_insn(block, Insn::Test { val });
                     // TODO(max): Check interrupts
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
@@ -1774,7 +1780,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_branchif => {
                     let offset = get_arg(pc, 0).as_i64();
-                    let val = state.stack_pop()?;
+                    let mut val = state.stack_pop()?;
+                    if let Some([cond_type]) = payload.get_operand_types(current_insn_idx as usize) {
+                        let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.clone() });
+                        val = fun.push_insn(block, Insn::GuardType { val, guard_type: cond_type.unspecialized(), state: exit_id });
+                    }
                     let test_id = fun.push_insn(block, Insn::Test { val });
                     // TODO(max): Check interrupts
                     let target_idx = insn_idx_at_offset(insn_idx, offset);

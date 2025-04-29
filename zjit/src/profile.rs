@@ -51,6 +51,10 @@ pub extern "C" fn rb_zjit_profile_insn(opcode: ruby_vminsn_type, ec: EcPtr) {
 /// Profile a YARV instruction
 fn profile_insn(profiler: &mut Profiler, opcode: ruby_vminsn_type) {
     match opcode {
+        YARVINSN_branchif  => profile_operands(profiler, 1),
+        YARVINSN_branchnil => profile_operands(profiler, 1),
+        YARVINSN_branchunless =>
+            profile_operands(profiler, 1),
         YARVINSN_opt_plus  => profile_operands(profiler, 2),
         YARVINSN_opt_minus => profile_operands(profiler, 2),
         YARVINSN_opt_mult  => profile_operands(profiler, 2),

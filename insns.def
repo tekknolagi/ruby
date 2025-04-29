@@ -1215,6 +1215,7 @@ branchif
 (VALUE val)
 ()
 /* Same discussion as jump. */
+// attr bool zjit_profile = true;
 // attr bool leaf = leafness_of_check_ints; /* has rb_threadptr_execute_interrupts() */
 {
     if (RTEST(val)) {
@@ -1230,6 +1231,7 @@ branchunless
 (VALUE val)
 ()
 /* Same discussion as jump. */
+// attr bool zjit_profile = true;
 // attr bool leaf = leafness_of_check_ints; /* has rb_threadptr_execute_interrupts() */
 {
     if (!RTEST(val)) {
@@ -1245,6 +1247,7 @@ branchnil
 (VALUE val)
 ()
 /* Same discussion as jump. */
+// attr bool zjit_profile = true;
 // attr bool leaf = leafness_of_check_ints; /* has rb_threadptr_execute_interrupts() */
 {
     if (NIL_P(val)) {
