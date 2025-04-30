@@ -367,6 +367,8 @@ pub enum Insn {
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
     PatchPoint(Invariant),
+
+    ObjectAlloc { class: VALUE },
 }
 
 impl Insn {
@@ -758,7 +760,7 @@ impl Function {
         use Insn::*;
         match &self.insns[insn_id.0] {
             result@(PutSelf | Const {..} | Param {..} | NewArray {..} | GetConstantPath {..}
-                    | PatchPoint {..}) => result.clone(),
+                    | PatchPoint {..} | ObjectAlloc {..}) => result.clone(),
             Snapshot { state: FrameState { iseq, insn_idx, pc, stack, locals } } =>
                 Snapshot {
                     state: FrameState {
@@ -882,6 +884,7 @@ impl Function {
             Insn::PutSelf => types::BasicObject,
             Insn::Defined { .. } => types::BasicObject,
             Insn::GetConstantPath { .. } => types::BasicObject,
+            Insn::ObjectAlloc { .. } => types::BasicObject,
         }
     }
 
@@ -1049,30 +1052,70 @@ impl Function {
                         let send_direct = self.push_insn(block, Insn::SendWithoutBlockDirect { self_val, call_info, cd, cme, args, state });
                         self.make_equal_to(insn_id, send_direct);
                     }
-                    Insn::GetConstantPath { ic } => {
-                        let idlist: *const ID = unsafe { (*ic).segments };
-                        let ice = unsafe { (*ic).entry };
-                        if ice.is_null() {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
-                        let multi_ractor_mode = unsafe { rb_zjit_multi_ractor_p() };
-                        if cref_sensitive || multi_ractor_mode {
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        // Assume single-ractor mode.
-                        self.push_insn(block, Insn::PatchPoint(Invariant::SingleRactorMode));
-                        // Invalidate output code on any constant writes associated with constants
-                        // referenced after the PatchPoint.
-                        self.push_insn(block, Insn::PatchPoint(Invariant::StableConstantNames { idlist }));
-                        let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
-                        self.make_equal_to(insn_id, replacement);
-                    }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
             }
         }
         self.infer_types();
+    }
+
+    fn optimize_getconstant(&mut self) {
+        for block in self.rpo() {
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            assert!(self.blocks[block.0].insns.is_empty());
+            for insn_id in old_insns {
+                if let Insn::GetConstantPath { ic } = self.find(insn_id) {
+                    let idlist: *const ID = unsafe { (*ic).segments };
+                    let ice = unsafe { (*ic).entry };
+                    if ice.is_null() {
+                        self.push_insn_id(block, insn_id); continue;
+                    }
+                    let cref_sensitive = !unsafe { (*ice).ic_cref }.is_null();
+                    let multi_ractor_mode = unsafe { rb_zjit_multi_ractor_p() };
+                    if cref_sensitive || multi_ractor_mode {
+                        self.push_insn_id(block, insn_id); continue;
+                    }
+                    // Assume single-ractor mode.
+                    self.push_insn(block, Insn::PatchPoint(Invariant::SingleRactorMode));
+                    // Invalidate output code on any constant writes associated with constants
+                    // referenced after the PatchPoint.
+                    self.push_insn(block, Insn::PatchPoint(Invariant::StableConstantNames { idlist }));
+                    let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
+                    self.make_equal_to(insn_id, replacement);
+                }
+                else { self.push_insn_id(block, insn_id); }
+            }
+        }
+        self.infer_types();
+    }
+
+    /// HIR equivalent of Class#new optimization into opt_new opcode. For all Sends to Class#new,
+    /// rewrite into ObjectAlloc and Send to #initialize.
+    fn optimize_new(&mut self) {
+        return;
+        // for block in self.rpo() {
+        //     let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+        //     assert!(self.blocks[block.0].insns.is_empty());
+        //     for insn_id in old_insns {
+        //         if let Insn::SendWithoutBlockDirect { self_val, cme, .. } = self.find(insn_id) {
+        //             let self_type = self.type_of(self_val);
+        //             if self_type.is_subtype(types::Class) && self_type.ruby_object_known() && unsafe { rb_zjit_cme_is_class_new(cme) } {
+        //                 let class = self_type.ruby_object().unwrap();
+        //                 let replacement = self.push_insn(block, Insn::ObjectAlloc { class });
+        //                 self.push_insn(block, Insn::SendWithoutBlock
+        //                 self.make_equal_to(insn_id, replacement);
+        //             }
+        //         }
+        //         else { self.push_insn_id(block, insn_id); }
+        //         // match self.find(insn_id) {
+        //         //      if self.is_a(self_val, types::Class) &&  => {
+        //         //         assert!(self_type.is_subtype(types::ClassExact));
+        //         //         eprintln!("Object.new yeehaw");
+        //         //     }
+        //         //     _ => {}
+        //         // }
+        //     }
+        // }
     }
 
     /// Optimize SendWithoutBlock that land in a C method to a direct CCall without
@@ -1308,7 +1351,7 @@ impl Function {
             match self.find(insn_id) {
                 Insn::PutSelf | Insn::Const { .. } | Insn::Param { .. }
                 | Insn::NewArray { .. } | Insn::PatchPoint(..)
-                | Insn::GetConstantPath { .. } =>
+                | Insn::GetConstantPath { .. } | Insn::ObjectAlloc { .. } =>
                     {}
                 Insn::StringCopy { val }
                 | Insn::StringIntern { val }
@@ -1410,7 +1453,9 @@ impl Function {
     /// Run all the optimization passes we have.
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
+        self.optimize_getconstant();
         self.optimize_direct_sends();
+        self.optimize_new();
         self.optimize_c_calls();
         self.fold_constants();
         self.eliminate_dead_code();

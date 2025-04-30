@@ -739,5 +739,13 @@ rb_zjit_print_exception(void)
     rb_warn("Ruby error: %"PRIsVALUE"", rb_funcall(exception, rb_intern("full_message"), 0));
 }
 
+int check_cfunc(const rb_callable_method_entry_t *me, void *func);
+
+bool
+rb_zjit_cme_is_class_new(const rb_callable_method_entry_t *me)
+{
+    return check_cfunc(me, rb_class_new_instance_pass_kw);
+}
+
 // Preprocessed zjit.rb generated during build
 #include "zjit.rbinc"

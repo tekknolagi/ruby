@@ -411,6 +411,7 @@ fn main() {
         .allowlist_function("rb_get_cme_def_type")
         .allowlist_function("rb_zjit_multi_ractor_p")
         .allowlist_function("rb_zjit_constcache_shareable")
+        .allowlist_function("rb_zjit_cme_is_class_new")
         .allowlist_function("rb_get_cme_def_body_attr_id")
         .allowlist_function("rb_get_symbol_id")
         .allowlist_function("rb_get_cme_def_body_optimized_type")

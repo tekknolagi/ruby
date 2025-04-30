@@ -2310,7 +2310,7 @@ typedef VALUE (*cfunc_type)(ANYARGS);
 # define make_cfunc_type(f) (cfunc_type)(f)
 #endif
 
-static inline int
+int
 check_cfunc(const rb_callable_method_entry_t *me, cfunc_type func)
 {
     if (! me) {
