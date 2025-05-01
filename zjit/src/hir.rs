@@ -1676,13 +1676,25 @@ impl<'a> GraphvizPrinter<'a> {
         Self { fun }
     }
 
-    fn fmt_block(&self, block: &Block, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt_insn(&self, insn_id: InsnId, insn: Insn, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let output = if insn.has_output() {
+            let insn_type = self.fun.type_of(insn_id);
+            format!("{insn_id}:{insn_type} = ")
+        } else {
+            "".into()
+        };
+        writeln!(f, r#"<TR><TD ALIGN="left" PORT="{insn_id}">{output}{insn}</TD></TR>"#)
+    }
+
+    fn fmt_block(&self, block_id: BlockId, block: &Block, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, r#"<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
+        writeln!(f, r#"<TR><TD BGCOLOR="gray">{block_id}</TD></TR>"#)?;
         for insn_id in block.params.iter().chain(&block.insns) {
             let insn_id = self.fun.union_find.find_const(*insn_id);
             let insn = self.fun.find(insn_id);
-            write!(f, "{insn_id} = {insn}\\l")?;
+            self.fmt_insn(insn_id, insn, f)?;
         }
-        Ok(())
+        writeln!(f, "</TABLE>")
     }
 }
 
@@ -1691,25 +1703,22 @@ impl<'a> std::fmt::Display for GraphvizPrinter<'a> {
         let fun = &self.fun;
         let iseq_name = iseq_name(fun.iseq);
         writeln!(f, "digraph {iseq_name} {{")?;
-        writeln!(f, "graph [rankdir=TD];")?;
-        writeln!(f, "node [shape=box];")?;
+        writeln!(f, "node [shape=plaintext];")?;
         for block_id in fun.rpo() {
             let block = &fun.blocks[block_id.0];
-            writeln!(f, "subgraph cluster_{block_id} {{")?;
-            writeln!(f, r#"label="{block_id}""#)?;
-            write!(f, r#"{block_id} [label=""#)?;
-            self.fmt_block(block, f)?;
-            writeln!(f, r#""];"#)?;
-            writeln!(f, "}}")?;
+            write!(f, "{block_id} [label=<")?;
+            self.fmt_block(block_id, block, f)?;
+            writeln!(f, ">];")?;
         }
         for block_id in fun.rpo() {
-            for (idx, insn_id) in fun.blocks[block_id.0].insns.iter().enumerate() {
+            for insn_id in &fun.blocks[block_id.0].insns {
                 let insn_id = fun.union_find.find_const(*insn_id);
                 let insn = &fun.insns[insn_id.0];
                 match insn {
-                    Insn::IfFalse { val, target: BranchEdge { target, args } } => {
-                        writeln!(f, "{block_id} -> {target};")?;
-                    }
+                    Insn::IfFalse { target: BranchEdge { target, .. }, .. } |
+                    Insn::IfTrue { target: BranchEdge { target, .. }, .. } |
+                    Insn::Jump(BranchEdge { target, .. })
+                    => writeln!(f, "{block_id}:{insn_id} -> {target};")?,
                     _ => {}
                 }
             }
