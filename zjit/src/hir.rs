@@ -1692,6 +1692,7 @@ impl<'a> GraphvizPrinter<'a> {
         for insn_id in block.params.iter().chain(&block.insns) {
             let insn_id = self.fun.union_find.borrow().find_const(*insn_id);
             let insn = self.fun.find(insn_id);
+            if matches!(insn, Insn::Snapshot {..}) { continue; }
             self.fmt_insn(insn_id, insn, f)?;
         }
         writeln!(f, "</TABLE>")
