@@ -1704,6 +1704,7 @@ impl<'a> std::fmt::Display for GraphvizPrinter<'a> {
         let iseq_name = iseq_name(fun.iseq);
         writeln!(f, "digraph {iseq_name} {{")?;
         writeln!(f, "node [shape=plaintext];")?;
+        writeln!(f, "dpi=300;")?;
         for block_id in fun.rpo() {
             let block = &fun.blocks[block_id.0];
             write!(f, "{block_id} [label=<")?;
