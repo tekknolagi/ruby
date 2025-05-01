@@ -1422,6 +1422,7 @@ impl Function {
             Some(DumpHIR::WithoutSnapshot) => println!("HIR:\n{}", FunctionPrinter::without_snapshot(&self)),
             Some(DumpHIR::All) => println!("HIR:\n{}", FunctionPrinter::with_snapshot(&self)),
             Some(DumpHIR::Debug) => println!("HIR:\n{:#?}", &self),
+            Some(DumpHIR::Graphviz) => println!("{}", GraphvizPrinter::new(&self)),
             None => {},
         }
     }
@@ -1664,6 +1665,58 @@ fn filter_translatable_calls(flag: u32) -> Result<(), ParseError> {
     if (flag & VM_CALL_OPT_SEND) != 0 { return Err(ParseError::UnhandledCallType(CallType::OptSend)); }
     if (flag & VM_CALL_FORWARDING) != 0 { return Err(ParseError::UnhandledCallType(CallType::Forwarding)); }
     Ok(())
+}
+
+pub struct GraphvizPrinter<'a> {
+    fun: &'a Function,
+}
+
+impl<'a> GraphvizPrinter<'a> {
+    pub fn new(fun: &'a Function) -> Self {
+        Self { fun }
+    }
+
+    fn fmt_block(&self, block: &Block, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for insn_id in block.params.iter().chain(&block.insns) {
+            let insn_id = self.fun.union_find.find_const(*insn_id);
+            let insn = self.fun.find(insn_id);
+            write!(f, "{insn_id} = {insn}\\l")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Display for GraphvizPrinter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let fun = &self.fun;
+        let iseq_name = iseq_name(fun.iseq);
+        writeln!(f, "digraph {iseq_name} {{")?;
+        writeln!(f, "graph [rankdir=TD];")?;
+        writeln!(f, "node [shape=box];")?;
+        for block_id in fun.rpo() {
+            let block = &fun.blocks[block_id.0];
+            writeln!(f, "subgraph cluster_{block_id} {{")?;
+            writeln!(f, r#"label="{block_id}""#)?;
+            write!(f, r#"{block_id} [label=""#)?;
+            self.fmt_block(block, f)?;
+            writeln!(f, r#""];"#)?;
+            writeln!(f, "}}")?;
+        }
+        for block_id in fun.rpo() {
+            for (idx, insn_id) in fun.blocks[block_id.0].insns.iter().enumerate() {
+                let insn_id = fun.union_find.find_const(*insn_id);
+                let insn = &fun.insns[insn_id.0];
+                match insn {
+                    Insn::IfFalse { val, target: BranchEdge { target, args } } => {
+                        writeln!(f, "{block_id} -> {target};")?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        write!(f, "}}")?;
+        Ok(())
+    }
 }
 
 /// Compile ISEQ into High-level IR
@@ -1961,6 +2014,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
         Some(DumpHIR::WithoutSnapshot) => println!("HIR:\n{}", FunctionPrinter::without_snapshot(&fun)),
         Some(DumpHIR::All) => println!("HIR:\n{}", FunctionPrinter::with_snapshot(&fun)),
         Some(DumpHIR::Debug) => println!("HIR:\n{:#?}", &fun),
+        Some(DumpHIR::Graphviz) => println!("{}", GraphvizPrinter::new(&fun)),
         None => {},
     }
 

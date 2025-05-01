@@ -62,6 +62,7 @@ pub enum DumpHIR {
     All,
     // Pretty-print bare High-level IR structs
     Debug,
+    Graphviz,
 }
 
 /// Macro to get an option value by name
@@ -134,10 +135,12 @@ fn parse_option(options: &mut Options, str_ptr: *const std::os::raw::c_char) -> 
         ("dump-hir" | "dump-hir-opt", "") => options.dump_hir_opt = Some(DumpHIR::WithoutSnapshot),
         ("dump-hir" | "dump-hir-opt", "all") => options.dump_hir_opt = Some(DumpHIR::All),
         ("dump-hir" | "dump-hir-opt", "debug") => options.dump_hir_opt = Some(DumpHIR::Debug),
+        ("dump-hir" | "dump-hir-opt", "graphviz") => options.dump_hir_opt = Some(DumpHIR::Graphviz),
 
         ("dump-hir-init", "") => options.dump_hir_init = Some(DumpHIR::WithoutSnapshot),
         ("dump-hir-init", "all") => options.dump_hir_init = Some(DumpHIR::All),
         ("dump-hir-init", "debug") => options.dump_hir_init = Some(DumpHIR::Debug),
+        ("dump-hir-init", "graphviz") => options.dump_hir_init = Some(DumpHIR::Graphviz),
 
         ("dump-lir", "") => options.dump_lir = true,
 
