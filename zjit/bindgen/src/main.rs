@@ -343,6 +343,7 @@ fn main() {
         .allowlist_function("rb_iseq_reset_jit_func")
         .allowlist_function("rb_RSTRING_PTR")
         .allowlist_function("rb_RSTRING_LEN")
+        .allowlist_function("rb_zjit_sym2str")
         .allowlist_function("rb_ENCODING_GET")
         .allowlist_function("rb_optimized_call")
         .allowlist_function("rb_zjit_icache_invalidate")

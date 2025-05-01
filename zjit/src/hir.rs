@@ -69,6 +69,7 @@ impl<'a> std::fmt::Display for VALUEPrinter<'a> {
             Qnil => write!(f, "nil"),
             Qtrue => write!(f, "true"),
             Qfalse => write!(f, "false"),
+            val if val.symbol_p() => write!(f, ":{}", ruby_sym_to_rust_str(val)),
             val => write!(f, "VALUE({:p})", self.ptr_map.map_ptr(val.as_ptr::<VALUE>())),
         }
     }

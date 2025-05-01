@@ -743,6 +743,14 @@ fn ruby_str_to_rust(v: VALUE) -> String {
     }
 }
 
+// Convert a Ruby symbol to a Rust string by going through a Ruby string first.
+pub fn ruby_sym_to_rust_str(v: VALUE) -> String {
+    assert!(v.symbol_p());
+    let ruby_str = unsafe { rb_zjit_sym2str(v) };
+    assert!(ruby_str != VALUE(0), "Could not convert symbol to string");
+    ruby_str_to_rust(ruby_str)
+}
+
 /// A location in Rust code for integrating with debugging facilities defined in C.
 /// Use the [src_loc!] macro to crate an instance.
 pub struct SourceLocation {

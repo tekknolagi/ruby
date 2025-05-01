@@ -739,5 +739,11 @@ rb_zjit_print_exception(void)
     rb_warn("Ruby error: %"PRIsVALUE"", rb_funcall(exception, rb_intern("full_message"), 0));
 }
 
+VALUE
+rb_zjit_sym2str(VALUE v)
+{
+    return rb_sym2str(v);
+}
+
 // Preprocessed zjit.rb generated during build
 #include "zjit.rbinc"
