@@ -1690,7 +1690,7 @@ impl<'a> GraphvizPrinter<'a> {
         writeln!(f, r#"<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
         writeln!(f, r#"<TR><TD BGCOLOR="gray">{block_id}</TD></TR>"#)?;
         for insn_id in block.params.iter().chain(&block.insns) {
-            let insn_id = self.fun.union_find.find_const(*insn_id);
+            let insn_id = self.fun.union_find.borrow().find_const(*insn_id);
             let insn = self.fun.find(insn_id);
             self.fmt_insn(insn_id, insn, f)?;
         }
@@ -1713,9 +1713,8 @@ impl<'a> std::fmt::Display for GraphvizPrinter<'a> {
         }
         for block_id in fun.rpo() {
             for insn_id in &fun.blocks[block_id.0].insns {
-                let insn_id = fun.union_find.find_const(*insn_id);
-                let insn = &fun.insns[insn_id.0];
-                match insn {
+                let insn_id = fun.union_find.borrow().find_const(*insn_id);
+                match self.fun.find(insn_id) {
                     Insn::IfFalse { target: BranchEdge { target, .. }, .. } |
                     Insn::IfTrue { target: BranchEdge { target, .. }, .. } |
                     Insn::Jump(BranchEdge { target, .. })
