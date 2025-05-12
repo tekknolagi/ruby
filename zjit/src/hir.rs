@@ -1105,6 +1105,45 @@ impl Function {
         self.infer_types();
     }
 
+    fn inline_class_new_calls(&mut self) {
+        return;
+        /*
+        for block in self.rpo() {
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            assert!(self.blocks[block.0].insns.is_empty());
+            for insn_id in old_insns {
+                match self.find(insn_id) {
+                    Insn::CallCFunc { self_val, cfunc, cd, ..  } => {
+                        let self_type = self.type_of(self_val);
+
+                        // We know the receiver is a class
+                        // We know that the implementation of `new` is rb_class_new_instance_pass_kw
+                        let uses_default_allocator = unsafe { get_mct_func(cfunc) } == unsafe { rb_class_new_instance_pass_kw };
+
+                        if self_type.is_subclass(types::Class) && uses_default_allocator {
+                            // Look up the method
+                            if let Some(self_class) = self_type.ruby_object() {
+                                // Call rb_obj
+                                // call rb_obj_alloc(val);
+                                // val is `self_class`
+                                // Return value of `rb_obj_alloc` is our new
+                                // receiver for `initialize`
+                            }
+                            // v0 = ObjectAlloc{}
+                            // CallIseq/CFunc? v0, :initialize (0x...)
+
+                        } else {
+                            self.push_insn_id(block, insn_id);
+                        }
+                    }
+                    _ => { self.push_insn_id(block, insn_id); }
+                }
+            }
+        }
+        self.infer_types();
+        */
+    }
+
     /// Rewrite GetConstantPath into Const instructions
     fn optimize_constant_paths(&mut self) {
         for block in self.rpo() {
@@ -1591,6 +1630,7 @@ impl Function {
         self.optimize_lookup_method();
         self.optimize_direct_sends();
         self.optimize_c_calls();
+        self.inline_class_new_calls();
         self.fold_constants();
         self.eliminate_dead_code();
 
