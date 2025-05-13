@@ -161,6 +161,12 @@ rb_get_mct_func(const rb_method_cfunc_t *mct)
     return (void*)(uintptr_t)mct->func; // this field is defined as type VALUE (*func)(ANYARGS)
 }
 
+bool
+rb_is_default_allocator_p(const rb_method_cfunc_t *mct)
+{
+    return rb_get_mct_func(mct) == rb_class_new_instance_pass_kw;
+}
+
 const rb_iseq_t *
 rb_get_def_iseq_ptr(rb_method_definition_t *def)
 {

@@ -320,7 +320,9 @@ pub enum Insn {
     Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache },
 
-    //NewObject?
+    /// Allocates a new instance of `class`
+    NewObject { class: VALUE, state: InsnId },
+
     //SetIvar {},
     //GetIvar {},
 
@@ -484,10 +486,22 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 let method_name = method_id.contents_lossy().into_owned();
                 write!(f, "LookupMethod {self_val}, :{method_name}")
             }
+            Insn::NewObject { class, .. } => {
+                let class_name = unsafe {
+                    cstr_to_rust_string(rb_class2name(*class))
+                }.unwrap_or_else(|| "Unknown".to_string());
+
+                write!(f, "NewObject {:p} ({class_name})", self.ptr_map.map_ptr(class))
+            }
             Insn::CallMethod { callable, cd, self_val, args, .. } => {
-                let call_info = unsafe { (**cd).ci };
-                let method_id = unsafe { rb_vm_ci_mid(call_info) };
-                let method_name = method_id.contents_lossy().into_owned();
+                let method_name = if cd.is_null() {
+                    "(unknown)".into()
+                } else {
+                    let call_info = unsafe { (**cd).ci };
+                    let method_id = unsafe { rb_vm_ci_mid(call_info) };
+                    method_id.contents_lossy().into_owned()
+                };
+
                 write!(f, "CallMethod {callable} (:{method_name})")?;
                 for arg in [*self_val].iter().chain(args) {
                     write!(f, ", {arg}")?;
@@ -905,6 +919,7 @@ impl Function {
             Defined { .. } => todo!("find(Defined)"),
             NewArray { elements, state } => NewArray { elements: find_vec!(*elements), state: find!(*state) },
             ArrayMax { elements, state } => ArrayMax { elements: find_vec!(*elements), state: find!(*state) },
+            NewObject { class, state } => NewObject { class: *class, state: find!(*state) },
         }
     }
 
@@ -976,6 +991,7 @@ impl Function {
             Insn::CallMethod { .. } => types::BasicObject,
             Insn::CallIseq { .. } => types::BasicObject,
             Insn::CallCFunc { .. } => types::BasicObject,
+            Insn::NewObject { .. } => types::BasicObject,
         }
     }
 
@@ -1106,32 +1122,36 @@ impl Function {
     }
 
     fn inline_class_new_calls(&mut self) {
-        return;
-        /*
         for block in self.rpo() {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             assert!(self.blocks[block.0].insns.is_empty());
             for insn_id in old_insns {
                 match self.find(insn_id) {
-                    Insn::CallCFunc { self_val, cfunc, cd, ..  } => {
+                    Insn::CallCFunc { self_val, cfunc, state, args, ..  } => {
                         let self_type = self.type_of(self_val);
 
                         // We know the receiver is a class
                         // We know that the implementation of `new` is rb_class_new_instance_pass_kw
-                        let uses_default_allocator = unsafe { get_mct_func(cfunc) } == unsafe { rb_class_new_instance_pass_kw };
+                        let uses_default_allocator = unsafe { rb_is_default_allocator_p(cfunc) };
 
-                        if self_type.is_subclass(types::Class) && uses_default_allocator {
+                        if self_type.is_subtype(types::Class) && uses_default_allocator {
                             // Look up the method
                             if let Some(self_class) = self_type.ruby_object() {
-                                // Call rb_obj
-                                // call rb_obj_alloc(val);
-                                // val is `self_class`
-                                // Return value of `rb_obj_alloc` is our new
-                                // receiver for `initialize`
-                            }
-                            // v0 = ObjectAlloc{}
-                            // CallIseq/CFunc? v0, :initialize (0x...)
+                                // Allocate a new instance
+                                let instance = self.push_insn(block, Insn::NewObject { class: self_class, state });
 
+                                // Look up the initialize method on the instance
+                                let method = self.push_insn(block, Insn::LookupMethod { self_val: instance, method_id: ID!(initialize), state });
+
+                                // Call to initialize
+                                self.push_insn(block, Insn::CallMethod { callable: method, cd: std::ptr::null(), self_val: instance, args, state });
+
+                                // Replace the CallCFunc with NewObject
+                                self.make_equal_to(insn_id, instance);
+                            } else {
+                                panic!("fix me");
+                                self.push_insn_id(block, insn_id);
+                            }
                         } else {
                             self.push_insn_id(block, insn_id);
                         }
@@ -1141,7 +1161,6 @@ impl Function {
             }
         }
         self.infer_types();
-        */
     }
 
     /// Rewrite GetConstantPath into Const instructions
@@ -1580,6 +1599,9 @@ impl Function {
                 Insn::CallIseq { self_val, args, state, .. } | Insn::CallCFunc { self_val, args, state, .. } => {
                     worklist.push_back(self_val);
                     worklist.extend(args);
+                    worklist.push_back(state);
+                }
+                Insn::NewObject { state, .. } => {
                     worklist.push_back(state);
                 }
             }

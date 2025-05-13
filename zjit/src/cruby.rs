@@ -1216,6 +1216,7 @@ pub(crate) mod ids {
         name: to_s
         name: compile
         name: eval
+        name: initialize
     }
 
     /// Get an CRuby `ID` to an interned string, e.g. a particular method name.
