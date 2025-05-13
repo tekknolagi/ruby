@@ -509,9 +509,14 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 Ok(())
             }
             Insn::CallIseq { iseq, cd, self_val, args, .. } => {
-                let call_info = unsafe { (**cd).ci };
-                let method_id = unsafe { rb_vm_ci_mid(call_info) };
-                let method_name = method_id.contents_lossy().into_owned();
+                let method_name = if cd.is_null() {
+                    "(unknown)".into()
+                } else {
+                    let call_info = unsafe { (**cd).ci };
+                    let method_id = unsafe { rb_vm_ci_mid(call_info) };
+                    method_id.contents_lossy().into_owned()
+                };
+
                 write!(f, "CallIseq {:p} (:{method_name})", self.ptr_map.map_ptr(iseq))?;
                 for arg in [*self_val].iter().chain(args) {
                     write!(f, ", {arg}")?;
@@ -1653,6 +1658,8 @@ impl Function {
         self.optimize_direct_sends();
         self.optimize_c_calls();
         self.inline_class_new_calls();
+        self.optimize_lookup_method();
+        self.optimize_direct_sends();
         self.fold_constants();
         self.eliminate_dead_code();
 
