@@ -991,7 +991,7 @@ impl Function {
             Insn::CallMethod { .. } => types::BasicObject,
             Insn::CallIseq { .. } => types::BasicObject,
             Insn::CallCFunc { .. } => types::BasicObject,
-            Insn::NewObject { .. } => types::BasicObject,
+            Insn::NewObject { class, .. } => Type::from_class_exact(*class),
         }
     }
 

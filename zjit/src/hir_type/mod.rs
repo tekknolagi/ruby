@@ -146,6 +146,14 @@ impl Type {
         }
     }
 
+    pub fn from_class_exact(class: VALUE) -> Type {
+        if class == unsafe { rb_cArray } { return types::ArrayExact }
+        // TODO(max): Add more builtins
+        else {
+            Type { bits: bits::BasicObject, spec: Specialization::TypeExact(class) }
+        }
+    }
+
     /// Create a `Type` from a Ruby `VALUE`. The type is not guaranteed to have object
     /// specialization in its `specialization` field (for example, `Qnil` will just be
     /// `types::NilClassExact`), but will be available via `ruby_object()`.
