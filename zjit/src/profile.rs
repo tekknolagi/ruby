@@ -10,7 +10,7 @@ use crate::{cruby::*, hir_type::{types::{Empty, Fixnum}, Type}, virtualmem::Code
 struct Profiler {
     cfp: CfpPtr,
     iseq: IseqPtr,
-    insn_idx: usize,
+    insn_idx: u32,
 }
 
 impl Profiler {
@@ -20,7 +20,7 @@ impl Profiler {
         Profiler {
             cfp,
             iseq,
-            insn_idx: unsafe { get_cfp_pc(cfp).offset_from(get_iseq_body_iseq_encoded(iseq)) as usize },
+            insn_idx: unsafe { get_cfp_pc(cfp).offset_from(get_iseq_body_iseq_encoded(iseq)).try_into().unwrap() },
         }
     }
 
@@ -94,7 +94,7 @@ fn profile_operands(profiler: &mut Profiler, n: usize) {
 #[derive(Default, Debug)]
 pub struct IseqPayload {
     /// Type information of YARV instruction operands, indexed by the instruction index
-    opnd_types: HashMap<usize, Vec<Type>>,
+    opnd_types: HashMap<u32, Vec<Type>>,
 
     /// JIT code address of the first block
     pub start_ptr: Option<CodePtr>,
@@ -102,12 +102,12 @@ pub struct IseqPayload {
 
 impl IseqPayload {
     /// Get profiled operand types for a given instruction index
-    pub fn get_operand_types(&self, insn_idx: usize) -> Option<&[Type]> {
+    pub fn get_operand_types(&self, insn_idx: u32) -> Option<&[Type]> {
         self.opnd_types.get(&insn_idx).map(|types| types.as_slice())
     }
 
     /// Return true if top-two stack operands are Fixnums
-    pub fn have_two_fixnums(&self, insn_idx: usize) -> bool {
+    pub fn have_two_fixnums(&self, insn_idx: u32) -> bool {
         match self.get_operand_types(insn_idx) {
             Some([left, right]) => left.is_subtype(Fixnum) && right.is_subtype(Fixnum),
             _ => false,

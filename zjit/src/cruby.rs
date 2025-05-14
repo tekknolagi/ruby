@@ -1199,6 +1199,8 @@ pub(crate) mod ids {
 
                     // Lookup and cache each ID
                     $name.store(
+                        // TODO: we should make sure the symbols are created
+                        // in advance. Add an assert, please
                         unsafe { $crate::cruby::rb_intern2(ptr.cast(), content.len() as _) }.0,
                         std::sync::atomic::Ordering::Relaxed
                     );

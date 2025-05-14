@@ -494,13 +494,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 write!(f, "NewObject {:p} ({class_name})", self.ptr_map.map_ptr(class))
             }
             Insn::CallMethod { callable, ci, self_val, args, .. } => {
-                let method_name = if ci.is_null() {
-                    "(unknown)".into()
-                } else {
-                    let method_id = unsafe { rb_vm_ci_mid(*ci) };
-                    method_id.contents_lossy().into_owned()
-                };
-
+                let method_id = unsafe { rb_vm_ci_mid(*ci) };
+                let method_name = method_id.contents_lossy().into_owned();
                 write!(f, "CallMethod {callable} (:{method_name})")?;
                 for arg in [*self_val].iter().chain(args) {
                     write!(f, ", {arg}")?;
@@ -508,13 +503,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 Ok(())
             }
             Insn::CallIseq { iseq, ci, self_val, args, .. } => {
-                let method_name = if ci.is_null() {
-                    "(unknown)".into()
-                } else {
-                    let method_id = unsafe { rb_vm_ci_mid(*ci) };
-                    method_id.contents_lossy().into_owned()
-                };
-
+                let method_id = unsafe { rb_vm_ci_mid(*ci) };
+                let method_name = method_id.contents_lossy().into_owned();
                 write!(f, "CallIseq {:p} (:{method_name})", self.ptr_map.map_ptr(iseq))?;
                 for arg in [*self_val].iter().chain(args) {
                     write!(f, ", {arg}")?;
@@ -717,6 +707,7 @@ pub struct Function {
     insn_types: Vec<Type>,
     blocks: Vec<Block>,
     entry_block: BlockId,
+    opt_new_ci: HashMap<u32, RbCallInfo>,
 }
 
 impl Function {
@@ -728,6 +719,7 @@ impl Function {
             union_find: UnionFind::new().into(),
             blocks: vec![Block::default()],
             entry_block: BlockId(0),
+            opt_new_ci: Default::default(),
         }
     }
 
@@ -1074,7 +1066,7 @@ impl Function {
         let mut right_profiled_type = types::BasicObject;
         let frame_state = self.frame_state(state);
         let insn_idx = frame_state.insn_idx;
-        if let Some([left_type, right_type]) = payload.get_operand_types(insn_idx as usize) {
+        if let Some([left_type, right_type]) = payload.get_operand_types(insn_idx) {
             left_profiled_type = *left_type;
             right_profiled_type = *right_type;
         }
@@ -1145,8 +1137,12 @@ impl Function {
                                 // Look up the initialize method on the instance
                                 let method = self.push_insn(block, Insn::LookupMethod { self_val: instance, method_id: ID!(initialize), state });
 
+                                let frame_state = self.frame_state(state);
+                                let insn_idx = frame_state.insn_idx;
+                                let initialize_ci = self.opt_new_ci[&insn_idx];
+
                                 // Call to initialize
-                                self.push_insn(block, Insn::CallMethod { callable: method, ci: std::ptr::null(), self_val: instance, args, state });
+                                self.push_insn(block, Insn::CallMethod { callable: method, ci: initialize_ci, self_val: instance, args, state });
 
                                 // Replace the CallCFunc with NewObject
                                 self.make_equal_to(insn_id, instance);
@@ -1713,7 +1709,7 @@ impl<'a> std::fmt::Display for FunctionPrinter<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameState {
     iseq: IseqPtr,
-    insn_idx: usize,
+    insn_idx: u32,
     // Ruby bytecode instruction pointer
     pub pc: *const VALUE,
 
@@ -1966,7 +1962,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
         // the beginning of the block).
         fun.push_insn(block, Insn::Snapshot { state: state.clone() });
         while insn_idx < iseq_size {
-            state.insn_idx = insn_idx as usize;
+            state.insn_idx = insn_idx;
             // Get the current pc and opcode
             let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
             state.pc = pc;
@@ -2079,6 +2075,22 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // TODO(max): Check interrupts
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
                     let target = insn_idx_to_block[&target_idx];
+
+                    let next_pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
+                    let next_opcode: u32 = unsafe { rb_iseq_opcode_at_pc(iseq, next_pc) }
+                        .try_into()
+                        .unwrap();
+                    assert_eq!(next_opcode, YARVINSN_opt_send_without_block, "next instruction should be a call to initialize");
+
+                    let initialize_cd: CallData = get_arg(next_pc, 0).as_ptr();
+                    let initialize_ci = unsafe { (*initialize_cd).ci };
+                    let method_id = unsafe { rb_vm_ci_mid(initialize_ci) };
+                    assert_eq!(method_id, ID!(initialize), "method call should be to initialize");
+
+                    // The call to opt_send_without_block(:new) will need access to the :initialize
+                    // ci later on in the optimization pipeline.
+                    fun.opt_new_ci.insert(target_idx, initialize_ci);
+
                     // Skip the fast-path and go straight to the fallback code. We will let the
                     // optimizer take care of the converting Class#new->alloc+initialize instead.
                     fun.push_insn(block, Insn::Jump(BranchEdge { target, args: state.as_args() }));
