@@ -260,6 +260,7 @@ pub struct ID(pub ::std::os::raw::c_ulong);
 pub type IseqPtr = *const rb_iseq_t;
 
 pub type CallData = *const rb_call_data;
+pub type RbCallInfo = *const rb_callinfo;
 
 pub type CmePtr = *const rb_callable_method_entry_t;
 

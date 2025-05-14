@@ -343,9 +343,9 @@ pub enum Insn {
     CCall { cfun: *const u8, args: Vec<InsnId>, name: ID, return_type: Type },
 
     LookupMethod { self_val: InsnId, method_id: ID, state: InsnId },
-    CallMethod { callable: InsnId, cd: CallData, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
-    CallIseq { iseq: IseqPtr, cd: CallData, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
-    CallCFunc { cfunc: CFuncPtr, cd: CallData, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
+    CallMethod { callable: InsnId, ci: RbCallInfo, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
+    CallIseq { iseq: IseqPtr, ci: RbCallInfo, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
+    CallCFunc { cfunc: CFuncPtr, ci: RbCallInfo, self_val: InsnId, args: Vec<InsnId>, state: InsnId },
     // TODO(max): Add CallMethodWithBlock
 
     // Send without block with dynamic dispatch
@@ -493,12 +493,11 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
 
                 write!(f, "NewObject {:p} ({class_name})", self.ptr_map.map_ptr(class))
             }
-            Insn::CallMethod { callable, cd, self_val, args, .. } => {
-                let method_name = if cd.is_null() {
+            Insn::CallMethod { callable, ci, self_val, args, .. } => {
+                let method_name = if ci.is_null() {
                     "(unknown)".into()
                 } else {
-                    let call_info = unsafe { (**cd).ci };
-                    let method_id = unsafe { rb_vm_ci_mid(call_info) };
+                    let method_id = unsafe { rb_vm_ci_mid(*ci) };
                     method_id.contents_lossy().into_owned()
                 };
 
@@ -508,12 +507,11 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::CallIseq { iseq, cd, self_val, args, .. } => {
-                let method_name = if cd.is_null() {
+            Insn::CallIseq { iseq, ci, self_val, args, .. } => {
+                let method_name = if ci.is_null() {
                     "(unknown)".into()
                 } else {
-                    let call_info = unsafe { (**cd).ci };
-                    let method_id = unsafe { rb_vm_ci_mid(call_info) };
+                    let method_id = unsafe { rb_vm_ci_mid(*ci) };
                     method_id.contents_lossy().into_owned()
                 };
 
@@ -523,9 +521,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
-            Insn::CallCFunc { cfunc, cd, self_val, args, .. } => {
-                let call_info = unsafe { (**cd).ci };
-                let method_id = unsafe { rb_vm_ci_mid(call_info) };
+            Insn::CallCFunc { cfunc, ci, self_val, args, .. } => {
+                let method_id = unsafe { rb_vm_ci_mid(*ci) };
                 let method_name = method_id.contents_lossy().into_owned();
                 write!(f, "CallCFunc {:p} (:{method_name})", self.ptr_map.map_ptr(cfunc))?;
                 for arg in [*self_val].iter().chain(args) {
@@ -897,24 +894,24 @@ impl Function {
                 method_id: *method_id,
                 state: find!(*state),
             },
-            CallMethod { callable, self_val, cd, args, state } => CallMethod {
+            CallMethod { callable, self_val, ci, args, state } => CallMethod {
                 callable: find!(*callable),
                 self_val: find!(*self_val),
-                cd: *cd,
+                ci: *ci,
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: find!(*state),
             },
-            CallIseq { iseq, self_val, cd, args, state } => CallIseq {
+            CallIseq { iseq, self_val, ci, args, state } => CallIseq {
                 iseq: *iseq,
                 self_val: find!(*self_val),
-                cd: *cd,
+                ci: *ci,
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: find!(*state),
             },
-            CallCFunc { cfunc, self_val, cd, args, state } => CallCFunc {
+            CallCFunc { cfunc, self_val, ci, args, state } => CallCFunc {
                 cfunc: *cfunc,
                 self_val: find!(*self_val),
-                cd: *cd,
+                ci: *ci,
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: find!(*state),
             },
@@ -1149,7 +1146,7 @@ impl Function {
                                 let method = self.push_insn(block, Insn::LookupMethod { self_val: instance, method_id: ID!(initialize), state });
 
                                 // Call to initialize
-                                self.push_insn(block, Insn::CallMethod { callable: method, cd: std::ptr::null(), self_val: instance, args, state });
+                                self.push_insn(block, Insn::CallMethod { callable: method, ci: std::ptr::null(), self_val: instance, args, state });
 
                                 // Replace the CallCFunc with NewObject
                                 self.make_equal_to(insn_id, instance);
@@ -1232,7 +1229,7 @@ impl Function {
                         self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumGt { left, right }, BOP_GT, self_val, args[0], payload, state),
                     Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == ">=" && args.len() == 1 =>
                         self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumGe { left, right }, BOP_GE, self_val, args[0], payload, state),
-                    Insn::CallMethod { callable, cd, self_val, args, state } => {
+                    Insn::CallMethod { callable, ci, self_val, args, state } => {
                         let callable_type = self.type_of(callable);
                         if callable_type.is_subtype(types::CallableMethodEntry) {
                             if let Some(value) = callable_type.ruby_object() {
@@ -1240,13 +1237,13 @@ impl Function {
                                 let def_type = unsafe { get_cme_def_type(cme) };
                                 if def_type == VM_METHOD_TYPE_ISEQ {
                                     let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
-                                    let replacement = self.push_insn(block, Insn::CallIseq { iseq, cd, self_val, args, state });
+                                    let replacement = self.push_insn(block, Insn::CallIseq { iseq, ci, self_val, args, state });
                                     self.make_equal_to(insn_id, replacement);
                                     continue;
                                 }
                                 if def_type == VM_METHOD_TYPE_CFUNC {
                                     let cfunc = unsafe { get_cme_def_body_cfunc(cme) };
-                                    let replacement = self.push_insn(block, Insn::CallCFunc { cfunc, cd, self_val, args, state });
+                                    let replacement = self.push_insn(block, Insn::CallCFunc { cfunc, ci, self_val, args, state });
                                     self.make_equal_to(insn_id, replacement);
                                     continue;
                                 }
@@ -2152,7 +2149,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let recv = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.clone() });
                     let lookup = fun.push_insn(block, Insn::LookupMethod { self_val: recv, method_id, state: exit_id });
-                    let send = fun.push_insn(block, Insn::CallMethod { callable: lookup, cd, self_val: recv, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::CallMethod { callable: lookup, ci: unsafe { (*cd).ci }, self_val: recv, args, state: exit_id });
                     state.stack_push(send);
                 }
 
@@ -2192,7 +2189,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let recv = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.clone() });
                     let lookup = fun.push_insn(block, Insn::LookupMethod { self_val: recv, method_id, state: exit_id });
-                    let send = fun.push_insn(block, Insn::CallMethod { callable: lookup, cd, self_val: recv, args, state: exit_id });
+                    let send = fun.push_insn(block, Insn::CallMethod { callable: lookup, ci: unsafe { (*cd).ci }, self_val: recv, args, state: exit_id });
                     state.stack_push(send);
                 }
                 YARVINSN_send => {
