@@ -4099,9 +4099,11 @@ mod opt_tests {
               Jump bb1(v2, v17)
             bb1(v4:NilClassExact, v5:Class[VALUE(0x1008)]):
               PatchPoint MethodRedefined(Class@0x1010, new@0x1018)
-              v20:BasicObject = CallCFunc 0x1020 (:new), v5
-              Jump bb2(v20, v4)
-            bb2(v11:BasicObject, v12:NilClassExact):
+              v21:BasicObject[class_exact:C] = NewObject 0x1020 (C)
+              PatchPoint MethodRedefined(C@0x1008, initialize@0x1028)
+              v26:BasicObject = CallCFunc 0x1020 (:initialize), v21
+              Jump bb2(v21, v4)
+            bb2(v11:BasicObject[class_exact:C], v12:NilClassExact):
               Return v11
         "#]]);
     }
@@ -4128,9 +4130,11 @@ mod opt_tests {
               Jump bb1(v2, v19, v3)
             bb1(v5:NilClassExact, v6:Class[VALUE(0x1008)], v7:Fixnum[1]):
               PatchPoint MethodRedefined(Class@0x1010, new@0x1018)
-              v22:BasicObject = CallCFunc 0x1020 (:new), v6, v7
-              Jump bb2(v22, v5)
-            bb2(v13:BasicObject, v14:NilClassExact):
+              v23:BasicObject[class_exact:C] = NewObject 0x1020 (C)
+              PatchPoint MethodRedefined(C@0x1008, initialize@0x1028)
+              v28:BasicObject = CallIseq 0x1020 (:initialize), v23, v7
+              Jump bb2(v23, v5)
+            bb2(v13:BasicObject[class_exact:C], v14:NilClassExact):
               Return v13
         "#]]);
     }
