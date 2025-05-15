@@ -418,6 +418,11 @@ impl Insn {
             Insn::FixnumAdd  { .. } => false,
             Insn::FixnumSub  { .. } => false,
             Insn::FixnumMult { .. } => false,
+            // TODO: NewObject we should return false. We could do it now,
+            //       but since NewObject is necessarily followed by a call to
+            //       initialize (that we can't yet elide), we can't test that
+            //       NewObject would be elimiated
+            // TODO: Elide default `initialize` (initialize that resolves to BasicObject#initialize)
             // TODO(max): Consider adding a Guard that the rhs is non-zero before Div and Mod
             // Div *is* critical unless we can prove the right hand side != 0
             // Mod *is* critical unless we can prove the right hand side != 0
