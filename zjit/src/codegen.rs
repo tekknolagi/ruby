@@ -481,6 +481,15 @@ fn gen_call_cfunc(
     recv: Opnd,
     args: &Vec<InsnId>,
 ) -> Option<lir::Opnd> {
+    let cfunc_argc = unsafe { get_mct_argc(cfunc) };
+    // NB: The presence of self is assumed (no need for +1).
+    if (args.len() != cfunc_argc as usize) {
+        // TODO(max): We should check this at compile-time. If we have an arity mismatch at this
+        // point, we should side-exit (we're definitely going to raise) and if we don't, we should
+        // not check anything.
+        todo!("Arity mismatch");
+    }
+
     // Set up the new frame
     gen_push_frame(asm, recv);
 
@@ -494,8 +503,6 @@ fn gen_call_cfunc(
     for &arg in args.iter() {
         c_args.push(jit.get_opnd(arg)?);
     }
-
-    // TODO: check arity at compile time
 
     // Make a method call. The target address will be rewritten once compiled.
     let cfun = unsafe { get_mct_func(cfunc) }.cast();
