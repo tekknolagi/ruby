@@ -126,6 +126,9 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
                 asm.ccall(callee_addr, vec![]);
             });
             branch_iseqs.extend(callee_branch_iseqs);
+        } else {
+            // TODO: what to do if we can't compile something
+            return std::ptr::null();
         }
     }
 
@@ -258,6 +261,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SendWithoutBlock { call_info, cd, state, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state))?,
         Insn::SendWithoutBlockDirect { iseq, self_val, args, .. } => gen_send_without_block_direct(cb, jit, asm, *iseq, opnd!(self_val), args)?,
         Insn::CallCFunc { cfunc, self_val, args, .. } => gen_call_cfunc(cb, jit, asm, *cfunc, opnd!(self_val), args)?,
+        Insn::CallIseq { iseq, self_val, args, .. } => gen_send_without_block_direct(cb, jit, asm, *iseq, opnd!(self_val), args)?,
         Insn::Return { val } => return Some(gen_return(asm, opnd!(val))?),
         Insn::FixnumAdd { left, right, state } => gen_fixnum_add(asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
         Insn::FixnumSub { left, right, state } => gen_fixnum_sub(asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
