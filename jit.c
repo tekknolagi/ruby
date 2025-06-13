@@ -421,3 +421,9 @@ rb_assert_cme_handle(VALUE handle)
     RUBY_ASSERT_ALWAYS(!rb_objspace_garbage_object_p(handle));
     RUBY_ASSERT_ALWAYS(IMEMO_TYPE_P(handle, imemo_ment));
 }
+
+bool
+rb_obj_is_frozen(VALUE obj)
+{
+    return OBJ_FROZEN(obj);
+}

@@ -154,7 +154,7 @@ impl Type {
     /// specialization in its `specialization` field (for example, `Qnil` will just be
     /// `types::NilClassExact`), but will be available via `ruby_object()`.
     pub fn from_value(val: VALUE) -> Type {
-        if val.fixnum_p() {
+        let mut result = if val.fixnum_p() {
             Type { bits: bits::Fixnum, spec: Specialization::Object(val) }
         }
         else if val.flonum_p() {
@@ -199,7 +199,11 @@ impl Type {
         else {
             // TODO(max): Add more cases for inferring type bits from built-in types
             Type { bits: bits::BasicObject, spec: Specialization::Object(val) }
+        };
+        if !result.is_subtype(types::Immediate) && unsafe { crate::cruby::rb_obj_is_frozen(val) } {
+            result.bits |= bits::Frozen;
         }
+        result
     }
 
     /// Private. Only for creating type globals.

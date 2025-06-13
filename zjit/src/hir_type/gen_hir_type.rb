@@ -108,11 +108,13 @@ unsigned = cvalue_int.subtype "CUnsigned"
   unsigned.subtype "CUInt#{width}"
 }
 
+other_bits = [Type.new("Frozen", [])]
+
 # Assign individual bits to type leaves and union bit patterns to nodes with subtypes
 num_bits = 0
 $bits = {"Empty" => ["0u64"]}
 $numeric_bits = {"Empty" => 0}
-Set[any, *any.all_subtypes].sort_by(&:name).each {|type|
+Set[any, *any.all_subtypes, *other_bits].sort_by(&:name).each {|type|
   subtypes = type.subtypes
   if subtypes.empty?
     # Assign bits for leaves

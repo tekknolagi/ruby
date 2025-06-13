@@ -346,6 +346,7 @@ fn main() {
         .allowlist_function("rb_optimized_call")
         .allowlist_function("rb_zjit_icache_invalidate")
         .allowlist_function("rb_zjit_print_exception")
+        .allowlist_function("rb_obj_is_frozen")
         .allowlist_type("robject_offsets")
         .allowlist_type("rstring_offsets")
 

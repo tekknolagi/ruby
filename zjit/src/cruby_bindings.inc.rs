@@ -1000,4 +1000,5 @@ unsafe extern "C" {
     pub fn rb_assert_iseq_handle(handle: VALUE);
     pub fn rb_IMEMO_TYPE_P(imemo: VALUE, imemo_type: imemo_type) -> ::std::os::raw::c_int;
     pub fn rb_assert_cme_handle(handle: VALUE);
+    pub fn rb_obj_is_frozen(obj: VALUE) -> bool;
 }
