@@ -447,6 +447,7 @@ mod tests {
     use crate::cruby::rb_hash_new;
     use crate::cruby::rb_float_new;
     use crate::cruby::define_class;
+    use crate::cruby::rb_obj_freeze;
 
     #[track_caller]
     fn assert_bit_equal(left: Type, right: Type) {
@@ -696,8 +697,73 @@ mod tests {
         crate::cruby::with_rubyvm(|| {
             let left = Type::from_value(unsafe { rb_float_new(1.7976931348623157e+308) });
             let right = Type::from_value(unsafe { rb_float_new(1.7976931348623157e+308) });
-            assert_bit_equal(left.union(right), types::HeapFloat);
+            assert_bit_equal(left.union(right), types::HeapFloat.union(types::Frozen));
         });
+    }
+
+    #[test]
+    fn immediates_dont_have_frozen_bit() {
+        assert!(!types::TrueClassExact.is_subtype(types::Frozen));
+        assert!(!types::FalseClassExact.is_subtype(types::Frozen));
+        assert!(!Type::from_value(Qtrue).is_subtype(types::Frozen));
+        assert!(!Type::from_value(Qfalse).is_subtype(types::Frozen));
+    }
+
+    #[test]
+    fn array_is_not_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = unsafe { rb_ary_new_capa(0) };
+            Type::from_value(value)
+        });
+        assert_not_subtype(ty, types::Frozen);
+    }
+
+    #[test]
+    fn hash_is_not_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = unsafe { rb_hash_new() };
+            Type::from_value(value)
+        });
+        assert_not_subtype(ty, types::Frozen);
+    }
+
+    #[test]
+    fn str_is_not_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = rust_str_to_ruby("hello");
+            Type::from_value(value)
+        });
+        assert_not_subtype(ty, types::Frozen);
+    }
+
+    #[test]
+    fn frozen_array_is_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = unsafe { rb_ary_new_capa(0) };
+            unsafe { rb_obj_freeze(value) };
+            Type::from_value(value)
+        });
+        assert_subtype(ty, types::Frozen);
+    }
+
+    #[test]
+    fn frozen_hash_is_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = unsafe { rb_hash_new() };
+            unsafe { rb_obj_freeze(value) };
+            Type::from_value(value)
+        });
+        assert_subtype(ty, types::Frozen);
+    }
+
+    #[test]
+    fn frozen_str_is_frozen() {
+        let ty = crate::cruby::with_rubyvm(|| {
+            let value = rust_str_to_ruby("hello");
+            unsafe { rb_obj_freeze(value) };
+            Type::from_value(value)
+        });
+        assert_subtype(ty, types::Frozen);
     }
 
     #[test]

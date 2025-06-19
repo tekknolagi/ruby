@@ -2936,7 +2936,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_duparray, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:Frozen|ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v4:ArrayExact = ArrayDup v2
               Return v4
         "#]]);
@@ -2948,7 +2948,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_duphash, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:HashExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:HashExact|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v4:HashExact = HashDup v2
               Return v4
         "#]]);
@@ -2984,7 +2984,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_putchilledstring, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:StringExact|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v3:StringExact = StringCopy v2
               Return v3
         "#]]);
@@ -2996,7 +2996,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_putobject, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:Bignum[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:Frozen|Bignum[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               Return v2
         "#]]);
     }
@@ -3018,7 +3018,7 @@ mod tests {
         assert_method_hir_with_opcode("test", YARVINSN_putobject, expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:HeapFloat[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:HeapFloat|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               Return v2
         "#]]);
     }
@@ -3412,13 +3412,13 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:Frozen|ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v4:ArrayExact = ArrayDup v2
-              v5:ArrayExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              v5:Frozen|ArrayExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
               v7:ArrayExact = ArrayDup v5
-              v8:StringExact[VALUE(0x1010)] = Const Value(VALUE(0x1010))
+              v8:StringExact|Frozen[VALUE(0x1010)] = Const Value(VALUE(0x1010))
               v9:StringExact = StringCopy v8
-              v10:StringExact[VALUE(0x1010)] = Const Value(VALUE(0x1010))
+              v10:StringExact|Frozen[VALUE(0x1010)] = Const Value(VALUE(0x1010))
               v11:StringExact = StringCopy v10
               v13:BasicObject = SendWithoutBlock v0, :unknown_method, v4, v7, v9, v11
               Return v13
@@ -3659,7 +3659,7 @@ mod tests {
               v3:NilClassExact = Const Value(nil)
               v4:NilClassExact = Const Value(nil)
               v7:BasicObject = SendWithoutBlock v1, :+, v2
-              v8:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v8:StringExact|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v9:StringExact = StringCopy v8
               SideExit
         "#]]);
@@ -3872,7 +3872,7 @@ mod tests {
         assert_method_hir("test",  expect![[r#"
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
-              v3:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v3:StringExact|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v5:BasicObject = SendWithoutBlock v1, :[], v3
               Return v5
         "#]]);
@@ -5107,7 +5107,7 @@ mod opt_tests {
             fn test:
             bb0(v0:BasicObject, v1:BasicObject):
               v2:NilClassExact = Const Value(nil)
-              v4:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v4:Frozen|ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v6:ArrayExact = ArrayDup v4
               PatchPoint MethodRedefined(Array@0x1008, first@0x1010)
               v11:BasicObject = SendWithoutBlockDirect v6, :first (0x1018)
@@ -5125,7 +5125,7 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test:
             bb0(v0:BasicObject):
-              v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v2:StringExact|Frozen[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v3:StringExact = StringCopy v2
               PatchPoint MethodRedefined(String@0x1008, bytesize@0x1010)
               v8:Fixnum = CCall bytesize@0x1018, v3
