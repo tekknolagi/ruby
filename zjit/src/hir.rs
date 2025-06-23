@@ -892,7 +892,7 @@ impl Function {
     }
 
     // Add an instruction to an SSA block
-    fn push_insn(&mut self, block: BlockId, insn: Insn) -> InsnId {
+    pub fn push_insn(&mut self, block: BlockId, insn: Insn) -> InsnId {
         let is_param = matches!(insn, Insn::Param { .. });
         let id = self.new_insn(insn);
         if is_param {
@@ -1247,66 +1247,12 @@ impl Function {
         return self.is_a(val, types::Fixnum) || profiled_type.is_subtype(types::Fixnum);
     }
 
-    fn coerce_to_fixnum(&mut self, block: BlockId, val: InsnId, state: InsnId) -> InsnId {
-        if self.is_a(val, types::Fixnum) { return val; }
-        return self.push_insn(block, Insn::GuardType { val, guard_type: types::Fixnum, state });
-    }
-
-    fn arguments_likely_fixnums(&mut self, left: InsnId, right: InsnId, state: InsnId) -> bool {
+    pub fn arguments_likely_fixnums(&mut self, left: InsnId, right: InsnId, state: InsnId) -> bool {
         let frame_state = self.frame_state(state);
         let iseq_insn_idx = frame_state.insn_idx as usize;
         let left_profiled_type = self.profiled_type_of_at(left, iseq_insn_idx).unwrap_or(types::BasicObject);
         let right_profiled_type = self.profiled_type_of_at(right, iseq_insn_idx).unwrap_or(types::BasicObject);
         self.likely_is_fixnum(left, left_profiled_type) && self.likely_is_fixnum(right, right_profiled_type)
-    }
-
-    fn try_rewrite_fixnum_op(&mut self, block: BlockId, orig_insn_id: InsnId, f: &dyn Fn(InsnId, InsnId) -> Insn, bop: u32, left: InsnId, right: InsnId, state: InsnId) {
-        if self.arguments_likely_fixnums(left, right, state) {
-            if bop == BOP_NEQ {
-                // For opt_neq, the interpreter checks that both neq and eq are unchanged.
-                self.push_insn(block, Insn::PatchPoint(Invariant::BOPRedefined { klass: INTEGER_REDEFINED_OP_FLAG, bop: BOP_EQ }));
-            }
-            self.push_insn(block, Insn::PatchPoint(Invariant::BOPRedefined { klass: INTEGER_REDEFINED_OP_FLAG, bop }));
-            let left = self.coerce_to_fixnum(block, left, state);
-            let right = self.coerce_to_fixnum(block, right, state);
-            let result = self.push_insn(block, f(left, right));
-            self.make_equal_to(orig_insn_id, result);
-            self.insn_types[result.0] = self.infer_type(result);
-        } else {
-            self.push_insn_id(block, orig_insn_id);
-        }
-    }
-
-    fn rewrite_if_frozen(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId, klass: u32, bop: u32) {
-        let self_type = self.type_of(self_val);
-        if let Some(obj) = self_type.ruby_object() {
-            if obj.is_frozen() {
-                self.push_insn(block, Insn::PatchPoint(Invariant::BOPRedefined { klass, bop }));
-                self.make_equal_to(orig_insn_id, self_val);
-                return;
-            }
-        }
-        self.push_insn_id(block, orig_insn_id);
-    }
-
-    fn try_rewrite_freeze(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId) {
-        if self.is_a(self_val, types::StringExact) {
-            self.rewrite_if_frozen(block, orig_insn_id, self_val, STRING_REDEFINED_OP_FLAG, BOP_FREEZE);
-        } else if self.is_a(self_val, types::ArrayExact) {
-            self.rewrite_if_frozen(block, orig_insn_id, self_val, ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE);
-        } else if self.is_a(self_val, types::HashExact) {
-            self.rewrite_if_frozen(block, orig_insn_id, self_val, HASH_REDEFINED_OP_FLAG, BOP_FREEZE);
-        } else {
-            self.push_insn_id(block, orig_insn_id);
-        }
-    }
-
-    fn try_rewrite_uminus(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId) {
-        if self.is_a(self_val, types::StringExact) {
-            self.rewrite_if_frozen(block, orig_insn_id, self_val, STRING_REDEFINED_OP_FLAG, BOP_UMINUS);
-        } else {
-            self.push_insn_id(block, orig_insn_id);
-        }
     }
 
     /// Rewrite SendWithoutBlock opcodes into SendWithoutBlockDirect opcodes if we know the target
@@ -1317,32 +1263,6 @@ impl Function {
             assert!(self.blocks[block.0].insns.is_empty());
             for insn_id in old_insns {
                 match self.find(insn_id) {
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "+" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumAdd { left, right, state }, BOP_PLUS, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "-" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumSub { left, right, state }, BOP_MINUS, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "*" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumMult { left, right, state }, BOP_MULT, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "/" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumDiv { left, right, state }, BOP_DIV, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "%" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumMod { left, right, state }, BOP_MOD, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "==" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumEq { left, right }, BOP_EQ, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "!=" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumNeq { left, right }, BOP_NEQ, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "<" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumLt { left, right }, BOP_LT, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == "<=" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumLe { left, right }, BOP_LE, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == ">" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumGt { left, right }, BOP_GT, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, state, .. } if method_name == ">=" && args.len() == 1 =>
-                        self.try_rewrite_fixnum_op(block, insn_id, &|left, right| Insn::FixnumGe { left, right }, BOP_GE, self_val, args[0], state),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, .. } if method_name == "freeze" && args.len() == 0 =>
-                        self.try_rewrite_freeze(block, insn_id, self_val),
-                    Insn::SendWithoutBlock { self_val, call_info: CallInfo { method_name }, args, .. } if method_name == "-@" && args.len() == 0 =>
-                        self.try_rewrite_uminus(block, insn_id, self_val),
                     Insn::SendWithoutBlock { mut self_val, call_info, cd, args, state } => {
                         let frame_state = self.frame_state(state);
                         let (klass, guard_equal_to) = if let Some(klass) = self.type_of(self_val).runtime_exact_ruby_class() {
@@ -1472,7 +1392,7 @@ impl Function {
 
                     // Filter for a leaf and GC free function
                     use crate::cruby_methods::FnProperties;
-                    let Some(FnProperties { leaf: true, no_gc: true, return_type, elidable }) =
+                    let Some(FnProperties { leaf, no_gc, inline, return_type, elidable }) =
                         ZJITState::get_method_annotations().get_cfunc_properties(method)
                     else {
                         return Err(());
@@ -1481,18 +1401,27 @@ impl Function {
                     let ci_flags = unsafe { vm_ci_flag(call_info) };
                     // Filter for simple call sites (i.e. no splats etc.)
                     if ci_flags & VM_CALL_ARGS_SIMPLE != 0 {
-                        // Commit to the replacement. Put PatchPoint.
-                        fun.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass: recv_class, method: method_id }));
-                        if let Some(guard_type) = guard_type {
-                            // Guard receiver class
-                            self_val = fun.push_insn(block, Insn::GuardType { val: self_val, guard_type, state });
+                        let mut inline_args = vec![self_val];
+                        inline_args.extend(&args);
+                        if let Some(insns, result) = inline(fun, block, state, inline_args) {
+                            fun.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass: recv_class, method: method_id }));
+                            fun.replace_insn_with_insns(block, send_insn_id, insns);
+                            fun.make_equal_to(send_insn_id, result);
+                            return Ok(());
+                        } else if leaf && no_gc {
+                            // Commit to the replacement. Put PatchPoint.
+                            fun.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass: recv_class, method: method_id }));
+                            if let Some(guard_type) = guard_type {
+                                // Guard receiver class
+                                self_val = fun.push_insn(block, Insn::GuardType { val: self_val, guard_type, state });
+                            }
+                            let cfun = unsafe { get_mct_func(cfunc) }.cast();
+                            let mut cfunc_args = vec![self_val];
+                            cfunc_args.append(&mut args);
+                            let ccall = fun.push_insn(block, Insn::CCall { cfun, args: cfunc_args, name: method_id, return_type, elidable });
+                            fun.make_equal_to(send_insn_id, ccall);
+                            return Ok(());
                         }
-                        let cfun = unsafe { get_mct_func(cfunc) }.cast();
-                        let mut cfunc_args = vec![self_val];
-                        cfunc_args.append(&mut args);
-                        let ccall = fun.push_insn(block, Insn::CCall { cfun, args: cfunc_args, name: method_id, return_type, elidable });
-                        fun.make_equal_to(send_insn_id, ccall);
-                        return Ok(());
                     }
                 }
                 -1 => {
