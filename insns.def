@@ -211,6 +211,7 @@ getinstancevariable
 ()
 (VALUE val)
 /* Ractor crashes when it accesses class/module-level instances variables. */
+// attr bool zjit_profile = true;
 // attr bool leaf = false; /* has IVAR_ACCESSOR_SHOULD_BE_MAIN_RACTOR() */
 {
     val = vm_getinstancevariable(GET_ISEQ(), GET_SELF(), id, ic);
