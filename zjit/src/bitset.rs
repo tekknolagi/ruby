@@ -32,6 +32,20 @@ impl<T: Into<usize> + Copy> BitSet<T> {
         let bit_idx = idx.into() % (Entry::BITS as usize);
         (self.storage[entry_idx] & (1 << bit_idx)) != 0
     }
+
+    /// Modify `self` to only have bits set if they are also set in `other`. Returns true if `self`
+    /// was modified, and false otherwise.
+    /// `self` and `other` must have the same number of bits.
+    pub fn intersect_with(&mut self, other: &Self) -> bool {
+        assert_eq!(self.num_bits, other.num_bits);
+        let mut changed = false;
+        for i in 0..self.storage.len() {
+            let before = self.storage[i];
+            self.storage[i] &= other.storage[i];
+            changed |= self.storage[i] != before;
+        }
+        changed
+    }
 }
 
 #[cfg(test)]
@@ -66,5 +80,27 @@ mod tests {
         let mut set = BitSet::with_capacity(4);
         assert_eq!(set.insert(1usize), true);
         assert_eq!(set.insert(1usize), false);
+    }
+
+    #[test]
+    #[should_panic]
+    fn intersect_with_panics_with_different_num_bits() {
+        let mut left: BitSet<usize> = BitSet::with_capacity(3);
+        let right = BitSet::with_capacity(4);
+        left.intersect_with(&right);
+    }
+
+    #[test]
+    fn intersect_with_keeps_only_common_bits() {
+        let mut left = BitSet::with_capacity(3);
+        let mut right = BitSet::with_capacity(3);
+        left.insert(0usize);
+        left.insert(1usize);
+        right.insert(1usize);
+        right.insert(2usize);
+        left.intersect_with(&right);
+        assert_eq!(left.get(0usize), false);
+        assert_eq!(left.get(1usize), true);
+        assert_eq!(left.get(2usize), false);
     }
 }
