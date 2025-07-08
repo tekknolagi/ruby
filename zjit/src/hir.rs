@@ -2065,9 +2065,53 @@ impl Function {
         Ok(())
     }
 
+    fn validate_definite_assignment(&self) -> Result<(), ValidationError> {
+        // // Map of branch instruction -> InsnSet
+        // let mut assigned_out = HashMap::new();
+        // Map of block ID -> InsnSet
+        let mut assigned_in = HashMap::new();
+        let rpo = self.rpo();
+        // Begin with every block having every variable defined, except for the entry block, which
+        // has only its parameters defined.
+        for block in rpo {
+            if block == self.entry_block {
+                let mut only_params = InsnSet::with_capacity(self.insns.len());
+                for param in self.blocks[block.0].params {
+                    only_params.insert(param);
+                }
+                assigned_in.insert(block, only_params);
+            } else {
+                let mut all_ones = InsnSet::with_capacity(self.insns.len());
+                all_ones.insert_all();
+                assigned_in.insert(block, all_ones);
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in rpo {
+                let mut assigned = assigned_in[block].clone();
+                for &insn_id in &self.block[block.0].insns {
+                    let insn_id = self.union_find.borrow().find_const(insn_id);
+                    match self.find(insn_id) {
+                        Insn::Jump(BranchEdge { target, args })
+                        | Insn::IfTrue { target: BranchEdge { target, args }, .. }
+                        | Insn::IfFalse { target: BranchEdge { target, args }, .. } => {
+                            assigned_out.insert(insn_id, assigned.clone());
+                        }
+                        insn if insn.has_output() => {
+                            changed |= assigned.insert(insn_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Run all validation passes we have.
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.validate_block_terminators_and_jumps()?;
+        self.validate_definite_assignment()?;
         Ok(())
     }
 }

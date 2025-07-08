@@ -27,6 +27,13 @@ impl<T: Into<usize> + Copy> BitSet<T> {
         newly_inserted
     }
 
+    /// Set all bits to 1.
+    pub fn insert_all(&mut self) {
+        for _ in 0..self.entries.len() {
+            self.entries[i] = ~0;
+        }
+    }
+
     pub fn get(&self, idx: T) -> bool {
         debug_assert!(idx.into() < self.num_bits);
         let entry_idx = idx.into() / ENTRY_NUM_BITS;
@@ -40,10 +47,24 @@ impl<T: Into<usize> + Copy> BitSet<T> {
     pub fn intersect_with(&mut self, other: &Self) -> bool {
         assert_eq!(self.num_bits, other.num_bits);
         let mut changed = false;
-        for i in 0..self.storage.len() {
-            let before = self.storage[i];
-            self.storage[i] &= other.storage[i];
-            changed |= self.storage[i] != before;
+        for i in 0..self.entries.len() {
+            let before = self.entries[i];
+            self.entries[i] &= other.entries[i];
+            changed |= self.entries[i] != before;
+        }
+        changed
+    }
+
+    /// Modify `self` to also include bits from `other`. Returns true if `self` was modified, and
+    /// false otherwise.
+    /// `self` and `other` must have the same number of bits.
+    pub fn union_with(&mut self, other: &Self) -> bool {
+        assert_eq!(self.num_bits, other.num_bits);
+        let mut changed = false;
+        for i in 0..self.entries.len() {
+            let before = self.entries[i];
+            self.entries[i] |= other.entries[i];
+            changed |= self.entries[i] != before;
         }
         changed
     }
