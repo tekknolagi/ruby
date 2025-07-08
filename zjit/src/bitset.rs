@@ -4,6 +4,7 @@ const ENTRY_NUM_BITS: usize = Entry::BITS as usize;
 
 // TODO(max): Make a `SmallBitSet` and `LargeBitSet` and switch between them if `num_bits` fits in
 // `Entry`.
+#[derive(Clone)]
 pub struct BitSet<T: Into<usize> + Copy> {
     entries: Vec<Entry>,
     num_bits: usize,
@@ -29,8 +30,8 @@ impl<T: Into<usize> + Copy> BitSet<T> {
 
     /// Set all bits to 1.
     pub fn insert_all(&mut self) {
-        for _ in 0..self.entries.len() {
-            self.entries[i] = ~0;
+        for i in 0..self.entries.len() {
+            self.entries[i] = !0;
         }
     }
 

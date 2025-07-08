@@ -918,6 +918,8 @@ pub enum ValidationError {
     TerminatorNotAtEnd(String, BlockId, InsnId, usize),
     /// Expected length, actual length
     MismatchedBlockArity(String, BlockId, usize, usize),
+    JumpTargetNotInRPO(String, BlockId),
+    OperandNotDefined(String, InsnId),
 }
 
 
@@ -2065,6 +2067,129 @@ impl Function {
         Ok(())
     }
 
+    fn worklist_traverse_single_insn(&self, insn: &Insn, worklist: &mut VecDeque<InsnId>) {
+        match insn {
+            &Insn::Const { .. }
+            | &Insn::Param { .. }
+            | &Insn::PatchPoint(..)
+                | &Insn::GetLocal { .. }
+            | &Insn::PutSpecialObject { .. } =>
+            {}
+            &Insn::GetConstantPath { ic: _, state } => {
+                worklist.push_back(state);
+            }
+            &Insn::ArrayMax { ref elements, state }
+            | &Insn::NewArray { ref elements, state } => {
+                worklist.extend(elements);
+                worklist.push_back(state);
+            }
+            &Insn::NewHash { ref elements, state } => {
+                for &(key, value) in elements {
+                    worklist.push_back(key);
+                    worklist.push_back(value);
+                }
+                worklist.push_back(state);
+            }
+            &Insn::NewRange { low, high, state, .. } => {
+                worklist.push_back(low);
+                worklist.push_back(high);
+                worklist.push_back(state);
+            }
+            &Insn::StringCopy { val, .. }
+            | &Insn::StringIntern { val }
+            | &Insn::Return { val }
+            | &Insn::Throw { val, .. }
+            | &Insn::Defined { v: val, .. }
+            | &Insn::Test { val }
+            | &Insn::SetLocal { val, .. }
+            | &Insn::IsNil { val } =>
+                worklist.push_back(val),
+                &Insn::SetGlobal { val, state, .. }
+            | &Insn::GuardType { val, state, .. }
+            | &Insn::GuardBitEquals { val, state, .. }
+            | &Insn::ToArray { val, state }
+            | &Insn::ToNewArray { val, state } => {
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::ArraySet { array, val, .. } => {
+                worklist.push_back(array);
+                worklist.push_back(val);
+            }
+            &Insn::Snapshot { ref state } => {
+                worklist.extend(&state.stack);
+                worklist.extend(&state.locals);
+            }
+            &Insn::FixnumAdd { left, right, state }
+            | &Insn::FixnumSub { left, right, state }
+            | &Insn::FixnumMult { left, right, state }
+            | &Insn::FixnumDiv { left, right, state }
+            | &Insn::FixnumMod { left, right, state }
+            | &Insn::ArrayExtend { left, right, state }
+            => {
+                worklist.push_back(left);
+                worklist.push_back(right);
+                worklist.push_back(state);
+            }
+            &Insn::FixnumLt { left, right }
+            | &Insn::FixnumLe { left, right }
+            | &Insn::FixnumGt { left, right }
+            | &Insn::FixnumGe { left, right }
+            | &Insn::FixnumEq { left, right }
+            | &Insn::FixnumNeq { left, right }
+            => {
+                worklist.push_back(left);
+                worklist.push_back(right);
+            }
+            &Insn::Jump(BranchEdge { ref args, .. }) => worklist.extend(args),
+            &Insn::IfTrue { val, target: BranchEdge { ref args, .. } } | &Insn::IfFalse { val, target: BranchEdge { ref args, .. } } => {
+                worklist.push_back(val);
+                worklist.extend(args);
+            }
+            &Insn::ArrayDup { val, state } | &Insn::HashDup { val, state } => {
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::Send { self_val, ref args, state, .. }
+            | &Insn::SendWithoutBlock { self_val, ref args, state, .. }
+            | &Insn::SendWithoutBlockDirect { self_val, ref args, state, .. } => {
+                worklist.push_back(self_val);
+                worklist.extend(args);
+                worklist.push_back(state);
+            }
+            &Insn::InvokeBuiltin { ref args, state, .. } => {
+                worklist.extend(args);
+                worklist.push_back(state)
+            }
+            &Insn::CCall { ref args, .. } => worklist.extend(args),
+            &Insn::GetIvar { self_val, state, .. } | &Insn::DefinedIvar { self_val, state, .. } => {
+                worklist.push_back(self_val);
+                worklist.push_back(state);
+            }
+            &Insn::SetIvar { self_val, val, state, .. } => {
+                worklist.push_back(self_val);
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::ArrayPush { array, val, state } => {
+                worklist.push_back(array);
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::ObjToString { val, state, .. } => {
+                worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::AnyToString { val, str, state, .. } => {
+                worklist.push_back(val);
+                worklist.push_back(str);
+                worklist.push_back(state);
+            }
+            &Insn::GetGlobal { state, .. } |
+            &Insn::SideExit { state, .. } => worklist.push_back(state),
+        }
+    }
+
     fn validate_definite_assignment(&self) -> Result<(), ValidationError> {
         // // Map of branch instruction -> InsnSet
         // let mut assigned_out = HashMap::new();
@@ -2072,40 +2197,68 @@ impl Function {
         let mut assigned_in = HashMap::new();
         let rpo = self.rpo();
         // Begin with every block having every variable defined, except for the entry block, which
-        // has only its parameters defined.
-        for block in rpo {
-            if block == self.entry_block {
-                let mut only_params = InsnSet::with_capacity(self.insns.len());
-                for param in self.blocks[block.0].params {
-                    only_params.insert(param);
-                }
-                assigned_in.insert(block, only_params);
-            } else {
+        // starts with nothing defined.
+        assigned_in.insert(self.entry_block, InsnSet::with_capacity(self.insns.len()));
+        for &block in &rpo {
+            if block != self.entry_block {
                 let mut all_ones = InsnSet::with_capacity(self.insns.len());
                 all_ones.insert_all();
                 assigned_in.insert(block, all_ones);
             }
         }
+        // Iterate assigned_in to fixpoint for each block
         let mut changed = true;
         while changed {
             changed = false;
-            for block in rpo {
-                let mut assigned = assigned_in[block].clone();
-                for &insn_id in &self.block[block.0].insns {
+            for &block in &rpo {
+                let mut assigned = assigned_in[&block].clone();
+                for &param in &self.blocks[block.0].params {
+                    assigned.insert(param);
+                }
+                for &insn_id in &self.blocks[block.0].insns {
                     let insn_id = self.union_find.borrow().find_const(insn_id);
                     match self.find(insn_id) {
-                        Insn::Jump(BranchEdge { target, args })
-                        | Insn::IfTrue { target: BranchEdge { target, args }, .. }
-                        | Insn::IfFalse { target: BranchEdge { target, args }, .. } => {
-                            assigned_out.insert(insn_id, assigned.clone());
+                        Insn::Jump(target) | Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } => {
+                            let Some(block_in) = assigned_in.get_mut(&target.target) else {
+                                let fun_string = format!("{}", FunctionPrinter::with_snapshot(&self));
+                                return Err(ValidationError::JumpTargetNotInRPO(fun_string, target.target));
+                            };
+                            changed |= block_in.intersect_with(&assigned);
                         }
                         insn if insn.has_output() => {
-                            changed |= assigned.insert(insn_id);
+                            assigned.insert(insn_id);
                         }
+                        _ => {}
                     }
                 }
             }
         }
+        // Check that each instruction's operands is assigned
+        for &block in &rpo {
+            let mut assigned = assigned_in[&block].clone();
+            for &param in &self.blocks[block.0].params {
+                assigned.insert(param);
+            }
+            for &insn_id in &self.blocks[block.0].insns {
+                let insn_id = self.union_find.borrow().find_const(insn_id);
+                let mut operands = VecDeque::new();
+                let insn = self.find(insn_id);
+                self.worklist_traverse_single_insn(&insn, &mut operands);
+                for operand in operands {
+                    if !assigned.get(operand) {
+                        let fun_string = format!("{}", FunctionPrinter::with_snapshot(&self));
+                        return Err(ValidationError::OperandNotDefined(fun_string, insn_id));
+                    }
+                }
+                match insn {
+                    _ if insn.has_output() => {
+                        assigned.insert(insn_id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Run all validation passes we have.
