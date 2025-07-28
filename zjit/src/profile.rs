@@ -145,6 +145,10 @@ impl ProfiledType {
         self.shape
     }
 
+    pub fn is_immediate(&self) -> bool {
+        self.shape == SPECIAL_CONST_SHAPE_ID
+    }
+
     pub fn is_fixnum(&self) -> bool {
         self.class == unsafe { rb_cInteger } && self.shape == SPECIAL_CONST_SHAPE_ID
     }

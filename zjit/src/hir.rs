@@ -487,6 +487,10 @@ pub enum Insn {
     SetIvar { self_val: InsnId, id: ID, val: InsnId, state: InsnId },
     /// Check whether an instance variable exists on `self_val`
     DefinedIvar { self_val: InsnId, id: ID, pushval: VALUE, state: InsnId },
+    /// Load a field from ROBJECT_FIELDS (embedded or not)
+    /// This is a field *index*, not a field *offset*, so it needs to be scaled at code-generation
+    /// time by sizeof(VALUE).
+    LoadObjectField { self_val: InsnId, index: u16 },
 
     /// Get a local variable from a higher scope or the heap
     GetLocal { level: u32, ep_offset: u32 },
@@ -558,6 +562,8 @@ pub enum Insn {
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
     /// Side-exit if val is not the expected VALUE.
     GuardBitEquals { val: InsnId, expected: VALUE, state: InsnId },
+    /// Side-exit if val is not a heap object
+    GuardIsHeapObject { val: InsnId, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -1188,6 +1194,7 @@ impl Function {
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
+            &LoadObjectField { self_val, index } => LoadObjectField { self_val: find!(self_val), index },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
             &ToArray { val, state } => ToArray { val: find!(val), state },
             &ToNewArray { val, state } => ToNewArray { val: find!(val), state },
@@ -1249,6 +1256,8 @@ impl Function {
             Insn::CCall { return_type, .. } => *return_type,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_value(*expected)),
+            // TODO(max): Strip the Immediate bits
+            Insn::GuardIsHeapObject { val, .. } => self.type_of(*val),
             Insn::FixnumAdd  { .. } => types::Fixnum,
             Insn::FixnumSub  { .. } => types::Fixnum,
             Insn::FixnumMult { .. } => types::Fixnum,
@@ -1582,6 +1591,48 @@ impl Function {
                         let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
                         self.insn_types[replacement.0] = self.infer_type(replacement);
                         self.make_equal_to(insn_id, replacement);
+                    }
+                    Insn::GetIvar { self_val, id, state } => {
+                        let frame_state = self.frame_state(state);
+                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
+                            // Probably megamorphic.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        };
+                        let recv_class = recv_type.class();
+                        if recv_class == unsafe { rb_cClass } || recv_class == unsafe { rb_cModule } {
+                            // If the receiver is a Class or Module, we cannot optimize the lookup.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        let recv_shape = recv_type.shape();
+                        if recv_shape.is_too_complex() {
+                            // If the shape is too complex, the lookup devolves to a hash table anyway.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        if recv_shape.is_immediate() {
+                            // If the object is immediate, the result of the lookup is always nil.
+                            // TODO(max): Handle immediate shapes
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        // NOTE: This assumes nobody changes the allocator of the class after allocation.
+                        //       Eventually, we can encode whether an object is T_OBJECT or not
+                        //       inside object shapes.
+                        // TODO(max): Check if the recv_class uses a custom allocator. YJIT falls back to generic case if so
+                        // TODO(max): Guarantee this is just the T_OBJECT case
+                        let mut index: u16 = 0;
+                        let ivar_found = unsafe { rb_shape_get_iv_index(recv_shape.0, id, &mut index) };
+                        if !ivar_found {
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        // TODO(max): test against RUBY_IMMEDIATE_MASK; jnz side exit
+                        // TODO(max): check if object is 0 (Qfalse); je side exit
+                        let self_val = self.push_insn(block, Insn::GuardIsHeapObject { val: self_val, state });
+                        let result = self.push_insn(block, Insn::LoadObjectField { self_val, index });
+                        self.make_equal_to(insn_id, result);
                     }
                     Insn::ObjToString { val, cd, state, .. } => {
                         if self.is_a(val, types::String) {

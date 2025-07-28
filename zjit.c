@@ -362,5 +362,11 @@ VALUE rb_zjit_assert_compiles(rb_execution_context_t *ec, VALUE self);
 VALUE rb_zjit_stats(rb_execution_context_t *ec, VALUE self);
 VALUE rb_zjit_stats_enabled_p(rb_execution_context_t *ec, VALUE self);
 
+bool
+rb_zjit_shape_too_complex_p(shape_id_t shape_id)
+{
+    return rb_shape_too_complex_p(shape_id);
+}
+
 // Preprocessed zjit.rb generated during build
 #include "zjit.rbinc"
