@@ -1836,7 +1836,7 @@ impl Function {
                         // Don't bother re-inferring the type of val; we already know it.
                         continue;
                     }
-                    Insn::GuardIsHeapObject { val, .. } if self.type_of(val).is_heap_object() => {
+                    Insn::GuardIsHeapObject { val, .. } if self.is_a(val, types::HeapObject) => {
                         self.make_equal_to(insn_id, val);
                         // Don't bother re-inferring the type of val; we already know it.
                         continue;
