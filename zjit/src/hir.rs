@@ -1290,6 +1290,7 @@ impl Function {
             // The type of Snapshot doesn't really matter; it's never materialized. It's used only
             // as a reference for FrameState, which we use to generate side-exit code.
             Insn::Snapshot { .. } => types::Any,
+            Insn::LoadObjectField { .. } => types::BasicObject,
         }
     }
 
@@ -1933,6 +1934,7 @@ impl Function {
             &Insn::SetGlobal { val, state, .. }
             | &Insn::GuardType { val, state, .. }
             | &Insn::GuardBitEquals { val, state, .. }
+            | &Insn::GuardIsHeapObject { val, state, .. }
             | &Insn::ToArray { val, state }
             | &Insn::ToNewArray { val, state } => {
                 worklist.push_back(val);
@@ -2011,6 +2013,7 @@ impl Function {
             }
             &Insn::GetGlobal { state, .. } |
             &Insn::SideExit { state, .. } => worklist.push_back(state),
+            &Insn::LoadObjectField { self_val, .. } => worklist.push_back(self_val),
         }
     }
 
