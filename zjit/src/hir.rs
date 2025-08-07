@@ -736,6 +736,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
             Insn::GuardIsHeapObject { val, .. } => { write!(f, "GuardIsHeapObject {val}") },
             Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {shape}") },
+            Insn::LoadObjectField { self_val, index } => { write!(f, "LoadObjectField {self_val}, @{index}") },
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::CCall { cfun, args, name, return_type: _, elidable: _ } => {
