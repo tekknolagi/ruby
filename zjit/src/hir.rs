@@ -564,6 +564,7 @@ pub enum Insn {
     GuardBitEquals { val: InsnId, expected: VALUE, state: InsnId },
     /// Side-exit if val is not a heap object
     GuardIsHeapObject { val: InsnId, state: InsnId },
+    GuardShape { val: InsnId, shape: ShapeId, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -733,6 +734,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::FixnumOr   { left, right, .. } => { write!(f, "FixnumOr {left}, {right}") },
             Insn::GuardType { val, guard_type, .. } => { write!(f, "GuardType {val}, {}", guard_type.print(self.ptr_map)) },
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
+            Insn::GuardIsHeapObject { val, .. } => { write!(f, "GuardIsHeapObject {val}") },
+            Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {shape}") },
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::CCall { cfun, args, name, return_type: _, elidable: _ } => {
@@ -1132,6 +1135,7 @@ impl Function {
             &GuardType { val, guard_type, state } => GuardType { val: find!(val), guard_type: guard_type, state },
             &GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(val), expected: expected, state },
             &GuardIsHeapObject { val, state } => GuardIsHeapObject { val: find!(val), state },
+            &GuardShape { val, shape, state } => GuardShape { val: find!(val), shape, state },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
@@ -1259,6 +1263,7 @@ impl Function {
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_value(*expected)),
             // TODO(max): Strip the Immediate bits
             Insn::GuardIsHeapObject { val, .. } => self.type_of(*val),
+            Insn::GuardShape { val, .. } => self.type_of(*val),
             Insn::FixnumAdd  { .. } => types::Fixnum,
             Insn::FixnumSub  { .. } => types::Fixnum,
             Insn::FixnumMult { .. } => types::Fixnum,
@@ -1366,14 +1371,23 @@ impl Function {
         }
     }
 
+    fn chase(&self, insn: InsnId) -> InsnId {
+        let found = self.union_find.borrow().find_const(insn);
+        if let Insn::GuardType { val, .. } = self.find(insn) {
+            return self.chase(val);
+        }
+        found
+    }
+
     /// Return the interpreter-profiled type of the HIR instruction at the given ISEQ instruction
     /// index, if it is known. This historical type record is not a guarantee and must be checked
     /// with a GuardType or similar.
     fn profiled_type_of_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<ProfiledType> {
         let Some(ref profiles) = self.profiles else { return None };
         let Some(entries) = profiles.types.get(&iseq_insn_idx) else { return None };
+        let insn = self.chase(insn);
         for (entry_insn, entry_type_summary) in entries {
-            if self.union_find.borrow().find_const(*entry_insn) == self.union_find.borrow().find_const(insn) {
+            if self.union_find.borrow().find_const(*entry_insn) == insn {
                 if entry_type_summary.is_monomorphic() || entry_type_summary.is_skewed_polymorphic() {
                     return Some(entry_type_summary.bucket(0));
                 } else {
@@ -1594,48 +1608,6 @@ impl Function {
                         self.insn_types[replacement.0] = self.infer_type(replacement);
                         self.make_equal_to(insn_id, replacement);
                     }
-                    Insn::GetIvar { self_val, id, state } => {
-                        let frame_state = self.frame_state(state);
-                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
-                            // Probably megamorphic.
-                            self.push_insn_id(block, insn_id);
-                            continue;
-                        };
-                        let recv_class = recv_type.class();
-                        if recv_class == unsafe { rb_cClass } || recv_class == unsafe { rb_cModule } {
-                            // If the receiver is a Class or Module, we cannot optimize the lookup.
-                            self.push_insn_id(block, insn_id);
-                            continue;
-                        }
-                        let recv_shape = recv_type.shape();
-                        if recv_shape.is_too_complex() {
-                            // If the shape is too complex, the lookup devolves to a hash table anyway.
-                            self.push_insn_id(block, insn_id);
-                            continue;
-                        }
-                        if recv_shape.is_immediate() {
-                            // If the object is immediate, the result of the lookup is always nil.
-                            // TODO(max): Handle immediate shapes
-                            self.push_insn_id(block, insn_id);
-                            continue;
-                        }
-                        // NOTE: This assumes nobody changes the allocator of the class after allocation.
-                        //       Eventually, we can encode whether an object is T_OBJECT or not
-                        //       inside object shapes.
-                        // TODO(max): Check if the recv_class uses a custom allocator. YJIT falls back to generic case if so
-                        // TODO(max): Guarantee this is just the T_OBJECT case
-                        let mut index: u16 = 0;
-                        let ivar_found = unsafe { rb_shape_get_iv_index(recv_shape.0, id, &mut index) };
-                        if !ivar_found {
-                            self.push_insn_id(block, insn_id);
-                            continue;
-                        }
-                        // TODO(max): test against RUBY_IMMEDIATE_MASK; jnz side exit
-                        // TODO(max): check if object is 0 (Qfalse); je side exit
-                        let self_val = self.push_insn(block, Insn::GuardIsHeapObject { val: self_val, state });
-                        let result = self.push_insn(block, Insn::LoadObjectField { self_val, index });
-                        self.make_equal_to(insn_id, result);
-                    }
                     Insn::ObjToString { val, cd, state, .. } => {
                         if self.is_a(val, types::String) {
                             // behaves differently from `SendWithoutBlock` with `mid:to_s` because ObjToString should not have a patch point for String to_s being redefined
@@ -1651,6 +1623,67 @@ impl Function {
                         } else {
                             self.push_insn_id(block, insn_id);
                         }
+                    }
+                    _ => { self.push_insn_id(block, insn_id); }
+                }
+            }
+        }
+        self.infer_types();
+    }
+
+    fn optimize_getivar(&mut self) {
+        for block in self.rpo() {
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            assert!(self.blocks[block.0].insns.is_empty());
+            for insn_id in old_insns {
+                match self.find(insn_id) {
+                    Insn::GetIvar { self_val, id, state } => {
+                        let frame_state = self.frame_state(state);
+                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
+                            eprintln!("no profiled type :(");
+                            // Probably megamorphic.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        };
+                        let recv_class = recv_type.class();
+                        if recv_class == unsafe { rb_cClass } || recv_class == unsafe { rb_cModule } {
+                            eprintln!("recv is class/module :(");
+                            // If the receiver is a Class or Module, we cannot optimize the lookup.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        let recv_shape = recv_type.shape();
+                        if recv_shape.is_too_complex() {
+                            eprintln!("too complex :(");
+                            // If the shape is too complex, the lookup devolves to a hash table anyway.
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        if recv_shape.is_immediate() {
+                            // If the object is immediate, the result of the lookup is always nil.
+                            // TODO(max): Handle immediate shapes
+                            eprintln!("immediate :(");
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        // NOTE: This assumes nobody changes the allocator of the class after allocation.
+                        //       Eventually, we can encode whether an object is T_OBJECT or not
+                        //       inside object shapes.
+                        // TODO(max): Check if the recv_class uses a custom allocator. YJIT falls back to generic case if so
+                        // TODO(max): Guarantee this is just the T_OBJECT case
+                        let mut index: u16 = 0;
+                        let ivar_found = unsafe { rb_shape_get_iv_index(recv_shape.0, id, &mut index) };
+                        if !ivar_found {
+                            eprintln!("not found :(");
+                            self.push_insn_id(block, insn_id);
+                            continue;
+                        }
+                        // TODO(max): test against RUBY_IMMEDIATE_MASK; jnz side exit
+                        // TODO(max): check if object is 0 (Qfalse); je side exit
+                        let self_val = self.push_insn(block, Insn::GuardIsHeapObject { val: self_val, state });
+                        let self_val = self.push_insn(block, Insn::GuardShape { val: self_val, shape: recv_shape, state });
+                        let result = self.push_insn(block, Insn::LoadObjectField { self_val, index });
+                        self.make_equal_to(insn_id, result);
                     }
                     _ => { self.push_insn_id(block, insn_id); }
                 }
@@ -1802,6 +1835,11 @@ impl Function {
                         // Don't bother re-inferring the type of val; we already know it.
                         continue;
                     }
+                    Insn::GuardIsHeapObject { val, .. } if self.type_of(val).is_heap_object() => {
+                        self.make_equal_to(insn_id, val);
+                        // Don't bother re-inferring the type of val; we already know it.
+                        continue;
+                    }
                     Insn::FixnumAdd { left, right, .. } => {
                         self.fold_fixnum_bop(insn_id, left, right, |l, r| match (l, r) {
                             (Some(l), Some(r)) => l.checked_add(r),
@@ -1936,6 +1974,7 @@ impl Function {
             | &Insn::GuardType { val, state, .. }
             | &Insn::GuardBitEquals { val, state, .. }
             | &Insn::GuardIsHeapObject { val, state, .. }
+            | &Insn::GuardShape { val, state, .. }
             | &Insn::ToArray { val, state }
             | &Insn::ToNewArray { val, state } => {
                 worklist.push_back(val);
@@ -2153,6 +2192,8 @@ impl Function {
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
         self.optimize_direct_sends();
+        #[cfg(debug_assertions)] self.assert_validates();
+        self.optimize_getivar();
         #[cfg(debug_assertions)] self.assert_validates();
         self.optimize_c_calls();
         #[cfg(debug_assertions)] self.assert_validates();

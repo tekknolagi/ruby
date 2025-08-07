@@ -281,6 +281,12 @@ impl ShapeId {
     }
 }
 
+impl std::fmt::Display for ShapeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Shape({:#x})", self.0)
+    }
+}
+
 // Given an ISEQ pointer, convert PC to insn_idx
 pub fn iseq_pc_to_insn_idx(iseq: IseqPtr, pc: *mut VALUE) -> Option<u16> {
     let pc_zero = unsafe { rb_iseq_pc_at_idx(iseq, 0) };

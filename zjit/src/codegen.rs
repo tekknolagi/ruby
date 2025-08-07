@@ -388,6 +388,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         | Insn::Const { .. }
         | Insn::LoadObjectField { .. }
         | Insn::GuardIsHeapObject { .. }
+        | Insn::GuardShape { .. }
         => {
             debug!("ZJIT: gen_function: unexpected insn {insn}");
             return None;

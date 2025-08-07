@@ -501,6 +501,14 @@ impl Type {
         self.is_subtype(types::Immediate)
     }
 
+    pub fn is_heap_object(&self) -> bool {
+        if !self.could_be(types::Immediate) {
+            return true;
+        }
+        // TODO(max): Check object class specialization and see if it's definitely not immediate
+        false
+    }
+
     pub fn print(self, ptr_map: &PtrPrintMap) -> TypePrinter {
         TypePrinter { inner: self, ptr_map }
     }
