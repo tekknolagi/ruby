@@ -55,7 +55,41 @@ impl<T: Into<usize> + Copy> BitSet<T> {
         }
         changed
     }
+
+    pub fn iter(&self) -> BitSetIter<'_, T> {
+        BitSetIter { set: self, current_bit: 0 }
+    }
 }
+
+pub struct BitSetIter<'a, T: Into<usize> + Copy> {
+    set: &'a BitSet<T>,
+    current_bit: usize,
+}
+
+impl<'a, T: Into<usize> + Copy + From<usize>> Iterator for BitSetIter<'a, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_bit < self.set.num_bits {
+            if self.set.get(self.current_bit.into()) {
+                let result = self.current_bit.into();
+                self.current_bit += 1;
+                return Some(result);
+            }
+            self.current_bit += 1;
+        }
+        None
+    }
+}
+
+// impl<'a> IntoIterator for &'a BitSet<usize> {
+//     type Item = usize;
+//     type IntoIter = BitSetIter<'a, usize>;
+//
+//     fn into_iter(self) -> Self::IntoIter {
+//         BitSetIter { set: &self, current_bit: 0 }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

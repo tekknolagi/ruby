@@ -25,6 +25,12 @@ impl Into<usize> for InsnId {
     }
 }
 
+impl From<usize> for InsnId {
+    fn from(value: usize) -> Self {
+        InsnId(value)
+    }
+}
+
 impl std::fmt::Display for InsnId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "v{}", self.0)
@@ -2128,6 +2134,83 @@ impl Function {
         }
     }
 
+    fn replace_args(&mut self, insn: InsnId, args: Vec<InsnId>) {
+        match self.insns[insn.0] {
+            Insn::Jump(ref mut edge) | Insn::IfTrue { target: ref mut edge, .. } | Insn::IfFalse { target: ref mut edge, .. } => {
+                edge.args = args;
+            }
+            _ => panic!("tried to replace args on non-branch instruction"),
+        }
+    }
+
+    fn remove_unused_params_from(&mut self, block: BlockId, preds: &InsnSet) -> bool {
+        let mut used = VecDeque::new();
+        for &insn_id in &self.blocks[block.0].insns {
+            let insn = self.find(insn_id);
+            self.worklist_traverse_single_insn(&insn, &mut used);
+        }
+        let mut to_remove_params = Vec::new();
+        let mut to_remove_idxs = Vec::new();
+        for (idx, &param) in self.blocks[block.0].params.iter().enumerate() {
+            if used.contains(&param) {
+                continue;
+            }
+            to_remove_params.push(param);
+            to_remove_idxs.push(idx);
+        }
+        if to_remove_params.is_empty() {
+            // No unused params
+            return false;
+        }
+        self.blocks[block.0].params.retain(|param| !to_remove_params.contains(param));
+        // Remove argument from predecessors
+        for pred_id in preds.iter() {
+            // pred_id is already "found" but we need to get its found args
+            let pred = self.find(pred_id);
+            if let Insn::Jump(BranchEdge { args, .. })
+                | Insn::IfTrue { target: BranchEdge { args, .. }, .. }
+                | Insn::IfFalse { target: BranchEdge { args, ..  }, .. } = pred {
+                let mut new_args = vec![];
+                for (idx, &arg) in args.iter().enumerate() {
+                    if to_remove_idxs.contains(&idx) {
+                        // Skip unused params
+                        continue;
+                    }
+                    new_args.push(arg);
+                }
+                assert!(new_args.len() < args.len());
+                self.replace_args(pred_id, new_args);
+            }
+        }
+        true
+    }
+
+    fn remove_unused_block_params(&mut self) {
+        let po = self.po_from(self.entry_block);
+        let mut preds = vec![InsnSet::with_capacity(self.insns.len()); self.blocks.len()];
+        for &block in &po {
+            for &insn_id in &self.blocks[block.0].insns {
+                let insn_id = self.union_find.borrow().find_const(insn_id);
+                let insn = self.find(insn_id);
+                if let Insn::Jump(target) | Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } = insn {
+                    preds[target.target.0].insert(insn_id);
+                }
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in &po {
+                if block == self.entry_block {
+                    // We can't remove params from the entry block
+                    continue;
+                }
+                changed |=
+                    self.remove_unused_params_from(block, &preds[block.0]);
+            }
+        }
+    }
+
     /// Run all the optimization passes we have.
     pub fn optimize(&mut self) {
         // Function is assumed to have types inferred already
@@ -2140,6 +2223,8 @@ impl Function {
         self.clean_cfg();
         #[cfg(debug_assertions)] self.assert_validates();
         self.eliminate_dead_code();
+        #[cfg(debug_assertions)] self.assert_validates();
+        self.remove_unused_block_params();
         #[cfg(debug_assertions)] self.assert_validates();
 
         // Dump HIR after optimization
@@ -5357,13 +5442,13 @@ mod graphviz_tests {
               bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
             <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0(v0:BasicObject, v1:BasicObject)&nbsp;</TD></TR>
             <TR><TD ALIGN="left" PORT="v3">v3:CBool = Test v1&nbsp;</TD></TR>
-            <TR><TD ALIGN="left" PORT="v4">IfFalse v3, bb1(v0, v1)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v4">IfFalse v3, bb1()&nbsp;</TD></TR>
             <TR><TD ALIGN="left" PORT="v5">v5:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
             <TR><TD ALIGN="left" PORT="v6">Return v5&nbsp;</TD></TR>
             </TABLE>>];
               bb0:v4 -> bb1:params;
               bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1(v7:BasicObject, v8:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1()&nbsp;</TD></TR>
             <TR><TD ALIGN="left" PORT="v10">v10:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
             <TR><TD ALIGN="left" PORT="v11">Return v10&nbsp;</TD></TR>
             </TABLE>>];
@@ -7744,6 +7829,44 @@ mod opt_tests {
               v7:HeapObject[class_exact:C] = GuardType v1, HeapObject[class_exact:C]
               v8:BasicObject = GetIvar v7, :@foo
               Return v8
+        "#]]);
+    }
+
+    #[test]
+    fn test_loop() {
+        eval("
+            def test
+              result = 0
+              times = 10
+              while times > 0
+                result = result + 1
+                times = times - 1
+              end
+              result
+            end
+            test
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v4:Fixnum[0] = Const Value(0)
+              v5:Fixnum[10] = Const Value(10)
+              Jump bb2(v0, v4, v5)
+            bb2(v7:BasicObject, v8:Fixnum, v9:Fixnum):
+              v11:Fixnum[0] = Const Value(0)
+              PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_GT)
+              v31:BoolExact = FixnumGt v9, v11
+              v14:CBool = Test v31
+              IfTrue v14, bb1(v7, v8, v9)
+              Return v8
+            bb1(v18:BasicObject, v19:Fixnum, v20:Fixnum):
+              v22:Fixnum[1] = Const Value(1)
+              PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_PLUS)
+              v34:Fixnum = FixnumAdd v19, v22
+              v25:Fixnum[1] = Const Value(1)
+              PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_MINUS)
+              v37:Fixnum = FixnumSub v20, v25
+              Jump bb2(v18, v34, v37)
         "#]]);
     }
 }
