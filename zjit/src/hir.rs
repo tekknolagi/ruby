@@ -1982,7 +1982,6 @@ impl Function {
                 worklist.push_back(state);
             }
             | &Insn::Return { val }
-            | &Insn::Throw { val, .. }
             | &Insn::Test { val }
             | &Insn::SetLocal { val, .. }
             | &Insn::IsNil { val } =>
@@ -2030,7 +2029,9 @@ impl Function {
                 worklist.push_back(val);
                 worklist.extend(args);
             }
-            &Insn::ArrayDup { val, state } | &Insn::HashDup { val, state } => {
+            &Insn::ArrayDup { val, state }
+            | &Insn::Throw { val, state, .. }
+            | &Insn::HashDup { val, state } => {
                 worklist.push_back(val);
                 worklist.push_back(state);
             }
