@@ -2242,8 +2242,11 @@ impl Function {
             None => {},
         }
 
-        if get_option!(dump_hir_graphviz) {
-            println!("{}", FunctionGraphvizPrinter::new(&self));
+        if let Some(filename) = &get_option!(dump_hir_graphviz) {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            let mut file = OpenOptions::new().append(true).open(filename).unwrap();
+            writeln!(file, "{}", FunctionGraphvizPrinter::new(&self)).unwrap();
         }
     }
 
