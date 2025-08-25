@@ -2496,7 +2496,7 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
             }
             writeln!(f, "</TABLE>>];")?;
             for (src, dst) in edges {
-                writeln!(f, "  {block_id}:{src} -> {dst}:params;")?;
+                writeln!(f, "  {block_id}:{src} -> {dst}:params:n;")?;
             }
         }
         writeln!(f, "}}")
@@ -5698,26 +5698,26 @@ mod graphviz_tests {
             test("x")
         "#);
         assert_snapshot!(hir_string("test"), @r#"
-        digraph G { # test@&lt;compiled&gt;:3
-        node [shape=plaintext];
-        mode=hier; overlap=false; splines=true;
-          bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0(v0:BasicObject, v1:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v4">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v5">v5:CBool = Test v1&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v6">IfFalse v5, bb1(v0, v1)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v7">v7:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v9">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v10">Return v7&nbsp;</TD></TR>
-        </TABLE>>];
-          bb0:v6 -> bb1:params;
-          bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1(v11:BasicObject, v12:BasicObject)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v14">v14:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v16">CheckInterrupts&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v17">Return v14&nbsp;</TD></TR>
-        </TABLE>>];
-        }
+            digraph G { # test@&lt;compiled&gt;:3
+            node [shape=plaintext];
+            mode=hier; overlap=false; splines=true;
+              bb0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb0(v0:BasicObject, v1:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v4">CheckInterrupts&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v5">v5:CBool = Test v1&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v6">IfFalse v5, bb1(v0, v1)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v7">v7:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v9">CheckInterrupts&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v10">Return v7&nbsp;</TD></TR>
+            </TABLE>>];
+              bb0:v6 -> bb1:params:n;
+              bb1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+            <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb1(v11:BasicObject, v12:BasicObject)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v14">v14:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v16">CheckInterrupts&nbsp;</TD></TR>
+            <TR><TD ALIGN="left" PORT="v17">Return v14&nbsp;</TD></TR>
+            </TABLE>>];
+            }
         "#);
     }
 }
