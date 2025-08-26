@@ -2621,7 +2621,8 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
             out.field_name("insns")?;
             let insns = fun.blocks[block_id.0].insns
                 .iter()
-                .filter(|&id| fun.find(*id).has_effects())
+                .filter(|&&id| { !matches!(fun.find(id), Insn::Snapshot {..} | Insn::Const { .. }) })
+                // .filter(|&id| fun.find(*id).has_effects())
                 .map(|&id| fun.union_find.borrow().find_const(id));
             out.write_array(insns)?;
             out.end_object()?;
