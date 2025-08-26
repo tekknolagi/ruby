@@ -2582,6 +2582,18 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
                 for &edge in &data_edges {
                     edges.push((insn_id, edge, "data"));
                 }
+                match insn {
+                    Insn::Jump(BranchEdge { target, args })
+                    | Insn::IfTrue { target: BranchEdge { target, args }, .. }
+                    | Insn::IfFalse { target: BranchEdge { target, args }, .. } => {
+                        for (arg, param) in args.iter().zip(&fun.blocks[target.0].params) {
+                            let arg = fun.union_find.borrow().find_const(*arg);
+                            let param = fun.union_find.borrow().find_const(*param);
+                            edges.push((param, arg, "data"));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         out.end_object()?;
