@@ -2566,20 +2566,22 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
                 out.field_name(&format!("{insn_id}"))?;
                 out.begin_object()?;
                 out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
+                out.string_field("has_effects", insn.has_effects().to_string().as_str())?;
                 out.end_object()?;
             }
             for insn_id in &fun.blocks[block_id.0].insns {
                 let insn_id = fun.union_find.borrow().find_const(*insn_id);
                 let insn = fun.find(insn_id);
+                out.field_name(&format!("{insn_id}"))?;
+                out.begin_object()?;
+                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
+                out.string_field("has_effects", insn.has_effects().to_string().as_str())?;
+                out.end_object()?;
                 let mut data_edges = VecDeque::new();
                 fun.worklist_traverse_single_insn(&insn, &mut data_edges);
                 for &edge in &data_edges {
                     edges.push((insn_id, edge, "data"));
                 }
-                out.field_name(&format!("{insn_id}"))?;
-                out.begin_object()?;
-                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
-                out.end_object()?;
             }
         }
         out.end_object()?;
