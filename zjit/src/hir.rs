@@ -2445,64 +2445,207 @@ impl<'a, 'b> std::fmt::Write for HtmlEncoder<'a, 'b> {
     }
 }
 
+struct JsonEncoder<'a, 'b> {
+    counts: Vec<usize>,
+    formatter: &'a mut std::fmt::Formatter<'b>,
+}
+
+impl<'a, 'b> JsonEncoder<'a, 'b> {
+    fn new(formatter: &'a mut std::fmt::Formatter<'b>) -> Self {
+        Self { counts: vec![], formatter }
+    }
+
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        use std::fmt::Write;
+        write!(self.formatter, "\"")?;
+        for ch in s.chars() {
+            match ch {
+                '\\' => self.formatter.write_str("\\\\")?,
+                '"' => self.formatter.write_str("\\\"")?,
+                '\n' => self.formatter.write_str("\\n")?,
+                '\r' => self.formatter.write_str("\\r")?,
+                '\t' => self.formatter.write_str("\\t")?,
+                c if c.is_control() => write!(self.formatter, "\\u{:04x}", c as u32)?,
+                _ => self.formatter.write_char(ch)?,
+            }
+        }
+        write!(self.formatter, "\"")
+    }
+
+    fn comma(&mut self) -> std::fmt::Result {
+        if let Some(count) = self.counts.last_mut() {
+            if *count > 0 {
+                write!(self.formatter, ",")?;
+            }
+            *count += 1;
+        }
+        Ok(())
+    }
+
+    fn begin_object(&mut self) -> std::fmt::Result {
+        self.comma()?;
+        self.counts.push(0);
+        write!(self.formatter, "{{")
+    }
+
+    fn end_object(&mut self) -> std::fmt::Result {
+        self.counts.pop();
+        write!(self.formatter, "}}")
+    }
+
+    fn begin_array(&mut self) -> std::fmt::Result {
+        self.comma()?;
+        self.counts.push(0);
+        write!(self.formatter, "[")
+    }
+
+    fn end_array(&mut self) -> std::fmt::Result {
+        self.counts.pop();
+        write!(self.formatter, "]")
+    }
+
+    fn string_field(&mut self, key: &str, value: &str) -> std::fmt::Result {
+        self.comma()?;
+        self.write_str(key)?;
+        write!(self.formatter, ":")?;
+        self.write_str(value)?;
+        Ok(())
+    }
+
+    fn field_name(&mut self, key: &str) -> std::fmt::Result {
+        self.comma()?;
+        self.write_str(key)?;
+        write!(self.formatter, ":")?;
+        Ok(())
+    }
+
+    fn write_array<I>(&mut self, strs: I) -> std::fmt::Result
+    where
+        I: IntoIterator,
+        I::Item: Display,
+    {
+        self.begin_array()?;
+        let mut sep = "";
+        for s in strs {
+            self.formatter.write_str(sep)?;
+            self.write_str(format!("{s}").as_str())?;
+            sep = ",";
+        }
+        self.end_array()
+    }
+}
+
+// impl<'a, 'b> std::fmt::Write for JsonEncoder<'a, 'b> {
+//     fn write_str(&mut self, s: &str) -> std::fmt::Result {
+//         for ch in s.chars() {
+//             match ch {
+//                 '\\' => self.formatter.write_str("\\\\")?,
+//                 '"' => self.formatter.write_str("\\\"")?,
+//                 '\n' => self.formatter.write_str("\\n")?,
+//                 '\r' => self.formatter.write_str("\\r")?,
+//                 '\t' => self.formatter.write_str("\\t")?,
+//                 c if c.is_control() => write!(self.formatter, "\\u{:04x}", c as u32)?,
+//                 _ => self.formatter.write_char(ch)?,
+//             }
+//         }
+//         Ok(())
+//     }
+// }
+
 impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        macro_rules! write_encoded {
-            ($f:ident, $($arg:tt)*) => {
-                HtmlEncoder { formatter: $f }.write_fmt(format_args!($($arg)*))
-            };
-        }
-        use std::fmt::Write;
+        let mut out = JsonEncoder::new(f);
         let fun = &self.fun;
-        let iseq_name = iseq_get_location(fun.iseq, 0);
-        write!(f, "digraph G {{ # ")?;
-        write_encoded!(f, "{iseq_name}")?;
-        write!(f, "\n")?;
-        writeln!(f, "node [shape=plaintext];")?;
-        writeln!(f, "mode=hier; overlap=false; splines=true;")?;
+        out.begin_object()?;
+        out.string_field("name", &iseq_get_location(fun.iseq, 0))?;
+        out.field_name("insns")?;
         for block_id in fun.rpo() {
-            writeln!(f, r#"  {block_id} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
-            write!(f, r#"<TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">{block_id}("#)?;
-            if !fun.blocks[block_id.0].params.is_empty() {
-                let mut sep = "";
-                for param in &fun.blocks[block_id.0].params {
-                    write_encoded!(f, "{sep}{param}")?;
-                    let insn_type = fun.type_of(*param);
-                    if !insn_type.is_subtype(types::Empty) {
-                        write_encoded!(f, ":{}", insn_type.print(&self.ptr_map))?;
-                    }
-                    sep = ", ";
-                }
-            }
-            let mut edges = vec![];
-            writeln!(f, ")&nbsp;</TD></TR>")?;
             for insn_id in &fun.blocks[block_id.0].insns {
                 let insn_id = fun.union_find.borrow().find_const(*insn_id);
                 let insn = fun.find(insn_id);
-                if matches!(insn, Insn::Snapshot {..}) {
-                    continue;
+                out.field_name(&format!("{insn_id}"))?;
+                out.begin_object()?;
+                let mut data_edges = VecDeque::new();
+                fun.worklist_traverse_single_insn(&insn, &mut data_edges);
+                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
+                out.field_name("edges")?;
+                out.begin_array()?;
+                for edge in &data_edges {
+                    out.begin_object()?;
+                    out.string_field("kind", "data")?;
+                    out.string_field("to", &format!("{edge}"))?;
+                    out.end_object()?;
                 }
-                write!(f, r#"<TR><TD ALIGN="left" PORT="{insn_id}">"#)?;
-                if insn.has_output() {
-                    let insn_type = fun.type_of(insn_id);
-                    if insn_type.is_subtype(types::Empty) {
-                        write_encoded!(f, "{insn_id} = ")?;
-                    } else {
-                        write_encoded!(f, "{insn_id}:{} = ", insn_type.print(&self.ptr_map))?;
-                    }
-                }
-                if let Insn::Jump(ref target) | Insn::IfTrue { ref target, .. } | Insn::IfFalse { ref target, .. } = insn {
-                    edges.push((insn_id, target.target));
-                }
-                write_encoded!(f, "{}", insn.print(&self.ptr_map))?;
-                writeln!(f, "&nbsp;</TD></TR>")?;
-            }
-            writeln!(f, "</TABLE>>];")?;
-            for (src, dst) in edges {
-                writeln!(f, "  {block_id}:{src} -> {dst}:params:n;")?;
+                out.end_array()?;
+                out.end_object()?;
+                // let insn = fun.find(insn_id);
             }
         }
-        writeln!(f, "}}")
+        out.begin_object()?;
+        out.end_object()?;
+        out.field_name("blocks")?;
+        out.begin_object()?;
+        for block_id in fun.rpo() {
+            out.field_name(&format!("{block_id}"))?;
+            out.begin_object()?;
+            out.field_name("params")?;
+            let params = fun.blocks[block_id.0].params.iter().map(|&param| fun.union_find.borrow().find_const(param));
+            out.write_array(params)?;
+            out.field_name("insns")?;
+            let insns = fun.blocks[block_id.0].insns.iter().map(|&id| fun.union_find.borrow().find_const(id));
+            out.write_array(insns)?;
+            out.end_object()?;
+        }
+        out.end_object()?;
+        out.end_object()
+        // write!(f, "digraph G {{ # ")?;
+        // write_encoded!(f, "{iseq_name}")?;
+        // write!(f, "\n")?;
+        // writeln!(f, "node [shape=plaintext];")?;
+        // writeln!(f, "mode=hier; overlap=false; splines=true;")?;
+        // for block_id in fun.rpo() {
+        //     writeln!(f, r#"  {block_id} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">"#)?;
+        //     write!(f, r#"<TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">{block_id}("#)?;
+        //     if !fun.blocks[block_id.0].params.is_empty() {
+        //         let mut sep = "";
+        //         for param in &fun.blocks[block_id.0].params {
+        //             write_encoded!(f, "{sep}{param}")?;
+        //             let insn_type = fun.type_of(*param);
+        //             if !insn_type.is_subtype(types::Empty) {
+        //                 write_encoded!(f, ":{}", insn_type.print(&self.ptr_map))?;
+        //             }
+        //             sep = ", ";
+        //         }
+        //     }
+        //     let mut edges = vec![];
+        //     writeln!(f, ")&nbsp;</TD></TR>")?;
+        //     for insn_id in &fun.blocks[block_id.0].insns {
+        //         let insn_id = fun.union_find.borrow().find_const(*insn_id);
+        //         let insn = fun.find(insn_id);
+        //         if matches!(insn, Insn::Snapshot {..}) {
+        //             continue;
+        //         }
+        //         write!(f, r#"<TR><TD ALIGN="left" PORT="{insn_id}">"#)?;
+        //         if insn.has_output() {
+        //             let insn_type = fun.type_of(insn_id);
+        //             if insn_type.is_subtype(types::Empty) {
+        //                 write_encoded!(f, "{insn_id} = ")?;
+        //             } else {
+        //                 write_encoded!(f, "{insn_id}:{} = ", insn_type.print(&self.ptr_map))?;
+        //             }
+        //         }
+        //         if let Insn::Jump(ref target) | Insn::IfTrue { ref target, .. } | Insn::IfFalse { ref target, .. } = insn {
+        //             edges.push((insn_id, target.target));
+        //         }
+        //         write_encoded!(f, "{}", insn.print(&self.ptr_map))?;
+        //         writeln!(f, "&nbsp;</TD></TR>")?;
+        //     }
+        //     writeln!(f, "</TABLE>>];")?;
+        //     for (src, dst) in edges {
+        //         writeln!(f, "  {block_id}:{src} -> {dst}:params:n;")?;
+        //     }
+        // }
+        // writeln!(f, "}}")
     }
 }
 
