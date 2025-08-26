@@ -2558,22 +2558,31 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
         out.begin_object()?;
         out.string_field("name", &iseq_get_location(fun.iseq, 0))?;
         out.field_name("insns")?;
+        out.begin_object()?;
         for block_id in fun.rpo() {
-            for insn_id in &fun.blocks[block_id.0].insns {
+            for insn_id in &fun.blocks[block_id.0].params {
                 let insn_id = fun.union_find.borrow().find_const(*insn_id);
                 let insn = fun.find(insn_id);
                 out.field_name(&format!("{insn_id}"))?;
                 out.begin_object()?;
+                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
+                out.end_object()?;
+            }
+            for insn_id in &fun.blocks[block_id.0].insns {
+                let insn_id = fun.union_find.borrow().find_const(*insn_id);
+                let insn = fun.find(insn_id);
                 let mut data_edges = VecDeque::new();
                 fun.worklist_traverse_single_insn(&insn, &mut data_edges);
-                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
                 for &edge in &data_edges {
                     edges.push((insn_id, edge, "data"));
                 }
+                out.field_name(&format!("{insn_id}"))?;
+                out.begin_object()?;
+                out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
                 out.end_object()?;
             }
         }
-        out.comma()?;
+        out.end_object()?;
         out.field_name("edges")?;
         out.begin_array()?;
         for (from, to, kind) in edges {
@@ -2591,10 +2600,15 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
             out.field_name(&format!("{block_id}"))?;
             out.begin_object()?;
             out.field_name("params")?;
-            let params = fun.blocks[block_id.0].params.iter().map(|&param| fun.union_find.borrow().find_const(param));
+            let params = fun.blocks[block_id.0].params
+                .iter()
+                .map(|&param| fun.union_find.borrow().find_const(param));
             out.write_array(params)?;
             out.field_name("insns")?;
-            let insns = fun.blocks[block_id.0].insns.iter().map(|&id| fun.union_find.borrow().find_const(id));
+            let insns = fun.blocks[block_id.0].insns
+                .iter()
+                .filter(|&id| fun.find(*id).has_effects())
+                .map(|&id| fun.union_find.borrow().find_const(id));
             out.write_array(insns)?;
             out.end_object()?;
         }
