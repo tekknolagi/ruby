@@ -2483,7 +2483,6 @@ impl<'a, 'b> JsonEncoder<'a, 'b> {
     }
 
     fn begin_object(&mut self) -> std::fmt::Result {
-        self.comma()?;
         self.counts.push(0);
         write!(self.formatter, "{{")
     }
@@ -2494,7 +2493,6 @@ impl<'a, 'b> JsonEncoder<'a, 'b> {
     }
 
     fn begin_array(&mut self) -> std::fmt::Result {
-        self.comma()?;
         self.counts.push(0);
         write!(self.formatter, "[")
     }
@@ -2554,6 +2552,7 @@ impl<'a, 'b> JsonEncoder<'a, 'b> {
 
 impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut edges = Vec::new();
         let mut out = JsonEncoder::new(f);
         let fun = &self.fun;
         out.begin_object()?;
@@ -2568,21 +2567,24 @@ impl<'a> std::fmt::Display for FunctionGraphvizPrinter<'a> {
                 let mut data_edges = VecDeque::new();
                 fun.worklist_traverse_single_insn(&insn, &mut data_edges);
                 out.string_field("label", &format!("{}", insn.print(&self.ptr_map)))?;
-                out.field_name("edges")?;
-                out.begin_array()?;
-                for edge in &data_edges {
-                    out.begin_object()?;
-                    out.string_field("kind", "data")?;
-                    out.string_field("to", &format!("{edge}"))?;
-                    out.end_object()?;
+                for &edge in &data_edges {
+                    edges.push((insn_id, edge, "data"));
                 }
-                out.end_array()?;
                 out.end_object()?;
-                // let insn = fun.find(insn_id);
             }
         }
-        out.begin_object()?;
-        out.end_object()?;
+        out.comma()?;
+        out.field_name("edges")?;
+        out.begin_array()?;
+        for (from, to, kind) in edges {
+            out.comma()?;
+            out.begin_object()?;
+            out.string_field("from", &format!("{from}"))?;
+            out.string_field("to", &format!("{to}"))?;
+            out.string_field("kind", kind)?;
+            out.end_object()?;
+        }
+        out.end_array()?;
         out.field_name("blocks")?;
         out.begin_object()?;
         for block_id in fun.rpo() {
