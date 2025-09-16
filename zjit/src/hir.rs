@@ -1544,6 +1544,7 @@ impl Function {
             Insn::CCall { return_type, .. } => *return_type,
             Insn::CCallVariadic { .. } => types::BasicObject,
             Insn::GuardType { val, guard_type, .. } => self.type_of(*val).intersection(*guard_type),
+            // TODO(max): Subtract guard_type from type of operand
             Insn::GuardTypeNot { .. } => types::BasicObject,
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_value(*expected)),
             Insn::GuardShape { val, .. } => self.type_of(*val),
