@@ -741,6 +741,52 @@ impl Insn {
         InsnPrinter { inner: self.clone(), ptr_map }
     }
 
+    /// Return true if the instruction may allocate memory on the Ruby heap. If the instruction has
+    /// (our currently very coarse-grained) effects, this is implicitly true (anything could
+    /// happen).
+    fn allocates(&self) -> bool {
+        if self.has_effects() { return true; }
+        match self {
+            // TODO(max): Get no_gc for CCall and use here
+            Insn::CCall { .. } => false,
+            Insn::CheckInterrupts { .. } => false,
+            Insn::Const { .. } => false,
+            Insn::FixnumAdd  { .. } => false,
+            Insn::FixnumAnd  { .. } => false,
+            Insn::FixnumEq   { .. } => false,
+            Insn::FixnumGe   { .. } => false,
+            Insn::FixnumGt   { .. } => false,
+            Insn::FixnumLe   { .. } => false,
+            Insn::FixnumLt   { .. } => false,
+            Insn::FixnumMult { .. } => false,
+            Insn::FixnumNeq  { .. } => false,
+            Insn::FixnumOr   { .. } => false,
+            Insn::FixnumSub  { .. } => false,
+            Insn::GetLocal   { .. } => false,
+            Insn::GuardBitEquals { .. } => false,
+            Insn::GuardBlockParamIsIseqOrIfunc { .. } => false,
+            Insn::GuardShape     { .. } => false,
+            Insn::GuardType      { .. } => false,
+            Insn::GuardTypeNot   { .. } => false,
+            Insn::IncrCounter { .. } => false,
+            Insn::IsNil { .. } => false,
+            Insn::Jump(_) => false,
+            Insn::LoadIvarEmbedded { .. } => false,
+            Insn::LoadIvarExtended { .. } => false,
+            Insn::Param { .. } => false,
+            Insn::PatchPoint { .. } => false,
+            Insn::Return { .. } => false,
+            Insn::SetLocal { .. } => false,
+            Insn::SideExit { .. } => false,
+            Insn::Snapshot { .. } => false,
+            Insn::Test { .. } => false,
+            Insn::Throw { .. } => false,
+            // TODO(max): PutSpecialObject?
+            // The safe default is to assume the instruction allocates.
+            _ => true,
+        }
+    }
+
     /// Return true if the instruction needs to be kept around. For example, if the instruction
     /// might have a side effect, or if the instruction may raise an exception.
     fn has_effects(&self) -> bool {
@@ -780,6 +826,7 @@ impl Insn {
             // but we don't have type information here in `impl Insn`. See rb_range_new().
             Insn::NewRange { .. } => true,
             Insn::NewRangeFixnum { .. } => false,
+            // The safe default is to assume the instruction has effects.
             _ => true,
         }
     }
