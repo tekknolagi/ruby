@@ -152,10 +152,6 @@ fn is_hash_exact(val: VALUE) -> bool {
     val.class_of() == unsafe { rb_cHash } || (val.class_of() == VALUE(0) && val.builtin_type() == RUBY_T_HASH)
 }
 
-fn is_range_exact(val: VALUE) -> bool {
-    val.class_of() == unsafe { rb_cRange }
-}
-
 fn is_module_exact(val: VALUE) -> bool {
     if val.builtin_type() != RUBY_T_MODULE {
         return false;
@@ -208,14 +204,14 @@ impl Type {
         else if val.class_of() == unsafe { rb_cSymbol } {
             Type { bits: bits::DynamicSymbol, spec: Specialization::Object(val) }
         }
+        else if val.class_of() == unsafe { rb_cRange } {
+            Type { bits: bits::RangeExact, spec: Specialization::Object(val) }
+        }
         else if is_array_exact(val) {
             Type { bits: bits::ArrayExact, spec: Specialization::Object(val) }
         }
         else if is_hash_exact(val) {
             Type { bits: bits::HashExact, spec: Specialization::Object(val) }
-        }
-        else if is_range_exact(val) {
-            Type { bits: bits::RangeExact, spec: Specialization::Object(val) }
         }
         else if is_string_exact(val) {
             Type { bits: bits::StringExact, spec: Specialization::Object(val) }
