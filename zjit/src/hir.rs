@@ -6405,6 +6405,22 @@ mod tests {
           Return v7
         ");
     }
+
+    #[test]
+    fn test_invokeblock_with_splat_args() {
+        eval(r#"
+            def test()
+              yield *A
+            end
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
+          v7:BasicObject = InvokeBlock v1, v2
+          CheckInterrupts
+          Return v7
+        ");
+    }
 }
 
 #[cfg(test)]
