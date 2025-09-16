@@ -1,7 +1,7 @@
 //! High-level intermediate representation types.
 
 #![allow(non_upper_case_globals)]
-use crate::cruby::{rb_block_param_proxy, Qfalse, Qnil, Qtrue, RUBY_T_ARRAY, RUBY_T_CLASS, RUBY_T_HASH, RUBY_T_MODULE, RUBY_T_STRING, VALUE};
+use crate::cruby::{rb_block_param_proxy, Qfalse, Qnil, Qtrue, Qundef, VALUE, RUBY_T_ARRAY, RUBY_T_STRING, RUBY_T_HASH, RUBY_T_CLASS, RUBY_T_MODULE};
 use crate::cruby::{rb_cInteger, rb_cFloat, rb_cArray, rb_cHash, rb_cString, rb_cSymbol, rb_cObject, rb_cTrueClass, rb_cFalseClass, rb_cNilClass, rb_cRange, rb_cSet, rb_cRegexp, rb_cClass, rb_cModule, rb_zjit_singleton_class_p};
 use crate::cruby::ClassRelationship;
 use crate::cruby::get_class_name;
@@ -177,64 +177,38 @@ impl Type {
     /// specialization in its `specialization` field (for example, `Qnil` will just be
     /// `types::NilClass`), but will be available via `ruby_object()`.
     pub fn from_value(val: VALUE) -> Type {
-        if val.fixnum_p() {
-            Type { bits: bits::Fixnum, spec: Specialization::Object(val) }
-        }
-        else if val.flonum_p() {
-            Type { bits: bits::Flonum, spec: Specialization::Object(val) }
-        }
-        else if val.static_sym_p() {
-            Type { bits: bits::StaticSymbol, spec: Specialization::Object(val) }
-        }
         // Singleton objects; don't specialize
-        else if val == Qnil { types::NilClass }
-        else if val == Qtrue { types::TrueClass }
-        else if val == Qfalse { types::FalseClass }
-        else if val.cme_p() {
-            // NB: Checking for CME has to happen before looking at class_of because that's not
-            // valid on imemo.
-            Type { bits: bits::CallableMethodEntry, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cInteger } {
-            Type { bits: bits::Bignum, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cFloat } {
-            Type { bits: bits::HeapFloat, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cSymbol } {
-            Type { bits: bits::DynamicSymbol, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cRange } {
-            Type { bits: bits::RangeExact, spec: Specialization::Object(val) }
-        }
-        else if is_array_exact(val) {
-            Type { bits: bits::ArrayExact, spec: Specialization::Object(val) }
-        }
-        else if is_hash_exact(val) {
-            Type { bits: bits::HashExact, spec: Specialization::Object(val) }
-        }
-        else if is_string_exact(val) {
-            Type { bits: bits::StringExact, spec: Specialization::Object(val) }
-        }
-        else if is_module_exact(val) {
-            Type { bits: bits::ModuleExact, spec: Specialization::Object(val) }
-        }
-        else if val.builtin_type() == RUBY_T_CLASS {
-            Type { bits: bits::Class, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cRegexp } {
-            Type { bits: bits::RegexpExact, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cSet } {
-            Type { bits: bits::SetExact, spec: Specialization::Object(val) }
-        }
-        else if val.class_of() == unsafe { rb_cObject } {
-            Type { bits: bits::ObjectExact, spec: Specialization::Object(val) }
-        }
-        else {
-            // TODO(max): Add more cases for inferring type bits from built-in types
-            Type { bits: bits::BasicObject, spec: Specialization::Object(val) }
-        }
+        if val == Qfalse { return types::FalseClass; }
+        if val == Qnil { return types::NilClass; }
+        if val == Qtrue { return types::TrueClass; }
+        if val == Qundef { return types::Undef; }
+        let bits =
+            if val.fixnum_p() { bits::Fixnum }
+            else if val.flonum_p() { bits::Flonum }
+            else if val.static_sym_p() { bits::StaticSymbol }
+            else if val.cme_p() {
+                // NB: Checking for CME has to happen before looking at class_of because that's not
+                // valid on imemo.
+                bits::CallableMethodEntry
+            }
+            else if val.class_of() == unsafe { rb_cInteger } { bits::Bignum }
+            else if val.class_of() == unsafe { rb_cFloat } { bits::HeapFloat }
+            else if val.class_of() == unsafe { rb_cSymbol } { bits::DynamicSymbol }
+            else if val.class_of() == unsafe { rb_cRange } { bits::RangeExact }
+            else if is_array_exact(val) { bits::ArrayExact }
+            else if is_hash_exact(val) { bits::HashExact }
+            else if is_string_exact(val) { bits::StringExact }
+            else if is_module_exact(val) { bits::ModuleExact }
+            else if val.builtin_type() == RUBY_T_CLASS { bits::Class }
+            else if val.class_of() == unsafe { rb_cRegexp } { bits::RegexpExact }
+            else if val.class_of() == unsafe { rb_cSet } { bits::SetExact }
+            else if val.class_of() == unsafe { rb_cObject } { bits::ObjectExact }
+            else {
+                // TODO(max): Add more cases for inferring type bits from built-in types
+                bits::BasicObject
+            };
+        let spec = Specialization::Object(val);
+        Type { bits, spec }
     }
 
     pub fn from_profiled_type(val: ProfiledType) -> Type {
