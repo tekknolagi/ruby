@@ -623,6 +623,8 @@ mod tests {
         assert_eq!(types::TrueClass.ruby_object(), None);
         assert_eq!(Type::from_value(Qfalse).ruby_object(), None);
         assert_eq!(types::FalseClass.ruby_object(), None);
+        assert_eq!(Type::from_value(Qundef).ruby_object(), None);
+        assert_eq!(types::Undef.ruby_object(), None);
     }
 
     #[test]
@@ -640,6 +642,8 @@ mod tests {
         assert_eq!(types::TrueClass.exact_ruby_class(), None);
         assert_eq!(Type::from_value(Qfalse).exact_ruby_class(), None);
         assert_eq!(types::FalseClass.exact_ruby_class(), None);
+        assert_eq!(Type::from_value(Qundef).exact_ruby_class(), None);
+        assert_eq!(types::Undef.exact_ruby_class(), None);
     }
 
     #[test]
@@ -650,6 +654,8 @@ mod tests {
         assert_eq!(types::TrueClass.inexact_ruby_class(), None);
         assert_eq!(Type::from_value(Qfalse).inexact_ruby_class(), None);
         assert_eq!(types::FalseClass.inexact_ruby_class(), None);
+        assert_eq!(Type::from_value(Qundef).inexact_ruby_class(), None);
+        assert_eq!(types::Undef.inexact_ruby_class(), None);
     }
 
     #[test]
