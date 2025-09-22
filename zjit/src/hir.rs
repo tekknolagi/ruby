@@ -6223,8 +6223,8 @@ mod tests {
           v20:CBool = Test v17
           IfFalse v20, bb1(v0, v1, v2, v3, v4, v10)
           PatchPoint NoEPEscape(open)
-          v26:BasicObject = InvokeBlock v10
-          v30:BasicObject = InvokeBuiltin dir_s_close, v0, v10
+          v27:BasicObject = InvokeBlock v10
+          v31:BasicObject = InvokeBuiltin dir_s_close, v0, v10
           CheckInterrupts
           Return v27
         bb1(v37:BasicObject, v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject, v42:BasicObject):
@@ -6461,10 +6461,10 @@ mod tests {
         "#);
         assert_snapshot!(hir_string("test"), @r"
         fn test@<compiled>:3:
-        bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
-          v7:BasicObject = InvokeBlock v1, v2
-          CheckInterrupts
-          Return v7
+        bb0(v0:BasicObject):
+          v5:BasicObject = GetConstantPath 0x1000
+          v7:ArrayExact = ToArray v5
+          SideExit UnhandledCallType(Splat)
         ");
     }
 }
