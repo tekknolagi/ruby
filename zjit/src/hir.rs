@@ -764,7 +764,6 @@ impl Insn {
             Insn::FixnumSub  { .. } => false,
             Insn::GetLocal   { .. } => false,
             Insn::GuardBitEquals { .. } => false,
-            Insn::GuardBlockParamIsIseqOrIfunc { .. } => false,
             Insn::GuardShape     { .. } => false,
             Insn::GuardType      { .. } => false,
             Insn::GuardTypeNot   { .. } => false,
