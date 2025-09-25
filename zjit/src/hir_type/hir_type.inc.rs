@@ -17,15 +17,16 @@ mod bits {
   pub const CInt32: u64 = 1u64 << 8;
   pub const CInt64: u64 = 1u64 << 9;
   pub const CInt8: u64 = 1u64 << 10;
-  pub const CNull: u64 = 1u64 << 11;
-  pub const CPtr: u64 = 1u64 << 12;
+  pub const CNonNull: u64 = 1u64 << 11;
+  pub const CNull: u64 = 1u64 << 12;
+  pub const CPtr: u64 = CNonNull | CNull;
   pub const CSigned: u64 = CInt16 | CInt32 | CInt64 | CInt8;
   pub const CUInt16: u64 = 1u64 << 13;
   pub const CUInt32: u64 = 1u64 << 14;
   pub const CUInt64: u64 = 1u64 << 15;
   pub const CUInt8: u64 = 1u64 << 16;
   pub const CUnsigned: u64 = CUInt16 | CUInt32 | CUInt64 | CUInt8;
-  pub const CValue: u64 = CBool | CDouble | CInt | CNull | CPtr;
+  pub const CValue: u64 = CBool | CDouble | CInt | CPtr;
   pub const CallableMethodEntry: u64 = 1u64 << 17;
   pub const Class: u64 = 1u64 << 18;
   pub const DynamicSymbol: u64 = 1u64 << 19;
@@ -69,7 +70,7 @@ mod bits {
   pub const Symbol: u64 = DynamicSymbol | StaticSymbol;
   pub const TrueClass: u64 = 1u64 << 42;
   pub const Undef: u64 = 1u64 << 43;
-  pub const AllBitPatterns: [(&'static str, u64); 69] = [
+  pub const AllBitPatterns: [(&'static str, u64); 70] = [
     ("Any", Any),
     ("RubyValue", RubyValue),
     ("Immediate", Immediate),
@@ -125,6 +126,7 @@ mod bits {
     ("CUInt16", CUInt16),
     ("CPtr", CPtr),
     ("CNull", CNull),
+    ("CNonNull", CNonNull),
     ("CSigned", CSigned),
     ("CInt8", CInt8),
     ("CInt64", CInt64),
@@ -161,6 +163,7 @@ pub mod types {
   pub const CInt32: Type = Type::from_bits(bits::CInt32);
   pub const CInt64: Type = Type::from_bits(bits::CInt64);
   pub const CInt8: Type = Type::from_bits(bits::CInt8);
+  pub const CNonNull: Type = Type::from_bits(bits::CNonNull);
   pub const CNull: Type = Type::from_bits(bits::CNull);
   pub const CPtr: Type = Type::from_bits(bits::CPtr);
   pub const CSigned: Type = Type::from_bits(bits::CSigned);
