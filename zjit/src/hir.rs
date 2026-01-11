@@ -4484,6 +4484,7 @@ impl Function {
     // This performs a dataflow def-analysis over the entire CFG to detect any
     // possibly undefined instruction operands.
     fn validate_definite_assignment(&self) -> Result<(), ValidationError> {
+        eprintln!("hi!");
         // Map of block ID -> InsnSet
         // Initialize with all missing values at first, to catch if a jump target points to a
         // missing location.
@@ -4530,6 +4531,31 @@ impl Function {
         // Check that each instruction's operands are assigned
         for &block in &rpo {
             let mut assigned = assigned_in[block.0].clone().unwrap();
+            for &param in &self.blocks[block.0].params {
+                assigned.insert(param);
+            }
+            for &insn_id in &self.blocks[block.0].insns {
+                let insn_id = self.union_find.borrow().find_const(insn_id);
+                let mut operands = VecDeque::new();
+                let insn = self.find(insn_id);
+                self.worklist_traverse_single_insn(&insn, &mut operands);
+                for operand in operands {
+                    if !assigned.get(operand) {
+                        return Err(ValidationError::OperandNotDefined(block, insn_id, operand));
+                    }
+                }
+                if insn.has_output() {
+                    assigned.insert(insn_id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// This is a temporary pass ensuring all SSA is block-local.
+    fn validate_maximal_ssa(&self) -> Result<(), ValidationError> {
+        for block in self.rpo() {
+            let mut assigned = InsnSet::with_capacity(self.insns.len());
             for &param in &self.blocks[block.0].params {
                 assigned.insert(param);
             }
@@ -4836,6 +4862,7 @@ impl Function {
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.validate_block_terminators_and_jumps()?;
         self.validate_definite_assignment()?;
+        self.validate_maximal_ssa()?;
         self.validate_insn_uniqueness()?;
         self.validate_types()?;
         Ok(())
