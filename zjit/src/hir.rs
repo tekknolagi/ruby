@@ -117,7 +117,7 @@ impl std::fmt::Display for BranchEdge {
 }
 
 /// Invalidation reasons
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
     /// Basic operation is redefined
     BOPRedefined {
@@ -3818,6 +3818,8 @@ impl Function {
             let mut stores: HashMap<(InsnId, i32), InsnId> = HashMap::new();
             // Track: base_val -> guard_result for HeapBasicObject guards
             let mut heap_guards: HashMap<InsnId, InsnId> = HashMap::new();
+            // Track: seen PatchPoint invariants (global invariants don't change during execution)
+            let mut seen_patchpoints: HashSet<Invariant> = HashSet::new();
 
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             let mut new_insns = vec![];
@@ -3870,10 +3872,22 @@ impl Function {
                         }
                     }
 
-                    // Clear tracked stores on memory-clobbering instructions
-                    // (guards are not affected since heap/immediate status can't change)
+                    // Eliminate duplicate PatchPoints - invariants are global and don't change
+                    // during execution, so we only need to check each one once per block
+                    Insn::PatchPoint { invariant, .. } => {
+                        if !seen_patchpoints.insert(invariant) {
+                            // Already seen this invariant - skip it
+                            continue;
+                        }
+                        new_insns.push(insn_id);
+                    }
+
+                    // Clear tracked stores and patchpoints on memory-clobbering instructions.
+                    // Stores are cleared because calls can modify memory.
+                    // PatchPoints are cleared because calls can break invariants (e.g., redefine methods).
                     _ if self.may_clobber_fields(&insn) => {
                         stores.clear();
+                        seen_patchpoints.clear();
                         new_insns.push(insn_id);
                     }
 
@@ -7344,14 +7358,11 @@ mod graphviz_tests {
           bb2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb2(v10:BasicObject, v11:BasicObject, v12:BasicObject)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v15">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">PatchPoint NoTracePoint&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v24">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v25">PatchPoint MethodRedefined(Integer@0x1000, |@0x1008, cme:0x1010)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v26">v26:Fixnum = GuardType v11, Fixnum&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v27">v27:Fixnum = GuardType v12, Fixnum&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v28">v28:Fixnum = FixnumOr v26, v27&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v29">IncrCounter inline_cfunc_optimized_send_count&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v22">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v23">Return v28&nbsp;</TD></TR>
         </TABLE>>];
@@ -7399,7 +7410,6 @@ mod graphviz_tests {
         <TR><TD ALIGN="left" PORT="v16">IfFalse v15, bb3(v8, v9)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v18">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v19">v19:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v22">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v23">Return v19&nbsp;</TD></TR>
         </TABLE>>];
@@ -7408,7 +7418,6 @@ mod graphviz_tests {
         <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb3(v24:BasicObject, v25:BasicObject)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v28">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v29">v29:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v31">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v32">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v33">Return v29&nbsp;</TD></TR>
         </TABLE>>];
