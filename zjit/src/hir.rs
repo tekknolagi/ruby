@@ -3765,6 +3765,132 @@ impl Function {
             .unwrap_or(insn_id)
     }
 
+    /// Forward values from stores to subsequent loads of the same field.
+    ///
+    /// When we see a StoreField followed by a LoadField to the same (recv, offset),
+    /// we can replace the load with the stored value. This is particularly useful
+    /// for shape ID loads after stores in instance variable access sequences.
+    fn store_load_forwarding(&mut self) {
+        use std::collections::HashMap;
+
+        for block in self.rpo() {
+            // Track: (canonical_recv, offset) -> known_value
+            let mut stores: HashMap<(InsnId, i32), InsnId> = HashMap::new();
+            // Track: base_val -> guard_result for HeapBasicObject guards
+            let mut heap_guards: HashMap<InsnId, InsnId> = HashMap::new();
+
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            let mut new_insns = vec![];
+
+            for insn_id in old_insns {
+                let insn = self.find(insn_id);
+                match insn {
+                    // Track stores - but first clobber any other stores at the same offset
+                    // since different receivers might alias at runtime
+                    Insn::StoreField { recv, offset, val, .. } => {
+                        let base_recv = self.chase_insn(recv);
+                        // Remove all entries at this offset (they might alias)
+                        stores.retain(|&(_, off), _| off != offset);
+                        // Track this store
+                        stores.insert((base_recv, offset), val);
+                        new_insns.push(insn_id);
+                    }
+
+                    // Forward loads from previous stores or loads
+                    Insn::LoadField { recv, offset, .. } => {
+                        let base_recv = self.chase_insn(recv);
+                        let key = (base_recv, offset);
+                        if let Some(&known_val) = stores.get(&key) {
+                            // Forward the known value - don't emit the load
+                            self.make_equal_to(insn_id, known_val);
+                        } else {
+                            // Learn from this load - now we know what's at this offset
+                            stores.insert(key, insn_id);
+                            new_insns.push(insn_id);
+                        }
+                    }
+
+                    // Eliminate duplicate HeapBasicObject guards (heap vs immediate can't change)
+                    Insn::GuardType { val, guard_type, .. }
+                        if guard_type.is_subtype(types::HeapBasicObject)
+                            && types::HeapBasicObject.is_subtype(guard_type) =>
+                    {
+                        let base_val = self.chase_insn(val);
+                        if let Some(&prev_guard) = heap_guards.get(&base_val) {
+                            // Already guarded - forward to previous result
+                            self.make_equal_to(insn_id, prev_guard);
+                        } else {
+                            heap_guards.insert(base_val, insn_id);
+                            new_insns.push(insn_id);
+                        }
+                    }
+
+                    // Clear tracked stores on memory-clobbering instructions
+                    // (guards are not affected since heap/immediate status can't change)
+                    _ if self.may_clobber_fields(&insn) => {
+                        stores.clear();
+                        new_insns.push(insn_id);
+                    }
+
+                    _ => {
+                        new_insns.push(insn_id);
+                    }
+                }
+            }
+
+            self.blocks[block.0].insns = new_insns;
+        }
+    }
+
+    /// Check if an instruction may clobber field memory, invalidating tracked stores.
+    fn may_clobber_fields(&self, insn: &Insn) -> bool {
+        match insn {
+            // Calls can do anything
+            Insn::Send { .. }
+            | Insn::SendWithoutBlock { .. }
+            | Insn::SendWithoutBlockDirect { .. } => true,
+
+            // C calls may modify memory unless marked elidable
+            Insn::CCall { elidable, .. } => !elidable,
+            Insn::CCallWithFrame { .. } => true,
+            Insn::CCallVariadic { .. } => true,
+
+            // Instance variable operations (if not lowered)
+            Insn::SetIvar { .. } => true,
+            Insn::GetIvar { .. } => true, // May side-exit and re-enter
+
+            // Global/class variable writes
+            Insn::SetGlobal { .. } => true,
+            Insn::SetClassVar { .. } => true,
+
+            // Array/Hash mutations
+            Insn::ArrayPush { .. }
+            | Insn::ArrayAset { .. }
+            | Insn::ArrayExtend { .. }
+            | Insn::HashAset { .. } => true,
+
+            // Allocations may trigger GC
+            Insn::ObjectAlloc { .. }
+            | Insn::ObjectAllocClass { .. } => true,
+
+            // NewHash with elements may call #hash and #eql? methods
+            Insn::NewHash { elements, .. } if !elements.is_empty() => true,
+
+            // These don't clobber fields
+            Insn::StoreField { .. } => false, // Handled specially
+            Insn::WriteBarrier { .. } => false,
+            Insn::LoadField { .. } => false,
+            Insn::Const { .. } => false,
+            Insn::GuardType { .. } => false,
+            Insn::GuardBitEquals { .. } => false,
+            Insn::PatchPoint { .. } => false,
+            Insn::IncrCounter { .. } => false,
+
+            // Default: if it has effects, be conservative
+            _ => insn.has_effects(),
+        }
+    }
+
     /// Use type information left by `infer_types` to fold away operations that can be evaluated at compile-time.
     ///
     /// It can fold fixnum math, truthiness tests, and branches with constant conditionals.
@@ -4477,6 +4603,7 @@ impl Function {
         run_pass!(inline);
         run_pass!(optimize_getivar);
         run_pass!(optimize_c_calls);
+        run_pass!(store_load_forwarding);
         run_pass!(fold_constants);
         run_pass!(clean_cfg);
         run_pass!(eliminate_dead_code);

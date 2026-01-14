@@ -3994,13 +3994,11 @@ mod hir_opt_tests {
           StoreField v25, :_shape_id@0x1000, v30
           v16:Fixnum[2] = Const Value(2)
           PatchPoint SingleRactorMode
-          v32:HeapBasicObject = GuardType v6, HeapBasicObject
-          v33:CShape = LoadField v32, :_shape_id@0x1000
-          v34:CShape[0x1003] = GuardBitEquals v33, CShape(0x1003)
-          StoreField v32, :@bar@0x1004, v16
-          WriteBarrier v32, v16
+          v34:CShape[0x1003] = GuardBitEquals v30, CShape(0x1003)
+          StoreField v25, :@bar@0x1004, v16
+          WriteBarrier v25, v16
           v37:CShape[0x1005] = Const CShape(0x1005)
-          StoreField v32, :_shape_id@0x1000, v37
+          StoreField v25, :_shape_id@0x1000, v37
           CheckInterrupts
           Return v16
         ");
@@ -5727,6 +5725,46 @@ mod hir_opt_tests {
           v26:BasicObject = LoadField v21, :@foo@0x103a
           CheckInterrupts
           Return v26
+        ");
+    }
+
+    #[test]
+    fn test_eliminate_redundant_getivar() {
+        // Reading the same ivar twice should eliminate the second load
+        eval("
+            class C
+              def initialize = @foo = 42
+              def test = @foo + @foo
+            end
+            o = C.new
+            o.test
+            o.test
+            TEST = C.instance_method(:test)
+        ");
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn test@<compiled>:4:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          v22:HeapBasicObject = GuardType v6, HeapBasicObject
+          v23:CShape = LoadField v22, :_shape_id@0x1000
+          v24:CShape[0x1001] = GuardBitEquals v23, CShape(0x1001)
+          v25:BasicObject = LoadField v22, :@foo@0x1002
+          PatchPoint SingleRactorMode
+          v28:CShape[0x1001] = GuardBitEquals v23, CShape(0x1001)
+          PatchPoint MethodRedefined(Integer@0x1008, +@0x1010, cme:0x1018)
+          v32:Fixnum = GuardType v25, Fixnum
+          v33:Fixnum = GuardType v25, Fixnum
+          v34:Fixnum = FixnumAdd v32, v33
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v34
         ");
     }
 
