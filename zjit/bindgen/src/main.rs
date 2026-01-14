@@ -302,6 +302,8 @@ fn main() {
         .allowlist_function("rb_zjit_singleton_class_p")
         .allowlist_function("rb_zjit_defined_ivar")
         .allowlist_function("rb_zjit_insn_leaf")
+        .allowlist_function("rb_zjit_getivar_pic")
+        .allowlist_type("zjit_ivar_pic_entry_t")
         .allowlist_type("jit_bindgen_constants")
         .allowlist_type("zjit_struct_offsets")
         .allowlist_function("rb_assert_holding_vm_lock")

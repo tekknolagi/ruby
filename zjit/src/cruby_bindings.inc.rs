@@ -1823,6 +1823,13 @@ pub const DEFINED_CONST_FROM: defined_type = 17;
 pub type defined_type = u32;
 pub const ISEQ_BODY_OFFSET_PARAM: zjit_struct_offsets = 16;
 pub type zjit_struct_offsets = u32;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct zjit_ivar_pic_entry {
+    pub shape_id: shape_id_t,
+    pub ivar_index: attr_index_t,
+}
+pub type zjit_ivar_pic_entry_t = zjit_ivar_pic_entry;
 pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: jit_bindgen_constants = 16;
 pub const ROBJECT_OFFSET_AS_ARY: jit_bindgen_constants = 16;
 pub const RUBY_OFFSET_RSTRING_LEN: jit_bindgen_constants = 16;
@@ -2082,6 +2089,11 @@ unsafe extern "C" {
     pub fn rb_zjit_class_has_default_allocator(klass: VALUE) -> bool;
     pub fn rb_vm_get_untagged_block_handler(reg_cfp: *mut rb_control_frame_t) -> VALUE;
     pub fn rb_zjit_writebarrier_check_immediate(recv: VALUE, val: VALUE);
+    pub fn rb_zjit_getivar_pic(
+        obj: VALUE,
+        entries: *const zjit_ivar_pic_entry_t,
+        num_entries: u32,
+    ) -> VALUE;
     pub fn rb_iseq_encoded_size(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_iseq_pc_at_idx(iseq: *const rb_iseq_t, insn_idx: u32) -> *mut VALUE;
     pub fn rb_iseq_opcode_at_pc(iseq: *const rb_iseq_t, pc: *const VALUE) -> ::std::os::raw::c_int;

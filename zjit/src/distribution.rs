@@ -134,6 +134,17 @@ impl<T: Copy + PartialEq + Default + std::fmt::Debug, const N: usize> Distributi
         assert!(idx < N, "index {idx} out of bounds for buckets[{N}]");
         self.buckets[idx]
     }
+
+    /// Returns all non-default buckets (observed types).
+    /// For polymorphic distributions, this returns 2-4 types.
+    pub fn all_buckets(&self) -> impl Iterator<Item = T> + '_ {
+        self.buckets.iter().copied().filter(|b| *b != T::default())
+    }
+
+    /// Returns the number of distinct types observed.
+    pub fn num_types(&self) -> usize {
+        self.buckets.iter().filter(|b| **b != T::default()).count()
+    }
 }
 
 #[cfg(test)]

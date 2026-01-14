@@ -465,6 +465,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
             gen_ccall_variadic(jit, asm, *cfunc, *name, opnd!(recv), opnds!(args), *cme, *blockiseq, &function.frame_state(*state))
         }
         Insn::GetIvar { self_val, id, ic, state: _ } => gen_getivar(jit, asm, opnd!(self_val), *id, *ic),
+        Insn::GetIvarPic { recv, id: _, pic_entries, state } => gen_getivar_pic(jit, asm, opnd!(recv), pic_entries, &function.frame_state(*state)),
         Insn::SetGlobal { id, val, state } => no_output!(gen_setglobal(jit, asm, *id, opnd!(val), &function.frame_state(*state))),
         Insn::GetGlobal { id, state } => gen_getglobal(jit, asm, *id, &function.frame_state(*state)),
         &Insn::GetLocal { ep_offset, level, use_sp, .. } => gen_getlocal(asm, ep_offset, level, use_sp),
@@ -964,6 +965,29 @@ fn gen_getivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, ic: 
         let iseq = Opnd::Value(jit.iseq.into());
         asm_ccall!(asm, rb_vm_getinstancevariable, iseq, recv, id.0.into(), Opnd::const_ptr(ic))
     }
+}
+
+/// Emit a polymorphic inline cached instance variable lookup for T_OBJECT
+fn gen_getivar_pic(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, pic_entries: &[(ShapeId, u16)], state: &FrameState) -> Opnd {
+    // Convert Rust Vec to C array - we leak this memory since it lives with JIT code
+    let c_entries: Vec<zjit_ivar_pic_entry_t> = pic_entries.iter().map(|(shape_id, ivar_index)| {
+        zjit_ivar_pic_entry_t {
+            shape_id: shape_id.0,
+            ivar_index: *ivar_index,
+        }
+    }).collect();
+    let num_entries = c_entries.len() as u32;
+    let entries_ptr = Box::into_raw(c_entries.into_boxed_slice()) as *const zjit_ivar_pic_entry_t;
+
+    // Call the C helper
+    let result = asm_ccall!(asm, rb_zjit_getivar_pic, recv, Opnd::const_ptr(entries_ptr as *const u8), Opnd::UImm(num_entries as u64));
+
+    // Side-exit if the shape wasn't in the PIC (result == Qundef)
+    asm_comment!(asm, "side-exit if getivar PIC miss");
+    asm.cmp(result, Qundef.into());
+    asm.je(side_exit(jit, state, GetIvarPicMiss));
+
+    result
 }
 
 /// Emit an uncached instance variable store

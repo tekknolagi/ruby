@@ -10568,4 +10568,41 @@ mod hir_opt_tests {
           Return v13
         ");
     }
+
+    #[test]
+    fn optimize_getivar_polymorphic_pic() {
+        // Test that polymorphic getivar access uses GetIvarPic when shapes differ.
+        // Classes A and B have @x at different offsets due to different ivar layouts.
+        set_call_threshold(3);
+        eval(r#"
+            class A
+              def initialize; @x = 1; end
+              def get_x; @x; end
+            end
+            class B < A
+              def initialize; @y = 0; @x = 2; end  # @x at different offset
+            end
+            a, b = A.new, B.new
+            a.get_x; b.get_x
+            a.get_x; b.get_x
+            a.get_x; b.get_x
+        "#);
+        assert_snapshot!(hir_string_proc("A.instance_method(:get_x)"), @r"
+        fn get_x@<compiled>:4:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          v16:HeapBasicObject = GuardType v6, HeapBasicObject
+          IncrCounter getivar_polymorphic_pic
+          v18:BasicObject = GetIvarPic v16, :@x, [2]
+          CheckInterrupts
+          Return v18
+        ");
+    }
 }

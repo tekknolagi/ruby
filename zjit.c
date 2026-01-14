@@ -310,6 +310,35 @@ rb_zjit_writebarrier_check_immediate(VALUE recv, VALUE val)
     }
 }
 
+// Polymorphic inline cache entry for getivar (T_OBJECT only)
+typedef struct zjit_ivar_pic_entry {
+    shape_id_t shape_id;
+    attr_index_t ivar_index;  // Index into fields array, or ATTR_INDEX_NOT_SET if undefined
+} zjit_ivar_pic_entry_t;
+
+#define ZJIT_ATTR_INDEX_NOT_SET UINT16_MAX
+
+// Polymorphic getivar helper for T_OBJECT - uses ROBJECT_FIELDS macro.
+// Returns Qundef if the shape is not in the PIC (caller should side-exit).
+VALUE
+rb_zjit_getivar_pic(VALUE obj, const zjit_ivar_pic_entry_t *entries, uint32_t num_entries)
+{
+    shape_id_t obj_shape = rb_obj_shape_id(obj);
+
+    for (uint32_t i = 0; i < num_entries; i++) {
+        if (entries[i].shape_id == obj_shape) {
+            if (entries[i].ivar_index == ZJIT_ATTR_INDEX_NOT_SET) {
+                return Qnil;  // ivar undefined for this shape
+            }
+            // Use Ruby's ROBJECT_FIELDS which handles embedded vs heap
+            return ROBJECT_FIELDS(obj)[entries[i].ivar_index];
+        }
+    }
+
+    // Shape not in PIC - return Qundef to trigger side-exit
+    return Qundef;
+}
+
 // Primitives used by zjit.rb. Don't put other functions below, which wouldn't use them.
 VALUE rb_zjit_enable(rb_execution_context_t *ec, VALUE self);
 VALUE rb_zjit_assert_compiles(rb_execution_context_t *ec, VALUE self);

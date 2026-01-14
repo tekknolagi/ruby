@@ -209,6 +209,7 @@ make_counters! {
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
         exit_too_many_keyword_parameters,
+        exit_getivar_pic_miss,
     }
 
     // Send fallback counters that are summed as dynamic_send_count
@@ -277,6 +278,7 @@ make_counters! {
         getivar_fallback_immediate,
         getivar_fallback_not_t_object,
         getivar_fallback_too_complex,
+        getivar_fallback_polymorphic_megamorphic,
     }
 
     // Ivar fallback counters that are summed as dynamic_definedivar_count
@@ -287,6 +289,9 @@ make_counters! {
         definedivar_fallback_not_t_object,
         definedivar_fallback_too_complex,
     }
+
+    // Polymorphic getivar PIC optimization counter
+    getivar_polymorphic_pic,
 
     // compile_error_: Compile error reasons
     compile_error_iseq_version_limit_reached,
@@ -523,6 +528,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
         TooManyKeywordParameters      => exit_too_many_keyword_parameters,
+        GetIvarPicMiss                => exit_getivar_pic_miss,
         PatchPoint(Invariant::BOPRedefined { .. })
                                       => exit_patchpoint_bop_redefined,
         PatchPoint(Invariant::MethodRedefined { .. })

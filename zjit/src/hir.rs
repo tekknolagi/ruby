@@ -507,6 +507,7 @@ pub enum SideExitReason {
     FixnumModByZero,
     FixnumDivByZero,
     BoxFixnumOverflow,
+    GetIvarPicMiss,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -787,6 +788,10 @@ pub enum Insn {
     //NewObject?
     /// Get an instance variable `id` from `self_val`, using the inline cache `ic` if present
     GetIvar { self_val: InsnId, id: ID, ic: *const iseq_inline_iv_cache_entry, state: InsnId },
+    /// Get an instance variable using a polymorphic inline cache. Only for T_OBJECT.
+    /// Each entry is (shape_id, ivar_index) where ivar_index is u16::MAX if ivar is undefined.
+    /// If the object's shape is not in the PIC, side-exits with GetIvarPicMiss.
+    GetIvarPic { recv: InsnId, id: ID, pic_entries: Vec<(ShapeId, u16)>, state: InsnId },
     /// Set `self_val`'s instance variable `id` to `val`, using the inline cache `ic` if present
     SetIvar { self_val: InsnId, id: ID, val: InsnId, ic: *const iseq_inline_iv_cache_entry, state: InsnId },
     /// Check whether an instance variable exists on `self_val`
@@ -1397,6 +1402,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             }
             Insn::DefinedIvar { self_val, id, .. } => write!(f, "DefinedIvar {self_val}, :{}", id.contents_lossy()),
             Insn::GetIvar { self_val, id, .. } => write!(f, "GetIvar {self_val}, :{}", id.contents_lossy()),
+            Insn::GetIvarPic { recv, id, pic_entries, .. } => write!(f, "GetIvarPic {recv}, :{}, [{}]", id.contents_lossy(), pic_entries.len()),
             Insn::LoadPC => write!(f, "LoadPC"),
             Insn::LoadEC => write!(f, "LoadEC"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
@@ -2104,6 +2110,7 @@ impl Function {
             &ArrayHash { ref elements, state } => ArrayHash { elements: find_vec!(elements), state },
             &SetGlobal { id, val, state } => SetGlobal { id, val: find!(val), state },
             &GetIvar { self_val, id, ic, state } => GetIvar { self_val: find!(self_val), id, ic, state },
+            GetIvarPic { recv, id, pic_entries, state } => GetIvarPic { recv: find!(*recv), id: *id, pic_entries: pic_entries.clone(), state: *state },
             &LoadField { recv, id, offset, return_type } => LoadField { recv: find!(recv), id, offset, return_type },
             &StoreField { recv, id, offset, val } => StoreField { recv: find!(recv), id, offset, val: find!(val) },
             &WriteBarrier { recv, val } => WriteBarrier { recv: find!(recv), val: find!(val) },
@@ -2261,6 +2268,7 @@ impl Function {
             Insn::ArrayHash { .. } => types::Fixnum,
             Insn::GetGlobal { .. } => types::BasicObject,
             Insn::GetIvar { .. } => types::BasicObject,
+            Insn::GetIvarPic { .. } => types::BasicObject,
             Insn::LoadPC => types::CPtr,
             Insn::LoadEC => types::CPtr,
             Insn::LoadSelf => types::BasicObject,
@@ -2400,6 +2408,23 @@ impl Function {
             | ReceiverTypeResolution::SkewedPolymorphic { profiled_type } => Some(profiled_type),
             _ => None,
         }
+    }
+
+    /// Get all profiled types for a polymorphic call site.
+    /// Returns Some(vec) if the site is polymorphic (2-4 types), None otherwise.
+    fn polymorphic_types_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<Vec<ProfiledType>> {
+        let profiles = self.profiles.as_ref()?;
+        let entries = profiles.types.get(&iseq_insn_idx)?;
+        let recv = self.chase_insn(insn);
+
+        for (entry_insn, entry_type_summary) in entries {
+            if self.union_find.borrow().find_const(*entry_insn) == recv {
+                if entry_type_summary.is_polymorphic() {
+                    return Some(entry_type_summary.all_buckets().collect());
+                }
+            }
+        }
+        None
     }
 
     /// Reorder keyword arguments to match the callee's expectation.
@@ -3107,6 +3132,61 @@ impl Function {
         })
     }
 
+    /// Try to optimize a getivar with polymorphic profile data.
+    /// Returns Some(result_insn) if successful, None if we should fall back.
+    fn try_polymorphic_getivar(
+        &mut self,
+        block: BlockId,
+        self_val: InsnId,
+        id: ID,
+        state: InsnId,
+        insn_idx: usize,
+        _original_insn_id: InsnId,
+    ) -> Option<InsnId> {
+        let poly_types = self.polymorphic_types_at(self_val, insn_idx)?;
+
+        // Validate all types are T_OBJECT and not too complex
+        let mut pic_entries: Vec<(ShapeId, u16)> = Vec::with_capacity(poly_types.len());
+        for ptype in &poly_types {
+            if ptype.flags().is_immediate() {
+                // Can't use PIC with immediates
+                return None;
+            }
+            if !ptype.flags().is_t_object() {
+                // PIC only handles T_OBJECT (uses ROBJECT_FIELDS)
+                return None;
+            }
+            if !ptype.shape().is_valid() || ptype.shape().is_too_complex() {
+                // Can't handle too-complex shapes
+                return None;
+            }
+
+            // Look up the ivar index for this shape
+            let mut ivar_index: u16 = 0;
+            let found = unsafe { rb_shape_get_iv_index(ptype.shape().0, id, &mut ivar_index) };
+            let index = if found { ivar_index } else { u16::MAX }; // u16::MAX means undefined
+            pic_entries.push((ptype.shape(), index));
+        }
+
+        // Guard that the receiver is a heap object
+        let guarded_val = self.push_insn(block, Insn::GuardType {
+            val: self_val,
+            guard_type: types::HeapBasicObject,
+            state
+        });
+
+        // Emit the PIC counter and instruction
+        self.push_insn(block, Insn::IncrCounter(Counter::getivar_polymorphic_pic));
+        let result = self.push_insn(block, Insn::GetIvarPic {
+            recv: guarded_val,
+            id,
+            pic_entries,
+            state,
+        });
+
+        Some(result)
+    }
+
     fn optimize_getivar(&mut self) {
         for block in self.rpo() {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
@@ -3116,7 +3196,12 @@ impl Function {
                     Insn::GetIvar { self_val, id, ic: _, state } => {
                         let frame_state = self.frame_state(state);
                         let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
-                            // No (monomorphic/skewed polymorphic) profile info
+                            // No monomorphic/skewed-polymorphic profile - try polymorphic
+                            if let Some(pic) = self.try_polymorphic_getivar(block, self_val, id, state, frame_state.insn_idx, insn_id) {
+                                self.make_equal_to(insn_id, pic);
+                                continue;
+                            }
+                            // Truly not optimizable - fall back
                             self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_not_monomorphic));
                             self.push_insn_id(block, insn_id); continue;
                         };
@@ -3917,6 +4002,7 @@ impl Function {
             // Instance variable operations (if not lowered)
             Insn::SetIvar { .. } => true,
             Insn::GetIvar { .. } => true, // May side-exit and re-enter
+            Insn::GetIvarPic { .. } => true, // Side-exits on PIC miss
 
             // Global/class variable writes
             Insn::SetGlobal { .. } => true,
@@ -4311,7 +4397,9 @@ impl Function {
                 worklist.push_back(recv);
                 worklist.extend(args);
             }
-            &Insn::GetIvar { self_val, state, .. } | &Insn::DefinedIvar { self_val, state, .. } => {
+            &Insn::GetIvar { self_val, state, .. }
+            | &Insn::DefinedIvar { self_val, state, .. }
+            | &Insn::GetIvarPic { recv: self_val, state, .. } => {
                 worklist.push_back(self_val);
                 worklist.push_back(state);
             }
@@ -4897,6 +4985,7 @@ impl Function {
             | Insn::ObjectAlloc { val, .. }
             | Insn::DupArrayInclude { target: val, .. }
             | Insn::GetIvar { self_val: val, .. }
+            | Insn::GetIvarPic { recv: val, .. }
             | Insn::CCall { recv: val, .. }
             | Insn::FixnumBitCheck { val, .. } // TODO (https://github.com/Shopify/ruby/issues/859) this should check Fixnum, but then test_checkkeyword_tests_fixnum_bit fails
             | Insn::DefinedIvar { self_val: val, .. } => {
