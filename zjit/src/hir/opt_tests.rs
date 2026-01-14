@@ -4005,6 +4005,57 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_dead_store_elimination() {
+        // When the same ivar is written multiple times without reads in between,
+        // only the last store should remain.
+        eval("
+            class C
+              def test
+                @a = 1
+                @a = 2
+                @a = 3
+              end
+            end
+            obj = C.new
+            obj.test
+            TEST = C.instance_method(:test)
+        ");
+        // The snapshot should show only ONE StoreField for :@a (the final value 3)
+        // The dead stores for @a = 1 and @a = 2 should be eliminated.
+        // Note: WriteBarriers for eliminated stores remain (orphaned but harmless)
+        assert_snapshot!(hir_string_proc("TEST"), @r"
+        fn test@<compiled>:4:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          v10:Fixnum[1] = Const Value(1)
+          PatchPoint SingleRactorMode
+          v31:HeapBasicObject = GuardType v6, HeapBasicObject
+          v32:CShape = LoadField v31, :_shape_id@0x1000
+          v33:CShape[0x1001] = GuardBitEquals v32, CShape(0x1001)
+          WriteBarrier v31, v10
+          v36:CShape[0x1002] = Const CShape(0x1002)
+          StoreField v31, :_shape_id@0x1000, v36
+          v16:Fixnum[2] = Const Value(2)
+          PatchPoint SingleRactorMode
+          v40:CShape[0x1002] = GuardBitEquals v36, CShape(0x1002)
+          WriteBarrier v31, v16
+          v22:Fixnum[3] = Const Value(3)
+          PatchPoint SingleRactorMode
+          v45:CShape[0x1002] = GuardBitEquals v36, CShape(0x1002)
+          StoreField v31, :@a@0x1003, v22
+          WriteBarrier v31, v22
+          CheckInterrupts
+          Return v22
+        ");
+    }
+
+    #[test]
     fn test_dont_specialize_setivar_with_t_data() {
         eval("
             class C < Range

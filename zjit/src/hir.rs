@@ -3771,9 +3771,49 @@ impl Function {
     /// we can replace the load with the stored value. This is particularly useful
     /// for shape ID loads after stores in instance variable access sequences.
     fn store_load_forwarding(&mut self) {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
 
         for block in self.rpo() {
+            // Pass 1: Identify dead stores using Go-style backward walk.
+            // Track "shadowed" locations - memory that will be overwritten later.
+            // A store is dead if it writes to an already-shadowed location.
+            // See: https://go.dev/src/cmd/compile/internal/ssa/deadstore.go
+            let mut dead_stores: HashSet<InsnId> = HashSet::new();
+            {
+                // Shadowed locations: (recv, offset) that will be overwritten later
+                let mut shadowed: HashSet<(InsnId, i32)> = HashSet::new();
+
+                // Walk backward through the block
+                for &insn_id in self.blocks[block.0].insns.iter().rev() {
+                    let insn = self.find(insn_id);
+                    match insn {
+                        Insn::StoreField { recv, offset, .. } => {
+                            let base_recv = self.chase_insn(recv);
+                            let key = (base_recv, offset);
+                            if shadowed.contains(&key) {
+                                // This store is dead - location will be overwritten
+                                dead_stores.insert(insn_id);
+                            } else {
+                                // This store shadows the location for earlier stores
+                                shadowed.insert(key);
+                            }
+                        }
+                        Insn::LoadField { recv, offset, .. } => {
+                            let base_recv = self.chase_insn(recv);
+                            let key = (base_recv, offset);
+                            // Location is read - remove from shadowed set
+                            shadowed.remove(&key);
+                        }
+                        _ if self.may_clobber_fields(&insn) => {
+                            // Memory may be observed by call - clear all shadows
+                            shadowed.clear();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Pass 2: Forward values and eliminate dead stores
             // Track: (canonical_recv, offset) -> known_value
             let mut stores: HashMap<(InsnId, i32), InsnId> = HashMap::new();
             // Track: base_val -> guard_result for HeapBasicObject guards
@@ -3783,6 +3823,11 @@ impl Function {
             let mut new_insns = vec![];
 
             for insn_id in old_insns {
+                // Skip dead stores
+                if dead_stores.contains(&insn_id) {
+                    continue;
+                }
+
                 let insn = self.find(insn_id);
                 match insn {
                     // Track stores - but first clobber any other stores at the same offset
