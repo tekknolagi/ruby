@@ -415,6 +415,9 @@ make_counters! {
     guard_type_count,
     guard_shape_count,
 
+    // Polymorphic getivar optimization counter
+    getivar_polymorphic,
+
     invokeblock_handler_monomorphic_iseq,
     invokeblock_handler_monomorphic_ifunc,
     invokeblock_handler_monomorphic_other,

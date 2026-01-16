@@ -134,6 +134,12 @@ impl<T: Copy + PartialEq + Default + std::fmt::Debug, const N: usize> Distributi
         assert!(idx < N, "index {idx} out of bounds for buckets[{N}]");
         self.buckets[idx]
     }
+
+    /// Return all non-empty buckets as a slice.
+    /// For polymorphic distributions, this returns all observed types.
+    pub fn buckets(&self) -> &[T; N] {
+        &self.buckets
+    }
 }
 
 #[cfg(test)]

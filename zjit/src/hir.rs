@@ -2571,6 +2571,31 @@ impl Function {
         }
     }
 
+    /// Return all profiled types for a polymorphic profile at the given ISEQ instruction index.
+    /// Returns None if the profile is not polymorphic, or if no profile data is available.
+    fn polymorphic_profiles_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<Vec<ProfiledType>> {
+        let profiles = self.profiles.as_ref()?;
+        let entries = profiles.types.get(&iseq_insn_idx)?;
+        let recv = self.chase_insn(insn);
+
+        for (entry_insn, entry_type_summary) in entries {
+            if self.union_find.borrow().find_const(*entry_insn) == recv {
+                if entry_type_summary.is_polymorphic() {
+                    // Collect all non-empty profiled types from the buckets
+                    let types: Vec<ProfiledType> = entry_type_summary.buckets()
+                        .iter()
+                        .copied()
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                    if types.len() >= 2 {
+                        return Some(types);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Reorder keyword arguments to match the callee's expectation.
     ///
     /// Returns Ok with reordered arguments if successful, or Err with the fallback reason if not.
@@ -3398,96 +3423,166 @@ impl Function {
         })
     }
 
+    /// Load an ivar from a receiver with a known profiled type.
+    /// Returns the InsnId of the loaded value.
+    fn load_ivar_for_shape(&mut self, block: BlockId, self_val: InsnId, id: ID, recv_type: ProfiledType) -> InsnId {
+        let mut ivar_index: u16 = 0;
+        if !unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
+            // If there is no IVAR index, then the ivar was undefined when we
+            // entered the compiler. That means we can just return nil for this
+            // shape + iv name
+            self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
+        } else if !recv_type.flags().is_t_object() {
+            // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
+            // getinstancevariable does assume_single_ractor_mode()
+            let ivar_index_insn: InsnId = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
+            self.push_insn(block, Insn::CCall {
+                cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
+                recv: self_val,
+                args: vec![ivar_index_insn],
+                name: ID!(rb_ivar_get_at_no_ractor_check),
+                return_type: types::BasicObject,
+                elidable: true })
+        } else if recv_type.flags().is_embedded() {
+            // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
+            let offset = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
+            self.push_insn(block, Insn::LoadField { recv: self_val, id, offset, return_type: types::BasicObject })
+        } else {
+            let as_heap = self.push_insn(block, Insn::LoadField { recv: self_val, id: ID!(_as_heap), offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32, return_type: types::CPtr });
+            let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
+            self.push_insn(block, Insn::LoadField { recv: as_heap, id, offset, return_type: types::BasicObject })
+        }
+    }
+
+    /// Check if a profiled type is valid for ivar access optimization.
+    fn is_valid_ivar_shape(&self, recv_type: &ProfiledType) -> bool {
+        !recv_type.flags().is_immediate()
+            && recv_type.shape().is_valid()
+            && !recv_type.shape().is_too_complex()
+    }
+
     fn optimize_getivar(&mut self) {
         for block in self.rpo() {
             let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
             assert!(self.blocks[block.0].insns.is_empty());
-            for insn_id in old_insns {
+            let mut current_block = block;
+            let mut insn_iter = old_insns.into_iter().peekable();
+            while let Some(insn_id) = insn_iter.next() {
                 match self.find(insn_id) {
                     Insn::GetIvar { self_val, id, ic: _, state } => {
                         let frame_state = self.frame_state(state);
-                        let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
-                            // No (monomorphic/skewed polymorphic) profile info
-                            self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_not_monomorphic));
-                            self.push_insn_id(block, insn_id); continue;
-                        };
-                        if recv_type.flags().is_immediate() {
-                            // Instance variable lookups on immediate values are always nil
-                            self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_immediate));
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        assert!(recv_type.shape().is_valid());
-                        if recv_type.shape().is_too_complex() {
-                            // too-complex shapes can't use index access
-                            self.push_insn(block, Insn::IncrCounter(Counter::getivar_fallback_too_complex));
-                            self.push_insn_id(block, insn_id); continue;
-                        }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
-                        let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
-                        let mut ivar_index: u16 = 0;
-                        let replacement = if ! unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
-                            // If there is no IVAR index, then the ivar was undefined when we
-                            // entered the compiler.  That means we can just return nil for this
-                            // shape + iv name
-                            self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
-                        } else if !recv_type.flags().is_t_object() {
-                            // NOTE: it's fine to use rb_ivar_get_at_no_ractor_check because
-                            // getinstancevariable does assume_single_ractor_mode()
-                            let ivar_index_insn: InsnId = self.push_insn(block, Insn::Const { val: Const::CUInt16(ivar_index as u16) });
-                            self.push_insn(block, Insn::CCall {
-                                cfunc: rb_ivar_get_at_no_ractor_check as *const u8,
-                                recv: self_val,
-                                args: vec![ivar_index_insn],
-                                name: ID!(rb_ivar_get_at_no_ractor_check),
-                                return_type: types::BasicObject,
-                                elidable: true })
-                        } else if recv_type.flags().is_embedded() {
-                            // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
-                            let offset = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
-                            self.push_insn(block, Insn::LoadField { recv: self_val, id, offset, return_type: types::BasicObject })
-                        } else {
-                            let as_heap =  self.push_insn(block, Insn::LoadField { recv: self_val, id: ID!(_as_heap), offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32, return_type: types::CPtr });
 
-                            let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
-                            self.push_insn(block, Insn::LoadField { recv: as_heap, id, offset, return_type: types::BasicObject })
-                        };
-                        self.make_equal_to(insn_id, replacement);
+                        // Try monomorphic/skewed polymorphic optimization first
+                        if let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) {
+                            if !self.is_valid_ivar_shape(&recv_type) {
+                                if recv_type.flags().is_immediate() {
+                                    self.push_insn(current_block, Insn::IncrCounter(Counter::getivar_fallback_immediate));
+                                } else {
+                                    self.push_insn(current_block, Insn::IncrCounter(Counter::getivar_fallback_too_complex));
+                                }
+                                self.push_insn_id(current_block, insn_id);
+                                continue;
+                            }
+                            let self_val = self.push_insn(current_block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                            let shape = self.load_shape(current_block, self_val);
+                            self.guard_shape(current_block, shape, recv_type.shape(), state);
+                            let replacement = self.load_ivar_for_shape(current_block, self_val, id, recv_type);
+                            self.make_equal_to(insn_id, replacement);
+                            continue;
+                        }
+
+                        // Try polymorphic optimization
+                        if let Some(profiled_types) = self.polymorphic_profiles_at(self_val, frame_state.insn_idx) {
+                            // Filter to valid shapes only
+                            let valid_types: Vec<ProfiledType> = profiled_types
+                                .into_iter()
+                                .filter(|t| self.is_valid_ivar_shape(t))
+                                .collect();
+
+                            if valid_types.len() >= 2 {
+                                // Create merge block that will receive the result
+                                let merge_block = self.new_block(u32::MAX);
+                                let merge_param = self.push_insn(merge_block, Insn::Param);
+
+                                // Guard that receiver is a heap object
+                                let guarded_self = self.push_insn(current_block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+
+                                // Load the shape once
+                                let shape = self.load_shape(current_block, guarded_self);
+
+                                // Create handler blocks for each shape
+                                let mut handler_blocks = Vec::with_capacity(valid_types.len());
+                                for recv_type in &valid_types {
+                                    let handler = self.new_block(u32::MAX);
+                                    let result = self.load_ivar_for_shape(handler, guarded_self, id, *recv_type);
+                                    self.push_insn(handler, Insn::Jump(BranchEdge {
+                                        target: merge_block,
+                                        args: vec![result],
+                                    }));
+                                    handler_blocks.push((recv_type.shape(), handler));
+                                }
+
+                                // Emit shape comparisons and branches
+                                // For each shape, emit comparison and IfTrue to jump to handler
+                                for (expected_shape, handler) in handler_blocks.iter() {
+                                    let expected = self.push_insn(current_block, Insn::Const { val: Const::CShape(*expected_shape) });
+                                    let cmp = self.push_insn(current_block, Insn::IsBitEqual { left: shape, right: expected });
+                                    self.push_insn(current_block, Insn::IfTrue {
+                                        val: cmp,
+                                        target: BranchEdge { target: *handler, args: vec![] },
+                                    });
+                                }
+                                // Side-exit if none of the shapes matched (this terminates the block)
+                                self.push_insn(current_block, Insn::SideExit {
+                                    state,
+                                    reason: SideExitReason::GuardShape(handler_blocks[0].0),
+                                });
+
+                                self.make_equal_to(insn_id, merge_param);
+                                // Remaining instructions go to merge_block
+                                current_block = merge_block;
+                                continue;
+                            }
+                        }
+
+                        // No usable profile info - fall back to unoptimized GetIvar
+                        self.push_insn(current_block, Insn::IncrCounter(Counter::getivar_fallback_not_monomorphic));
+                        self.push_insn_id(current_block, insn_id);
                     }
                     Insn::DefinedIvar { self_val, id, pushval, state } => {
                         let frame_state = self.frame_state(state);
                         let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
                             // No (monomorphic/skewed polymorphic) profile info
-                            self.push_insn(block, Insn::IncrCounter(Counter::definedivar_fallback_not_monomorphic));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::definedivar_fallback_not_monomorphic));
+                            self.push_insn_id(current_block, insn_id); continue;
                         };
                         if recv_type.flags().is_immediate() {
                             // Instance variable lookups on immediate values are always nil
-                            self.push_insn(block, Insn::IncrCounter(Counter::definedivar_fallback_immediate));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::definedivar_fallback_immediate));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         assert!(recv_type.shape().is_valid());
                         if !recv_type.flags().is_t_object() {
                             // Check if the receiver is a T_OBJECT
-                            self.push_insn(block, Insn::IncrCounter(Counter::definedivar_fallback_not_t_object));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::definedivar_fallback_not_t_object));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         if recv_type.shape().is_too_complex() {
                             // too-complex shapes can't use index access
-                            self.push_insn(block, Insn::IncrCounter(Counter::definedivar_fallback_too_complex));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::definedivar_fallback_too_complex));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
-                        let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
+                        let self_val = self.push_insn(current_block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let shape = self.load_shape(current_block, self_val);
+                        self.guard_shape(current_block, shape, recv_type.shape(), state);
                         let mut ivar_index: u16 = 0;
                         let replacement = if unsafe { rb_shape_get_iv_index(recv_type.shape().0, id, &mut ivar_index) } {
-                            self.push_insn(block, Insn::Const { val: Const::Value(pushval) })
+                            self.push_insn(current_block, Insn::Const { val: Const::Value(pushval) })
                         } else {
                             // If there is no IVAR index, then the ivar was undefined when we
                             // entered the compiler.  That means we can just return nil for this
                             // shape + iv name
-                            self.push_insn(block, Insn::Const { val: Const::Value(Qnil) })
+                            self.push_insn(current_block, Insn::Const { val: Const::Value(Qnil) })
                         };
                         self.make_equal_to(insn_id, replacement);
                     }
@@ -3495,29 +3590,29 @@ impl Function {
                         let frame_state = self.frame_state(state);
                         let Some(recv_type) = self.profiled_type_of_at(self_val, frame_state.insn_idx) else {
                             // No (monomorphic/skewed polymorphic) profile info
-                            self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_not_monomorphic));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_not_monomorphic));
+                            self.push_insn_id(current_block, insn_id); continue;
                         };
                         if recv_type.flags().is_immediate() {
                             // Instance variable lookups on immediate values are always nil
-                            self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_immediate));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_immediate));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         assert!(recv_type.shape().is_valid());
                         if !recv_type.flags().is_t_object() {
                             // Check if the receiver is a T_OBJECT
-                            self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_not_t_object));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_not_t_object));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         if recv_type.shape().is_too_complex() {
                             // too-complex shapes can't use index access
-                            self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_too_complex));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_too_complex));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         if recv_type.shape().is_frozen() {
                             // Can't set ivars on frozen objects
-                            self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_frozen));
-                            self.push_insn_id(block, insn_id); continue;
+                            self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_frozen));
+                            self.push_insn_id(current_block, insn_id); continue;
                         }
                         let mut ivar_index: u16 = 0;
                         let mut next_shape_id = recv_type.shape();
@@ -3533,8 +3628,8 @@ impl Function {
                             let new_shape_too_complex = unsafe { rb_jit_shape_too_complex_p(next_shape_id.0) };
                             // TODO(max): Is it OK to bail out here after making a shape transition?
                             if new_shape_too_complex {
-                                self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_new_shape_too_complex));
-                                self.push_insn_id(block, insn_id); continue;
+                                self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_new_shape_too_complex));
+                                self.push_insn_id(current_block, insn_id); continue;
                             }
                             let ivar_result = unsafe { rb_shape_get_iv_index(next_shape_id.0, id, &mut ivar_index) };
                             assert!(ivar_result, "New shape must have the ivar index");
@@ -3544,34 +3639,34 @@ impl Function {
                             // reallocate it.
                             let needs_extension = next_capacity != current_capacity;
                             if needs_extension {
-                                self.push_insn(block, Insn::IncrCounter(Counter::setivar_fallback_new_shape_needs_extension));
-                                self.push_insn_id(block, insn_id); continue;
+                                self.push_insn(current_block, Insn::IncrCounter(Counter::setivar_fallback_new_shape_needs_extension));
+                                self.push_insn_id(current_block, insn_id); continue;
                             }
                             // Fall through to emitting the ivar write
                         }
-                        let self_val = self.push_insn(block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
-                        let shape = self.load_shape(block, self_val);
-                        self.guard_shape(block, shape, recv_type.shape(), state);
+                        let self_val = self.push_insn(current_block, Insn::GuardType { val: self_val, guard_type: types::HeapBasicObject, state });
+                        let shape = self.load_shape(current_block, self_val);
+                        self.guard_shape(current_block, shape, recv_type.shape(), state);
                         // Current shape contains this ivar
                         let (ivar_storage, offset) = if recv_type.flags().is_embedded() {
                             // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
                             let offset = ROBJECT_OFFSET_AS_ARY as i32 + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
                             (self_val, offset)
                         } else {
-                            let as_heap = self.push_insn(block, Insn::LoadField { recv: self_val, id: ID!(_as_heap), offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32, return_type: types::CPtr });
+                            let as_heap = self.push_insn(current_block, Insn::LoadField { recv: self_val, id: ID!(_as_heap), offset: ROBJECT_OFFSET_AS_HEAP_FIELDS as i32, return_type: types::CPtr });
                             let offset = SIZEOF_VALUE_I32 * ivar_index as i32;
                             (as_heap, offset)
                         };
-                        self.push_insn(block, Insn::StoreField { recv: ivar_storage, id, offset, val });
-                        self.push_insn(block, Insn::WriteBarrier { recv: self_val, val });
+                        self.push_insn(current_block, Insn::StoreField { recv: ivar_storage, id, offset, val });
+                        self.push_insn(current_block, Insn::WriteBarrier { recv: self_val, val });
                         if next_shape_id != recv_type.shape() {
                             // Write the new shape ID
-                            let shape_id = self.push_insn(block, Insn::Const { val: Const::CShape(next_shape_id) });
+                            let shape_id = self.push_insn(current_block, Insn::Const { val: Const::CShape(next_shape_id) });
                             let shape_id_offset = unsafe { rb_shape_id_offset() };
-                            self.push_insn(block, Insn::StoreField { recv: self_val, id: ID!(_shape_id), offset: shape_id_offset, val: shape_id });
+                            self.push_insn(current_block, Insn::StoreField { recv: self_val, id: ID!(_shape_id), offset: shape_id_offset, val: shape_id });
                         }
                     }
-                    _ => { self.push_insn_id(block, insn_id); }
+                    _ => { self.push_insn_id(current_block, insn_id); }
                 }
             }
         }

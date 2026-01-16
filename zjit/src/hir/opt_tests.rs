@@ -5990,6 +5990,71 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_optimize_getivar_polymorphic() {
+        // Test polymorphic getivar optimization with 2 shapes
+        // We create objects with different ivar assignment orders to get different shapes
+        set_call_threshold(3);
+        eval("
+            class C
+              def foo_then_bar
+                @foo = 1
+                @bar = 2
+              end
+
+              def bar_then_foo
+                @bar = 3
+                @foo = 4
+              end
+
+              def get_foo
+                @foo
+              end
+            end
+
+            O1 = C.new
+            O1.foo_then_bar  # shape: @foo at index 0, @bar at index 1
+            O2 = C.new
+            O2.bar_then_foo  # shape: @bar at index 0, @foo at index 1
+
+            # Profile get_foo with both shapes (need equal distribution for polymorphic)
+            O1.get_foo
+            O2.get_foo
+            O1.get_foo
+            O2.get_foo
+        ");
+        assert_snapshot!(hir_string_proc("C.instance_method(:get_foo)"), @r"
+        fn get_foo@<compiled>:14:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb2(v1)
+        bb1(v4:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v4)
+        bb2(v6:BasicObject):
+          PatchPoint SingleRactorMode
+          v17:HeapBasicObject = GuardType v6, HeapBasicObject
+          v18:CShape = LoadField v17, :_shape_id@0x1000
+          v23:CShape[0x1001] = Const CShape(0x1001)
+          v24:CBool = IsBitEqual v18, v23
+          IfTrue v24, bb4()
+          v26:CShape[0x1002] = Const CShape(0x1002)
+          v27:CBool = IsBitEqual v18, v26
+          IfTrue v27, bb5()
+          SideExit GuardShape(ShapeId(4194315))
+        bb4():
+          v19:BasicObject = LoadField v17, :@foo@0x1003
+          Jump bb3(v19)
+        bb5():
+          v21:BasicObject = LoadField v17, :@foo@0x1004
+          Jump bb3(v21)
+        bb3(v16:BasicObject):
+          CheckInterrupts
+          Return v16
+        ");
+    }
+
+    #[test]
     fn test_dont_optimize_getivar_with_too_complex_shape() {
         eval(r#"
             class C
