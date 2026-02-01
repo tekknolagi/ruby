@@ -59,6 +59,37 @@ impl std::fmt::Display for BlockId {
 type InsnSet = BitSet<InsnId>;
 type BlockSet = BitSet<BlockId>;
 
+// Local Value Numbering data structures
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct ValueSignature {
+    discriminant: std::mem::Discriminant<Insn>,
+    operands: Vec<InsnId>,
+    aux_data: AuxData,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone)]
+enum AuxData {
+    None,
+    Offset(isize),
+    Id(ID),
+    CInt(i64),
+    LocalOffset(u32, u32),
+}
+
+struct LvnState {
+    value_table: HashMap<ValueSignature, InsnId>,
+    cumulative_effects: Effect,
+}
+
+impl LvnState {
+    fn new() -> Self {
+        Self {
+            value_table: HashMap::new(),
+            cumulative_effects: effects::Empty,
+        }
+    }
+}
+
 fn write_vec<T: std::fmt::Display>(f: &mut std::fmt::Formatter, objs: &Vec<T>) -> std::fmt::Result {
     write!(f, "[")?;
     let mut prefix = "";
@@ -4688,6 +4719,179 @@ impl Function {
         }
     }
 
+    /// Get the canonical instruction ID through the union-find structure
+    fn find_canonical(&self, insn: InsnId) -> InsnId {
+        self.union_find.borrow().find_const(insn)
+    }
+
+    /// Compute the value signature for an instruction for local value numbering.
+    /// Returns None if the instruction cannot participate in value numbering
+    /// (allocations, effectful operations, etc.)
+    fn compute_signature(&self, insn: &Insn) -> Option<ValueSignature> {
+        let disc = std::mem::discriminant(insn);
+        match insn {
+            // Pure arithmetic operations
+            Insn::FixnumAdd { left, right, .. } | Insn::FixnumSub { left, right, .. } |
+            Insn::FixnumMult { left, right, .. } | Insn::FixnumDiv { left, right, .. } |
+            Insn::FixnumMod { left, right, .. } | Insn::FixnumAnd { left, right, .. } |
+            Insn::FixnumOr { left, right, .. } | Insn::FixnumXor { left, right, .. } |
+            Insn::FixnumLShift { left, right, .. } | Insn::FixnumRShift { left, right, .. } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*left), self.find_canonical(*right)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            // Comparison operations
+            Insn::FixnumEq { left, right } | Insn::FixnumLt { left, right } |
+            Insn::FixnumGt { left, right } | Insn::FixnumLe { left, right } |
+            Insn::FixnumGe { left, right } | Insn::IsBitEqual { left, right } |
+            Insn::IsBitNotEqual { left, right } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*left), self.find_canonical(*right)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            // Unary operations
+            Insn::UnboxFixnum { val } | Insn::Test { val } |
+            Insn::IsNil { val } | Insn::BoxBool { val } |
+            Insn::ArrayLength { array: val } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*val)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            // Field loads
+            Insn::LoadField { recv, offset, .. } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*recv)],
+                    aux_data: AuxData::Offset(*offset as isize),
+                })
+            }
+
+            // Local variable reads
+            Insn::GetLocal { ep_offset, level, .. } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![],
+                    aux_data: AuxData::LocalOffset(*ep_offset, *level),
+                })
+            }
+
+            // Type checks
+            Insn::IsA { val, class } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*val), self.find_canonical(*class)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            // Array/String operations
+            Insn::ArrayAref { array, index } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*array), self.find_canonical(*index)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            Insn::StringGetbyte { string, index } => {
+                Some(ValueSignature {
+                    discriminant: disc,
+                    operands: vec![self.find_canonical(*string), self.find_canonical(*index)],
+                    aux_data: AuxData::None,
+                })
+            }
+
+            // Constants are unique by construction
+            Insn::Const { .. } | Insn::Param => Some(ValueSignature {
+                discriminant: disc,
+                operands: vec![],
+                aux_data: AuxData::None,
+            }),
+
+            // Allocations - never redundant, each creates a distinct object
+            Insn::NewArray { .. } | Insn::NewHash { .. } | Insn::NewRange { .. } |
+            Insn::NewRangeFixnum { .. } | Insn::ObjectAlloc { .. } |
+            Insn::ObjectAllocClass { .. } | Insn::StringCopy { .. } => None,
+
+            // Effectful operations that may have side effects or read mutable state
+            Insn::Send { .. } | Insn::SendDirect { .. } | Insn::CCall { elidable: false, .. } |
+            Insn::GetIvar { .. } | Insn::GetGlobal { .. } | Insn::GetConstantPath { .. } => None,
+
+            // Everything else defaults to not participating in value numbering
+            _ => None,
+        }
+    }
+
+    /// Invalidate value table entries that conflict with the given effect
+    fn invalidate_conflicting_entries(
+        value_table: &mut HashMap<ValueSignature, InsnId>,
+        new_effect: Effect,
+        func: &Function
+    ) {
+        value_table.retain(|_sig, cached_insn| {
+            let cached_effect = func.insns[cached_insn.0].effects_of();
+
+            // Keep the entry if there's no conflict:
+            // - If new instruction writes to a heap and cached reads from it: conflict
+            // - If new instruction reads from a heap and cached writes to it: conflict
+            // - If both write to same heap: conflict
+            let read_conflict = new_effect.write_bits().overlaps(cached_effect.read_bits());
+            let write_conflict = new_effect.read_bits().overlaps(cached_effect.write_bits())
+                               || new_effect.write_bits().overlaps(cached_effect.write_bits());
+
+            !(read_conflict || write_conflict)
+        });
+    }
+
+    /// Local value numbering optimization - eliminates redundant computations within basic blocks
+    fn local_value_numbering(&mut self) {
+        for block in self.rpo() {
+            let mut state = LvnState::new();
+
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            let mut new_insns = Vec::new();
+
+            for insn_id in old_insns {
+                let insn = self.find(insn_id);
+                let insn_effect = insn.effects_of();
+
+                // Invalidate entries that conflict with this instruction's effects
+                if state.cumulative_effects.overlaps(insn_effect) {
+                    Self::invalidate_conflicting_entries(&mut state.value_table, insn_effect, self);
+                }
+
+                // Try to compute signature and find redundant computation
+                if let Some(sig) = self.compute_signature(&insn) {
+                    if let Some(&existing_insn) = state.value_table.get(&sig) {
+                        // Found redundant computation! Mark them as equivalent
+                        self.make_equal_to(insn_id, existing_insn);
+                        new_insns.push(existing_insn);
+                        // Don't update cumulative effects - we're reusing existing value
+                        continue;
+                    }
+
+                    // Add this instruction to the value table
+                    state.value_table.insert(sig, insn_id);
+                }
+
+                new_insns.push(insn_id);
+                // Update cumulative effects
+                state.cumulative_effects = state.cumulative_effects.union(insn_effect);
+            }
+
+            self.blocks[block.0].insns = new_insns;
+        }
+    }
+
     fn worklist_traverse_single_insn(&self, insn: &Insn, worklist: &mut VecDeque<InsnId>) {
         match insn {
             &Insn::Const { .. }
@@ -5257,6 +5461,7 @@ impl Function {
         run_pass!(optimize_getivar);
         run_pass!(optimize_c_calls);
         run_pass!(fold_constants);
+        run_pass!(local_value_numbering);
         run_pass!(clean_cfg);
         run_pass!(eliminate_dead_code);
 
