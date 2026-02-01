@@ -13,6 +13,7 @@ use crate::hir_type::{Type, types};
 use crate::bitset::BitSet;
 use crate::profile::{TypeDistributionSummary, ProfiledType};
 use crate::stats::{incr_counter, Counter};
+use crate::tbaa::{MemoryOpTracker, MemoryLocation};
 
 /// An index of an [`Insn`] in a [`Function`]. This is a popular
 /// type since this effectively acts as a pointer to an [`Insn`].
@@ -2116,6 +2117,150 @@ impl Function {
         }
     }
 
+    /// Eliminate redundant loads using Type-Based Alias Analysis (TBAA).
+    /// This optimization identifies loads that can be replaced with earlier loads
+    /// of the same memory location, taking into account stores that may invalidate them.
+    fn eliminate_redundant_loads(&mut self) {
+        // Build memory operation tracker
+        let mut tracker = MemoryOpTracker::new();
+        tracker.analyze(self);
+        
+        let rpo = self.rpo();
+        
+        // For each block, track available loads at the start of the block
+        // Map: MemoryLocation -> (InsnId of last load, InsnId of last store)
+        let mut available: HashMap<MemoryLocation, (Option<InsnId>, Option<InsnId>)> = HashMap::new();
+        
+        for block_id in &rpo {
+            let block_insns = self.blocks[block_id.0].insns.clone();
+            
+            for &insn_id in &block_insns {
+                let insn = self.find(insn_id);
+                
+                match insn {
+                    Insn::GetIvar { self_val: _, id: _, .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            // Check if we have a previous load from the same location
+                            if let Some((Some(prev_load_id), last_store)) = available.get(location) {
+                                // Check if there's been a store since the last load
+                                let store_invalidates = if let Some(store_id) = last_store {
+                                    // If store is after the load, it invalidates
+                                    store_id.0 > prev_load_id.0
+                                } else {
+                                    false
+                                };
+                                
+                                if !store_invalidates {
+                                    // We can replace this load with the previous one
+                                    self.make_equal_to(insn_id, *prev_load_id);
+                                    continue;
+                                }
+                            }
+                            
+                            // Record this load as available
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.0 = Some(insn_id);
+                        }
+                    }
+                    
+                    Insn::SetIvar { self_val: _, id: _, val: _, .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            // This store invalidates loads from potentially aliasing locations
+                            available.retain(|loc, _| {
+                                !loc.may_alias(location)
+                            });
+                            
+                            // Record this store
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.1 = Some(insn_id);
+                        }
+                    }
+                    
+                    Insn::GetGlobal { .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            if let Some((Some(prev_load_id), last_store)) = available.get(location) {
+                                let store_invalidates = if let Some(store_id) = last_store {
+                                    store_id.0 > prev_load_id.0
+                                } else {
+                                    false
+                                };
+                                
+                                if !store_invalidates {
+                                    self.make_equal_to(insn_id, *prev_load_id);
+                                    continue;
+                                }
+                            }
+                            
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.0 = Some(insn_id);
+                        }
+                    }
+                    
+                    Insn::SetGlobal { .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            available.retain(|loc, _| !loc.may_alias(location));
+                            
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.1 = Some(insn_id);
+                        }
+                    }
+                    
+                    Insn::GetLocal { .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            if let Some((Some(prev_load_id), last_store)) = available.get(location) {
+                                let store_invalidates = if let Some(store_id) = last_store {
+                                    store_id.0 > prev_load_id.0
+                                } else {
+                                    false
+                                };
+                                
+                                if !store_invalidates {
+                                    self.make_equal_to(insn_id, *prev_load_id);
+                                    continue;
+                                }
+                            }
+                            
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.0 = Some(insn_id);
+                        }
+                    }
+                    
+                    Insn::SetLocal { .. } => {
+                        if let Some(location) = tracker.get_location(insn_id) {
+                            available.retain(|loc, _| !loc.may_alias(location));
+                            
+                            let entry = available.entry(location.clone()).or_insert((None, None));
+                            entry.1 = Some(insn_id);
+                        }
+                    }
+                    
+                    // Any instruction that might have side effects could potentially
+                    // modify memory, so we conservatively clear our available loads
+                    _ if insn.has_effects() => {
+                        // For now, be conservative and clear everything for calls
+                        // A more sophisticated analysis could track which memory
+                        // locations are escaped vs. local
+                        match insn {
+                            Insn::SendWithoutBlock { .. } 
+                            | Insn::Send { .. } 
+                            | Insn::SendWithoutBlockDirect { .. }
+                            | Insn::CCall { .. }
+                            | Insn::InvokeBuiltin { .. } => {
+                                // These could modify any memory, clear all
+                                available.clear();
+                            }
+                            _ => {
+                                // Other effects might not modify memory
+                            }
+                        }
+                    }
+                    
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn absorb_dst_block(&mut self, num_in_edges: &Vec<u32>, block: BlockId) -> bool {
         let Some(terminator_id) = self.blocks[block.0].insns.last()
             else { return false };
@@ -2227,6 +2372,8 @@ impl Function {
         self.optimize_c_calls();
         #[cfg(debug_assertions)] self.assert_validates();
         self.fold_constants();
+        #[cfg(debug_assertions)] self.assert_validates();
+        self.eliminate_redundant_loads();
         #[cfg(debug_assertions)] self.assert_validates();
         self.clean_cfg();
         #[cfg(debug_assertions)] self.assert_validates();

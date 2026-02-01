@@ -26,3 +26,4 @@ mod invariants;
 mod assertions;
 mod bitset;
 mod gc;
+mod tbaa;
