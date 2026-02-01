@@ -154,26 +154,25 @@ def eq_value(left: Value | None, right: Value) -> bool:
     return left is right
 
 
+# Mapping from operation names to object types
+ALLOC_TYPE_MAP = {
+    "alloc_array": ObjectType.ARRAY,
+    "alloc_hash": ObjectType.HASH,
+    "alloc_string": ObjectType.STRING,
+    "alloc_integer": ObjectType.INTEGER,
+    "alloc_float": ObjectType.FLOAT,
+    "alloc_symbol": ObjectType.SYMBOL,
+    "alloc_range": ObjectType.RANGE,
+    "alloc_regexp": ObjectType.REGEXP,
+}
+
+
 def get_object_type(obj: Value) -> ObjectType:
     """Get the type of an object for TBAA."""
     if isinstance(obj, Operation):
         # Check if the object was created with a typed allocation
-        if obj.name == "alloc_array":
-            return ObjectType.ARRAY
-        elif obj.name == "alloc_hash":
-            return ObjectType.HASH
-        elif obj.name == "alloc_string":
-            return ObjectType.STRING
-        elif obj.name == "alloc_integer":
-            return ObjectType.INTEGER
-        elif obj.name == "alloc_float":
-            return ObjectType.FLOAT
-        elif obj.name == "alloc_symbol":
-            return ObjectType.SYMBOL
-        elif obj.name == "alloc_range":
-            return ObjectType.RANGE
-        elif obj.name == "alloc_regexp":
-            return ObjectType.REGEXP
+        if obj.name in ALLOC_TYPE_MAP:
+            return ALLOC_TYPE_MAP[obj.name]
         # Return the stored type information
         return obj.type
     return ObjectType.UNKNOWN
@@ -255,22 +254,8 @@ def optimize_load_store_tbaa(bb: Block):
             
         elif op.name.startswith("alloc_"):
             # Typed allocation - set the type on the operation
-            if op.name == "alloc_array":
-                op.type = ObjectType.ARRAY
-            elif op.name == "alloc_hash":
-                op.type = ObjectType.HASH
-            elif op.name == "alloc_string":
-                op.type = ObjectType.STRING
-            elif op.name == "alloc_integer":
-                op.type = ObjectType.INTEGER
-            elif op.name == "alloc_float":
-                op.type = ObjectType.FLOAT
-            elif op.name == "alloc_symbol":
-                op.type = ObjectType.SYMBOL
-            elif op.name == "alloc_range":
-                op.type = ObjectType.RANGE
-            elif op.name == "alloc_regexp":
-                op.type = ObjectType.REGEXP
+            if op.name in ALLOC_TYPE_MAP:
+                op.type = ALLOC_TYPE_MAP[op.name]
                 
         opt_bb.append(op)
     return opt_bb
