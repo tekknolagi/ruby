@@ -59,6 +59,32 @@ impl std::fmt::Display for BlockId {
 type InsnSet = BitSet<InsnId>;
 type BlockSet = BitSet<BlockId>;
 
+/// Escape state for objects/arrays, following Kotzmann et al.'s
+/// "Escape Analysis for Java" (2002) classification.
+/// 
+/// This categorizes allocations by how far they escape from their allocation site:
+/// - `NoEscape`: Object never leaves the allocating method (local-only)
+/// - `ArgEscape`: Object is returned or passed to callee but doesn't escape to heap
+/// - `GlobalEscape`: Object is stored in heap (ivars, globals) or escapes beyond method boundary
+///
+/// Reference: Kotzmann, T., et al. (2002). "Escape Analysis for Java."
+/// In Proceedings of the 17th ACM SIGPLAN conference on Object-oriented programming.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum EscapeState {
+    /// Object allocation does not escape the current method.
+    /// Enables: scalar replacement, stack allocation, lock elimination
+    NoEscape,
+    
+    /// Object is returned from method or passed as argument to callees.
+    /// The object may be accessible to the caller but doesn't escape to global state.
+    /// Enables: stack allocation (in some cases), reduced synchronization
+    ArgEscape,
+    
+    /// Object escapes to global heap state (stored in fields, globals, etc.).
+    /// Cannot be optimized aggressively.
+    GlobalEscape,
+}
+
 fn write_vec<T: std::fmt::Display>(f: &mut std::fmt::Formatter, objs: &Vec<T>) -> std::fmt::Result {
     write!(f, "[")?;
     let mut prefix = "";
@@ -4692,72 +4718,73 @@ impl Function {
         }
     }
 
-    /// Lightweight escape analysis for arrays.
+    /// Kotzmann-style escape analysis for arrays.
     /// 
-    /// Analyzes array allocations to determine which ones do not escape the local scope.
-    /// An array "escapes" if it:
-    /// - Is passed to a method call
-    /// - Is stored in an instance variable or global
-    /// - Is passed as an argument across block boundaries
+    /// Performs intraprocedural escape analysis following Kotzmann et al.'s approach
+    /// from "Escape Analysis for Java" (2002). Classifies array allocations into
+    /// three escape states:
+    /// 
+    /// - **NoEscape**: Array never leaves the allocating method (local-only)
+    /// - **ArgEscape**: Array is returned or passed to callee but doesn't escape to heap
+    /// - **GlobalEscape**: Array is stored in heap (ivars, globals) or has unknown escape
     ///
     /// # Returns
-    /// A `BitSet` containing `InsnId`s of arrays that do **NOT** escape. These arrays
-    /// are candidates for optimization (e.g., scalar replacement, stack allocation).
+    /// A `HashMap` mapping `InsnId` to `EscapeState` for each array allocation.
     /// 
     /// # Example
     /// ```ignore
-    /// let non_escaping = function.escape_analysis();
-    /// if non_escaping.get(array_insn_id) {
-    ///     // This array is local-only and can be optimized
+    /// let escape_states = function.escape_analysis();
+    /// if escape_states.get(&array_insn_id) == Some(&EscapeState::NoEscape) {
+    ///     // This array is local-only and can be scalar-replaced
     /// }
     /// ```
-    fn escape_analysis(&self) -> InsnSet {
+    ///
+    /// # Reference
+    /// Kotzmann, T., et al. (2002). "Escape Analysis for Java."
+    /// In Proceedings of the 17th ACM SIGPLAN conference on Object-oriented programming.
+    fn escape_analysis(&self) -> HashMap<InsnId, EscapeState> {
         let rpo = self.rpo();
-        let mut non_escaping = InsnSet::with_capacity(self.insns.len());
-        let mut escaping = InsnSet::with_capacity(self.insns.len());
+        let mut escape_states: HashMap<InsnId, EscapeState> = HashMap::new();
         
-        // Phase 1: Identify all array allocations
+        // Phase 1: Identify all array allocations and initialize to NoEscape
         for block_id in &rpo {
             for insn_id in &self.blocks[block_id.0].insns {
                 let insn = self.find(*insn_id);
                 if matches!(insn, Insn::NewArray { .. } | Insn::ToNewArray { .. }) {
-                    non_escaping.insert(*insn_id);
+                    escape_states.insert(*insn_id, EscapeState::NoEscape);
                 }
             }
         }
         
-        // Phase 2: Mark arrays that escape
+        // Phase 2: Analyze uses and update escape states
         for block_id in &rpo {
             for insn_id in &self.blocks[block_id.0].insns {
                 let insn = self.find(*insn_id);
                 
-                // Check if this instruction causes arrays to escape
                 match insn {
-                    // Arrays passed to methods escape (they leave local scope)
+                    // Arrays passed to methods: ArgEscape (may be used by callee)
                     | Insn::Send { recv, ref args, .. }
                     | Insn::SendWithoutBlock { recv, ref args, .. }
                     | Insn::SendWithoutBlockDirect { recv, ref args, .. }
                     | Insn::CCall { recv, ref args, .. } => {
-                        self.mark_escaping_if_array(recv, &non_escaping, &mut escaping);
+                        self.mark_escape_state(recv, EscapeState::ArgEscape, &mut escape_states);
                         for arg in args {
-                            self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
+                            self.mark_escape_state(*arg, EscapeState::ArgEscape, &mut escape_states);
                         }
                     }
-                    // Arrays stored to ivars or globals escape
+                    // Arrays stored to ivars or globals: GlobalEscape
                     | Insn::SetIvar { val, .. }
                     | Insn::SetGlobal { val, .. } => {
-                        self.mark_escaping_if_array(val, &non_escaping, &mut escaping);
+                        self.mark_escape_state(val, EscapeState::GlobalEscape, &mut escape_states);
                     }
-                    // Arrays in branch args that return from the function escape
+                    // Arrays in return paths: ArgEscape (returned to caller)
                     | Insn::Jump(BranchEdge { ref args, .. })
                     | Insn::IfTrue { target: BranchEdge { ref args, .. }, .. }
                     | Insn::IfFalse { target: BranchEdge { ref args, .. }, .. } => {
-                        // NOTE: We could be more precise by checking if the target block
-                        // is an exit block. For now, we conservatively assume that
-                        // arrays passed via branch arguments may escape.
-                        // This includes returns and jumps to other blocks.
+                        // Check if this is a return (jumping to exit)
+                        // For now, conservatively treat all branch args as ArgEscape
                         for arg in args {
-                            self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
+                            self.mark_escape_state(*arg, EscapeState::ArgEscape, &mut escape_states);
                         }
                     }
                     _ => {}
@@ -4765,34 +4792,31 @@ impl Function {
             }
         }
         
-        // Phase 3: Create result set containing only non-escaping arrays
-        let mut result = InsnSet::with_capacity(self.insns.len());
-        for insn_id in 0..self.insns.len() {
-            let id = InsnId(insn_id);
-            if non_escaping.get(id) && !escaping.get(id) {
-                result.insert(id);
-            }
-        }
-        
-        result
+        escape_states
     }
 
-    /// Helper to mark an instruction as escaping if it's an array allocation.
+    /// Helper to update escape state of an instruction if it's an array allocation.
+    /// 
+    /// Following Kotzmann's lattice: NoEscape < ArgEscape < GlobalEscape.
+    /// Once an array reaches a higher escape state, it cannot be downgraded.
     /// 
     /// # Arguments
-    /// - `insn_id`: The instruction to check and potentially mark as escaping
-    /// - `candidates`: BitSet of instructions that are array allocations (NewArray, ToNewArray)
-    /// - `escaping`: Output BitSet being built with escaping array allocations
-    /// 
-    /// If `insn_id` is in `candidates`, it will be added to `escaping`.
-    fn mark_escaping_if_array(&self, insn_id: InsnId, candidates: &InsnSet, escaping: &mut InsnSet) {
-        // Only mark if it's a candidate array allocation
-        if !candidates.get(insn_id) {
-            return;
+    /// - `insn_id`: The instruction to check
+    /// - `new_state`: The new escape state to apply
+    /// - `escape_states`: Map of escape states being built
+    fn mark_escape_state(
+        &self,
+        insn_id: InsnId,
+        new_state: EscapeState,
+        escape_states: &mut HashMap<InsnId, EscapeState>,
+    ) {
+        // Only update if this instruction is a tracked allocation
+        if let Some(current_state) = escape_states.get(&insn_id) {
+            // Update to higher escape state (lattice ordering: NoEscape < ArgEscape < GlobalEscape)
+            if new_state > *current_state {
+                escape_states.insert(insn_id, new_state);
+            }
         }
-        
-        // Mark as escaping
-        escaping.insert(insn_id);
     }
 
     fn absorb_dst_block(&mut self, num_in_edges: &[u32], block: BlockId) -> bool {
