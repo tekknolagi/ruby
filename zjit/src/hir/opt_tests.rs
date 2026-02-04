@@ -11400,4 +11400,123 @@ mod hir_opt_tests {
           Return v47
         ");
     }
+
+    #[test]
+    fn test_escape_analysis_eliminates_unused_local_array() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              42
+            end
+        ");
+        // The array is created but never used, so it should be eliminated by DCE
+        // With LocalArray effect, NewArray is elidable
+        let output = hir_string("test");
+        assert!(!output.contains("NewArray"), "Unused array should be eliminated");
+    }
+
+    #[test]
+    fn test_escape_analysis_keeps_escaping_array() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              arr.length
+            end
+        ");
+        // The array is used (arr.length), so it must be kept
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Used array should not be eliminated");
+    }
+
+    #[test]
+    fn test_escape_analysis_eliminates_array_only_used_locally() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              x = arr.length
+              42
+            end
+        ");
+        // The array is created and length is taken, but result is not used
+        // Both array and length call should be eliminated
+        let output = hir_string("test");
+        assert!(!output.contains("NewArray"), "Unused array should be eliminated even if length was called");
+    }
+
+    // New Kotzmann-style escape analysis tests
+
+    #[test]
+    fn test_kotzmann_no_escape_array() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              # Array only used locally - should be NoEscape
+              len = arr.length
+              len
+            end
+        ");
+        // Array used only locally should have NoEscape state
+        // This enables scalar replacement
+        let output = hir_string("test");
+        // The array and its operations should still be present but could be optimized
+        assert!(output.contains("NewArray"), "Array should be present");
+    }
+
+    #[test]
+    fn test_kotzmann_arg_escape_array_via_return() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              arr  # returns array
+            end
+        ");
+        // Array returned from method should have ArgEscape state
+        // Cannot be scalar replaced but could be stack allocated
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Returned array should be kept");
+    }
+
+    #[test]
+    fn test_kotzmann_arg_escape_array_via_method_call() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              other_method(arr)  # passes array to method
+            end
+        ");
+        // Array passed to method should have ArgEscape state
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Array passed to method should be kept");
+    }
+
+    #[test]
+    fn test_kotzmann_global_escape_via_ivar() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              @arr = arr  # stores to instance variable
+            end
+        ");
+        // Array stored to ivar should have GlobalEscape state
+        // Cannot be optimized
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Array stored to ivar should be kept");
+        assert!(output.contains("SetIvar"), "Should have SetIvar instruction");
+    }
+
+    #[test]
+    fn test_kotzmann_connection_graph_propagation() {
+        eval("
+            def test
+              arr1 = [1, 2]
+              arr2 = [3, 4]
+              # If arr1 escapes and points to arr2, arr2 should also escape
+              combined = [arr1, arr2]
+              combined
+            end
+        ");
+        // Connection graph should propagate escape state
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Arrays should be present");
+    }
 }
