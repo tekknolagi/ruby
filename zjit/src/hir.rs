@@ -4693,8 +4693,24 @@ impl Function {
     }
 
     /// Lightweight escape analysis for arrays.
-    /// Determines which array allocations don't escape the local scope.
-    /// Returns a set of InsnIds for arrays that do NOT escape.
+    /// 
+    /// Analyzes array allocations to determine which ones do not escape the local scope.
+    /// An array "escapes" if it:
+    /// - Is passed to a method call
+    /// - Is stored in an instance variable or global
+    /// - Is passed as an argument across block boundaries
+    ///
+    /// # Returns
+    /// A `BitSet` containing `InsnId`s of arrays that do **NOT** escape. These arrays
+    /// are candidates for optimization (e.g., scalar replacement, stack allocation).
+    /// 
+    /// # Example
+    /// ```ignore
+    /// let non_escaping = function.escape_analysis();
+    /// if non_escaping.get(array_insn_id) {
+    ///     // This array is local-only and can be optimized
+    /// }
+    /// ```
     fn escape_analysis(&self) -> InsnSet {
         let rpo = self.rpo();
         let mut non_escaping = InsnSet::with_capacity(self.insns.len());
@@ -4761,7 +4777,14 @@ impl Function {
         result
     }
 
-    /// Helper to mark an instruction as escaping if it's an array allocation
+    /// Helper to mark an instruction as escaping if it's an array allocation.
+    /// 
+    /// # Arguments
+    /// - `insn_id`: The instruction to check and potentially mark as escaping
+    /// - `candidates`: BitSet of instructions that are array allocations (NewArray, ToNewArray)
+    /// - `escaping`: Output BitSet being built with escaping array allocations
+    /// 
+    /// If `insn_id` is in `candidates`, it will be added to `escaping`.
     fn mark_escaping_if_array(&self, insn_id: InsnId, candidates: &InsnSet, escaping: &mut InsnSet) {
         // Only mark if it's a candidate array allocation
         if !candidates.get(insn_id) {
