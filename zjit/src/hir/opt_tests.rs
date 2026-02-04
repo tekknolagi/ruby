@@ -11400,4 +11400,46 @@ mod hir_opt_tests {
           Return v47
         ");
     }
+
+    #[test]
+    fn test_escape_analysis_eliminates_unused_local_array() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              42
+            end
+        ");
+        // The array is created but never used, so it should be eliminated by DCE
+        // With LocalArray effect, NewArray is elidable
+        let output = hir_string("test");
+        assert!(!output.contains("NewArray"), "Unused array should be eliminated");
+    }
+
+    #[test]
+    fn test_escape_analysis_keeps_escaping_array() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              arr.length
+            end
+        ");
+        // The array is used (arr.length), so it must be kept
+        let output = hir_string("test");
+        assert!(output.contains("NewArray"), "Used array should not be eliminated");
+    }
+
+    #[test]
+    fn test_escape_analysis_eliminates_array_only_used_locally() {
+        eval("
+            def test
+              arr = [1, 2, 3]
+              x = arr.length
+              42
+            end
+        ");
+        // The array is created and length is taken, but result is not used
+        // Both array and length call should be eliminated
+        let output = hir_string("test");
+        assert!(!output.contains("NewArray"), "Unused array should be eliminated even if length was called");
+    }
 }
