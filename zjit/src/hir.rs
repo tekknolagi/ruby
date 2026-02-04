@@ -4732,17 +4732,14 @@ impl Function {
                     | Insn::SetGlobal { val, .. } => {
                         self.mark_escaping_if_array(val, &non_escaping, &mut escaping);
                     }
-                    // Arrays in branch args to non-current blocks may escape
-                    | Insn::Jump(BranchEdge { target, ref args }) => {
-                        // If jumping to a different block, args escape current scope
-                        if target != *block_id {
-                            for arg in args {
-                                self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
-                            }
-                        }
-                    }
+                    // Arrays in branch args that return from the function escape
+                    | Insn::Jump(BranchEdge { ref args, .. })
                     | Insn::IfTrue { target: BranchEdge { ref args, .. }, .. }
                     | Insn::IfFalse { target: BranchEdge { ref args, .. }, .. } => {
+                        // NOTE: We could be more precise by checking if the target block
+                        // is an exit block. For now, we conservatively assume that
+                        // arrays passed via branch arguments may escape.
+                        // This includes returns and jumps to other blocks.
                         for arg in args {
                             self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
                         }
@@ -5049,13 +5046,6 @@ impl Function {
         run_pass!(fold_constants);
         run_pass!(clean_cfg);
         run_pass!(eliminate_dead_code);
-        
-        // Run escape analysis after DCE to identify non-escaping arrays
-        // This information can be used by future optimization passes
-        if get_option!(stats) {
-            let _non_escaping = self.escape_analysis();
-            // Stats could be collected here if needed
-        }
 
         if should_dump {
             let iseq_name = iseq_get_location(self.iseq, 0);
