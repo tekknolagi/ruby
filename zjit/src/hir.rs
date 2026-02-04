@@ -59,16 +59,16 @@ impl std::fmt::Display for BlockId {
 type InsnSet = BitSet<InsnId>;
 type BlockSet = BitSet<BlockId>;
 
-/// Escape state for objects/arrays, following Kotzmann et al.'s
-/// "Escape Analysis for Java" (2002) classification.
+/// Escape state for objects/arrays, following Kotzmann & Mössenböck's
+/// "Escape Analysis in the Context of Dynamic Compilation and Deoptimization" (VEE 2005).
 /// 
 /// This categorizes allocations by how far they escape from their allocation site:
 /// - `NoEscape`: Object never leaves the allocating method (local-only)
 /// - `ArgEscape`: Object is returned or passed to callee but doesn't escape to heap
 /// - `GlobalEscape`: Object is stored in heap (ivars, globals) or escapes beyond method boundary
 ///
-/// Reference: Kotzmann, T., et al. (2002). "Escape Analysis for Java."
-/// In Proceedings of the 17th ACM SIGPLAN conference on Object-oriented programming.
+/// Reference: Kotzmann, T. & Mössenböck, H. (2005). "Escape Analysis in the Context of
+/// Dynamic Compilation and Deoptimization." In USENIX VEE.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum EscapeState {
     /// Object allocation does not escape the current method.
@@ -83,6 +83,31 @@ enum EscapeState {
     /// Object escapes to global heap state (stored in fields, globals, etc.).
     /// Cannot be optimized aggressively.
     GlobalEscape,
+}
+
+/// Connection graph node representing an allocation site or reference.
+/// Based on Kotzmann & Mössenböck's connection graph approach (VEE 2005).
+#[derive(Debug, Clone)]
+struct ConnectionNode {
+    /// The instruction ID this node represents
+    insn_id: InsnId,
+    /// Current escape state
+    escape_state: EscapeState,
+    /// Instructions that point to this node (predecessors)
+    pointed_by: Vec<InsnId>,
+    /// Instructions this node points to (successors) - for field references
+    points_to: Vec<InsnId>,
+}
+
+impl ConnectionNode {
+    fn new(insn_id: InsnId) -> Self {
+        Self {
+            insn_id,
+            escape_state: EscapeState::NoEscape,
+            pointed_by: Vec::new(),
+            points_to: Vec::new(),
+        }
+    }
 }
 
 fn write_vec<T: std::fmt::Display>(f: &mut std::fmt::Formatter, objs: &Vec<T>) -> std::fmt::Result {
@@ -4718,12 +4743,17 @@ impl Function {
         }
     }
 
-    /// Kotzmann-style escape analysis for arrays.
+    /// Kotzmann-style escape analysis for arrays using connection graphs.
     /// 
-    /// Performs intraprocedural escape analysis following Kotzmann et al.'s approach
-    /// from "Escape Analysis for Java" (2002). Classifies array allocations into
-    /// three escape states:
+    /// Performs intraprocedural escape analysis following Kotzmann & Mössenböck's approach
+    /// from "Escape Analysis in the Context of Dynamic Compilation and Deoptimization" (VEE 2005).
     /// 
+    /// The algorithm builds a connection graph where:
+    /// - Nodes represent allocations and references
+    /// - Edges represent points-to relationships
+    /// - Escape states propagate through the graph
+    /// 
+    /// Array allocations are classified into three escape states:
     /// - **NoEscape**: Array never leaves the allocating method (local-only)
     /// - **ArgEscape**: Array is returned or passed to callee but doesn't escape to heap
     /// - **GlobalEscape**: Array is stored in heap (ivars, globals) or has unknown escape
@@ -4740,62 +4770,107 @@ impl Function {
     /// ```
     ///
     /// # Reference
-    /// Kotzmann, T., et al. (2002). "Escape Analysis for Java."
-    /// In Proceedings of the 17th ACM SIGPLAN conference on Object-oriented programming.
+    /// Kotzmann, T. & Mössenböck, H. (2005). "Escape Analysis in the Context of
+    /// Dynamic Compilation and Deoptimization." USENIX VEE.
+    /// https://www.usenix.org/legacy/events/vee05/full_papers/p111-kotzmann.pdf
     fn escape_analysis(&self) -> HashMap<InsnId, EscapeState> {
         let rpo = self.rpo();
-        let mut escape_states: HashMap<InsnId, EscapeState> = HashMap::new();
         
-        // Phase 1: Identify all array allocations and initialize to NoEscape
+        // Phase 1: Build connection graph - identify all array allocations
+        let mut connection_graph: HashMap<InsnId, ConnectionNode> = HashMap::new();
+        
         for block_id in &rpo {
             for insn_id in &self.blocks[block_id.0].insns {
                 let insn = self.find(*insn_id);
                 if matches!(insn, Insn::NewArray { .. } | Insn::ToNewArray { .. }) {
-                    escape_states.insert(*insn_id, EscapeState::NoEscape);
+                    connection_graph.insert(*insn_id, ConnectionNode::new(*insn_id));
                 }
             }
         }
         
-        // Phase 2: Analyze uses and update escape states
+        // Phase 2: Build points-to edges and identify initial escape points
         for block_id in &rpo {
             for insn_id in &self.blocks[block_id.0].insns {
                 let insn = self.find(*insn_id);
                 
                 match insn {
-                    // Arrays passed to methods: ArgEscape (may be used by callee)
+                    // Array element access creates points-to relationship
+                    | Insn::ArrayAref { array, .. } => {
+                        // array[idx] - the result points to elements in the array
+                        if connection_graph.contains_key(&array) {
+                            if let Some(node) = connection_graph.get_mut(&array) {
+                                node.points_to.push(*insn_id);
+                            }
+                        }
+                    }
+                    
+                    // Arrays passed to methods: mark as ArgEscape
                     | Insn::Send { recv, ref args, .. }
                     | Insn::SendWithoutBlock { recv, ref args, .. }
                     | Insn::SendWithoutBlockDirect { recv, ref args, .. }
                     | Insn::CCall { recv, ref args, .. } => {
-                        self.mark_escape_state(recv, EscapeState::ArgEscape, &mut escape_states);
+                        self.mark_connection_escape(recv, EscapeState::ArgEscape, &mut connection_graph);
                         for arg in args {
-                            self.mark_escape_state(*arg, EscapeState::ArgEscape, &mut escape_states);
+                            self.mark_connection_escape(*arg, EscapeState::ArgEscape, &mut connection_graph);
                         }
                     }
-                    // Arrays stored to ivars or globals: GlobalEscape
+                    
+                    // Arrays stored to ivars or globals: mark as GlobalEscape
                     | Insn::SetIvar { val, .. }
                     | Insn::SetGlobal { val, .. } => {
-                        self.mark_escape_state(val, EscapeState::GlobalEscape, &mut escape_states);
+                        self.mark_connection_escape(val, EscapeState::GlobalEscape, &mut connection_graph);
                     }
-                    // Arrays in return paths: ArgEscape (returned to caller)
+                    
+                    // Arrays in return paths: mark as ArgEscape
                     | Insn::Jump(BranchEdge { ref args, .. })
                     | Insn::IfTrue { target: BranchEdge { ref args, .. }, .. }
                     | Insn::IfFalse { target: BranchEdge { ref args, .. }, .. } => {
-                        // Check if this is a return (jumping to exit)
-                        // For now, conservatively treat all branch args as ArgEscape
                         for arg in args {
-                            self.mark_escape_state(*arg, EscapeState::ArgEscape, &mut escape_states);
+                            self.mark_connection_escape(*arg, EscapeState::ArgEscape, &mut connection_graph);
                         }
                     }
+                    
                     _ => {}
                 }
             }
         }
         
-        escape_states
+        // Phase 3: Propagate escape states through connection graph
+        // If an object A points to object B, and A escapes, then B must also escape
+        // This implements the transitive closure algorithm from Kotzmann's paper
+        let mut changed = true;
+        while changed {
+            changed = false;
+            
+            // Clone the keys to avoid borrow checker issues
+            let nodes: Vec<InsnId> = connection_graph.keys().copied().collect();
+            
+            for &node_id in &nodes {
+                let node_state = connection_graph.get(&node_id).unwrap().escape_state;
+                let points_to = connection_graph.get(&node_id).unwrap().points_to.clone();
+                
+                // Propagate escape state to all objects this one points to
+                for &target_id in &points_to {
+                    if let Some(target_node) = connection_graph.get_mut(&target_id) {
+                        if node_state > target_node.escape_state {
+                            target_node.escape_state = node_state;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Phase 4: Extract final escape states
+        let mut result = HashMap::new();
+        for (insn_id, node) in connection_graph {
+            result.insert(insn_id, node.escape_state);
+        }
+        
+        result
     }
 
-    /// Helper to update escape state of an instruction if it's an array allocation.
+    /// Helper to update escape state in the connection graph.
     /// 
     /// Following Kotzmann's lattice: NoEscape < ArgEscape < GlobalEscape.
     /// Once an array reaches a higher escape state, it cannot be downgraded.
@@ -4803,18 +4878,18 @@ impl Function {
     /// # Arguments
     /// - `insn_id`: The instruction to check
     /// - `new_state`: The new escape state to apply
-    /// - `escape_states`: Map of escape states being built
-    fn mark_escape_state(
+    /// - `connection_graph`: The connection graph being built
+    fn mark_connection_escape(
         &self,
         insn_id: InsnId,
         new_state: EscapeState,
-        escape_states: &mut HashMap<InsnId, EscapeState>,
+        connection_graph: &mut HashMap<InsnId, ConnectionNode>,
     ) {
         // Only update if this instruction is a tracked allocation
-        if let Some(current_state) = escape_states.get(&insn_id) {
+        if let Some(node) = connection_graph.get_mut(&insn_id) {
             // Update to higher escape state (lattice ordering: NoEscape < ArgEscape < GlobalEscape)
-            if new_state > *current_state {
-                escape_states.insert(insn_id, new_state);
+            if new_state > node.escape_state {
+                node.escape_state = new_state;
             }
         }
     }
