@@ -87,6 +87,10 @@ enum EscapeState {
 
 /// Connection graph node representing an allocation site or reference.
 /// Based on Kotzmann & Mössenböck's connection graph approach (VEE 2005).
+/// 
+/// The connection graph tracks relationships between objects and references,
+/// enabling field-sensitive escape analysis. Nodes represent allocations,
+/// and edges represent points-to relationships (e.g., array elements).
 #[derive(Debug, Clone)]
 struct ConnectionNode {
     /// The instruction ID this node represents
@@ -97,6 +101,9 @@ struct ConnectionNode {
     pointed_by: Vec<InsnId>,
     /// Instructions this node points to (successors) - for field references
     points_to: Vec<InsnId>,
+    /// Whether this node represents a phantom reference (paper section 3.4)
+    /// Phantom references are used for unknown objects (parameters, field loads)
+    is_phantom: bool,
 }
 
 impl ConnectionNode {
@@ -106,6 +113,19 @@ impl ConnectionNode {
             escape_state: EscapeState::NoEscape,
             pointed_by: Vec::new(),
             points_to: Vec::new(),
+            is_phantom: false,
+        }
+    }
+    
+    /// Create a phantom node for unknown references.
+    /// Phantom nodes conservatively assume GlobalEscape.
+    fn phantom(insn_id: InsnId) -> Self {
+        Self {
+            insn_id,
+            escape_state: EscapeState::GlobalEscape,
+            pointed_by: Vec::new(),
+            points_to: Vec::new(),
+            is_phantom: true,
         }
     }
 }
@@ -4750,13 +4770,24 @@ impl Function {
     /// 
     /// The algorithm builds a connection graph where:
     /// - Nodes represent allocations and references
-    /// - Edges represent points-to relationships
-    /// - Escape states propagate through the graph
+    /// - Edges represent points-to relationships (e.g., array[i] points to elements)
+    /// - Escape states propagate through the graph via fixed-point iteration
     /// 
     /// Array allocations are classified into three escape states:
-    /// - **NoEscape**: Array never leaves the allocating method (local-only)
-    /// - **ArgEscape**: Array is returned or passed to callee but doesn't escape to heap
-    /// - **GlobalEscape**: Array is stored in heap (ivars, globals) or has unknown escape
+    /// - **NoEscape**: Array never leaves the allocating method (enables scalar replacement)
+    /// - **ArgEscape**: Array is returned or passed to callee (enables limited optimization)
+    /// - **GlobalEscape**: Array is stored in heap or escapes to unknown code
+    ///
+    /// # Deoptimization Considerations
+    /// 
+    /// Following the paper's approach, optimizations based on escape analysis may need
+    /// deoptimization support if assumptions are violated:
+    /// - Scalar replaced objects may need materialization on deopt
+    /// - Stack allocated objects may need heap migration
+    /// - The existing PatchPoint/Invariant infrastructure handles this
+    /// 
+    /// Note: The existing `NoEPEscape(iseq)` invariant tracks environment pointer escape,
+    /// which is complementary to this object-level escape analysis.
     ///
     /// # Returns
     /// A `HashMap` mapping `InsnId` to `EscapeState` for each array allocation.
@@ -4764,8 +4795,16 @@ impl Function {
     /// # Example
     /// ```ignore
     /// let escape_states = function.escape_analysis();
-    /// if escape_states.get(&array_insn_id) == Some(&EscapeState::NoEscape) {
-    ///     // This array is local-only and can be scalar-replaced
+    /// match escape_states.get(&array_insn_id) {
+    ///     Some(EscapeState::NoEscape) => {
+    ///         // Can perform scalar replacement
+    ///     },
+    ///     Some(EscapeState::ArgEscape) => {
+    ///         // Can potentially stack allocate
+    ///     },
+    ///     Some(EscapeState::GlobalEscape) | None => {
+    ///         // Must heap allocate
+    ///     },
     /// }
     /// ```
     ///
@@ -4777,6 +4816,7 @@ impl Function {
         let rpo = self.rpo();
         
         // Phase 1: Build connection graph - identify all array allocations
+        // This corresponds to the "Build Connection Graph" phase in the paper (Section 3.2)
         let mut connection_graph: HashMap<InsnId, ConnectionNode> = HashMap::new();
         
         for block_id in &rpo {
@@ -4789,14 +4829,15 @@ impl Function {
         }
         
         // Phase 2: Build points-to edges and identify initial escape points
+        // This corresponds to analyzing loads, stores, and calls (Section 3.3)
         for block_id in &rpo {
             for insn_id in &self.blocks[block_id.0].insns {
                 let insn = self.find(*insn_id);
                 
                 match insn {
-                    // Array element access creates points-to relationship
+                    // Array element access creates points-to relationship (Section 3.3.1)
+                    // ArrayAref reads from array: result points to array elements
                     | Insn::ArrayAref { array, .. } => {
-                        // array[idx] - the result points to elements in the array
                         if connection_graph.contains_key(&array) {
                             if let Some(node) = connection_graph.get_mut(&array) {
                                 node.points_to.push(*insn_id);
@@ -4804,7 +4845,18 @@ impl Function {
                         }
                     }
                     
-                    // Arrays passed to methods: mark as ArgEscape
+                    // ArrayAset writes to array: value escapes to array
+                    | Insn::ArrayAset { array, val, .. } => {
+                        if connection_graph.contains_key(&val) {
+                            // Value stored in array - create edge
+                            if let Some(arr_node) = connection_graph.get_mut(&array) {
+                                arr_node.points_to.push(val);
+                            }
+                        }
+                    }
+                    
+                    // Arrays passed to methods: mark as ArgEscape (Section 3.3.2)
+                    // Virtual calls are handled conservatively
                     | Insn::Send { recv, ref args, .. }
                     | Insn::SendWithoutBlock { recv, ref args, .. }
                     | Insn::SendWithoutBlockDirect { recv, ref args, .. }
@@ -4815,13 +4867,15 @@ impl Function {
                         }
                     }
                     
-                    // Arrays stored to ivars or globals: mark as GlobalEscape
+                    // Arrays stored to ivars or globals: mark as GlobalEscape (Section 3.3.3)
+                    // These represent heap escape
                     | Insn::SetIvar { val, .. }
                     | Insn::SetGlobal { val, .. } => {
                         self.mark_connection_escape(val, EscapeState::GlobalEscape, &mut connection_graph);
                     }
                     
-                    // Arrays in return paths: mark as ArgEscape
+                    // Arrays in return paths: mark as ArgEscape (Section 3.3.4)
+                    // Returned objects escape to the caller
                     | Insn::Jump(BranchEdge { ref args, .. })
                     | Insn::IfTrue { target: BranchEdge { ref args, .. }, .. }
                     | Insn::IfFalse { target: BranchEdge { ref args, .. }, .. } => {
@@ -4835,12 +4889,16 @@ impl Function {
             }
         }
         
-        // Phase 3: Propagate escape states through connection graph
-        // If an object A points to object B, and A escapes, then B must also escape
-        // This implements the transitive closure algorithm from Kotzmann's paper
+        // Phase 3: Propagate escape states through connection graph (Section 3.4)
+        // This implements the transitive closure algorithm from the paper
+        // If object A points to object B, and A escapes, then B must also escape
         let mut changed = true;
-        while changed {
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
+        
+        while changed && iterations < MAX_ITERATIONS {
             changed = false;
+            iterations += 1;
             
             // Clone the keys to avoid borrow checker issues
             let nodes: Vec<InsnId> = connection_graph.keys().copied().collect();
