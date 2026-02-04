@@ -4838,20 +4838,20 @@ impl Function {
                     // Array element access creates points-to relationship (Section 3.3.1)
                     // ArrayAref reads from array: result points to array elements
                     | Insn::ArrayAref { array, .. } => {
-                        if connection_graph.contains_key(&array) {
-                            if let Some(node) = connection_graph.get_mut(&array) {
-                                node.points_to.push(*insn_id);
-                            }
+                        if let Some(node) = connection_graph.get_mut(&array) {
+                            node.points_to.push(*insn_id);
                         }
                     }
                     
                     // ArrayAset writes to array: value escapes to array
                     | Insn::ArrayAset { array, val, .. } => {
-                        if connection_graph.contains_key(&val) {
-                            // Value stored in array - create edge
-                            if let Some(arr_node) = connection_graph.get_mut(&array) {
-                                arr_node.points_to.push(val);
-                            }
+                        if let Some(arr_node) = connection_graph.get_mut(&array) {
+                            // Value stored in array - create edge from array to value
+                            arr_node.points_to.push(val);
+                        }
+                        // Also update pointed_by relationship if value is tracked
+                        if let Some(val_node) = connection_graph.get_mut(&val) {
+                            val_node.pointed_by.push(array);
                         }
                     }
                     
@@ -4894,7 +4894,7 @@ impl Function {
         // If object A points to object B, and A escapes, then B must also escape
         let mut changed = true;
         let mut iterations = 0;
-        const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
+        const MAX_ITERATIONS: usize = 100; // Limit iterations for large graphs (finite lattice guarantees termination)
         
         while changed && iterations < MAX_ITERATIONS {
             changed = false;
