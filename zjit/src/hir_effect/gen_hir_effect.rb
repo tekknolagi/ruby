@@ -46,6 +46,7 @@ end
 any = Effect.new 'Any'
 # Build the effect universe.
 allocator = any.subeffect 'Allocator'
+local_array = allocator.subeffect 'LocalArray'
 control = any.subeffect 'Control'
 memory = any.subeffect 'Memory'
 other = memory.subeffect 'Other'

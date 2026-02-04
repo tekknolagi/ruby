@@ -1094,7 +1094,7 @@ impl Insn {
             Insn::PutSpecialObject { .. } => effects::Any,
             Insn::ToArray { .. } => effects::Any,
             Insn::ToNewArray { .. } => effects::Any,
-            Insn::NewArray { .. } => allocates,
+            Insn::NewArray { .. } => Effect::write(abstract_heaps::LocalArray),
             Insn::NewHash { elements, .. } => {
                 // NewHash's operands may be hashed and compared for equality, which could have
                 // side-effects. Empty hashes are definitely elidable.
@@ -1118,7 +1118,7 @@ impl Insn {
             Insn::ArrayAref { ..  } => effects::Any,
             Insn::ArrayAset { .. } => effects::Any,
             Insn::ArrayPop { ..  } => effects::Any,
-            Insn::ArrayLength { .. } => Effect::write(abstract_heaps::Empty),
+            Insn::ArrayLength { .. } => Effect::read_write(abstract_heaps::LocalArray, abstract_heaps::Empty),
             Insn::HashAref { .. } => effects::Any,
             Insn::HashAset { .. } => effects::Any,
             Insn::HashDup { .. } => allocates,
@@ -4692,6 +4692,89 @@ impl Function {
         }
     }
 
+    /// Lightweight escape analysis for arrays.
+    /// Determines which array allocations don't escape the local scope.
+    /// Returns a set of InsnIds for arrays that do NOT escape.
+    fn escape_analysis(&self) -> InsnSet {
+        let rpo = self.rpo();
+        let mut non_escaping = InsnSet::with_capacity(self.insns.len());
+        let mut escaping = InsnSet::with_capacity(self.insns.len());
+        
+        // Phase 1: Identify all array allocations
+        for block_id in &rpo {
+            for insn_id in &self.blocks[block_id.0].insns {
+                let insn = self.find(*insn_id);
+                if matches!(insn, Insn::NewArray { .. } | Insn::ToNewArray { .. }) {
+                    non_escaping.insert(*insn_id);
+                }
+            }
+        }
+        
+        // Phase 2: Mark arrays that escape
+        for block_id in &rpo {
+            for insn_id in &self.blocks[block_id.0].insns {
+                let insn = self.find(*insn_id);
+                
+                // Check if this instruction causes arrays to escape
+                match insn {
+                    // Arrays passed to methods escape (they leave local scope)
+                    | Insn::Send { recv, ref args, .. }
+                    | Insn::SendWithoutBlock { recv, ref args, .. }
+                    | Insn::SendWithoutBlockDirect { recv, ref args, .. }
+                    | Insn::CCall { recv, ref args, .. } => {
+                        self.mark_escaping_if_array(recv, &non_escaping, &mut escaping);
+                        for arg in args {
+                            self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
+                        }
+                    }
+                    // Arrays stored to ivars or globals escape
+                    | Insn::SetIvar { val, .. }
+                    | Insn::SetGlobal { val, .. } => {
+                        self.mark_escaping_if_array(val, &non_escaping, &mut escaping);
+                    }
+                    // Arrays in branch args to non-current blocks may escape
+                    | Insn::Jump(BranchEdge { target, ref args }) => {
+                        // If jumping to a different block, args escape current scope
+                        if target != *block_id {
+                            for arg in args {
+                                self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
+                            }
+                        }
+                    }
+                    | Insn::IfTrue { target: BranchEdge { ref args, .. }, .. }
+                    | Insn::IfFalse { target: BranchEdge { ref args, .. }, .. } => {
+                        for arg in args {
+                            self.mark_escaping_if_array(*arg, &non_escaping, &mut escaping);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Phase 3: Create result set containing only non-escaping arrays
+        let mut result = InsnSet::with_capacity(self.insns.len());
+        for insn_id in 0..self.insns.len() {
+            let id = InsnId(insn_id);
+            if non_escaping.get(id) && !escaping.get(id) {
+                result.insert(id);
+            }
+        }
+        
+        result
+    }
+
+    /// Helper to mark an instruction as escaping if it's an array allocation
+    fn mark_escaping_if_array(&self, insn_id: InsnId, candidates: &InsnSet, escaping: &mut InsnSet) {
+        // Only mark if it's a candidate array allocation
+        if !candidates.get(insn_id) {
+            return;
+        }
+        
+        // Mark as escaping
+        escaping.insert(insn_id);
+    }
+
     fn absorb_dst_block(&mut self, num_in_edges: &[u32], block: BlockId) -> bool {
         let Some(terminator_id) = self.blocks[block.0].insns.last()
             else { return false };
@@ -4966,6 +5049,13 @@ impl Function {
         run_pass!(fold_constants);
         run_pass!(clean_cfg);
         run_pass!(eliminate_dead_code);
+        
+        // Run escape analysis after DCE to identify non-escaping arrays
+        // This information can be used by future optimization passes
+        if get_option!(stats) {
+            let _non_escaping = self.escape_analysis();
+            // Stats could be collected here if needed
+        }
 
         if should_dump {
             let iseq_name = iseq_get_location(self.iseq, 0);
