@@ -823,11 +823,11 @@ mod hir_opt_tests {
         bb2(v8:BasicObject, v9:BasicObject):
           PatchPoint NoSingletonClass(C@0x1000)
           PatchPoint MethodRedefined(C@0x1000, fun_new_map@0x1008, cme:0x1010)
-          v23:ArraySubclass[class_exact:C] = GuardType v9, ArraySubclass[class_exact:C]
-          v24:BasicObject = CCallWithFrame v23, :C#fun_new_map@0x1038, block=0x1040
+          v22:ArraySubclass[class_exact:C] = GuardType v9, ArraySubclass[class_exact:C]
+          v23:BasicObject = SendDirect v22, 0x1038, :fun_new_map (0x1048)
           v15:BasicObject = GetLocal :o, l0, EP@3
           CheckInterrupts
-          Return v24
+          Return v23
         ");
     }
 
@@ -6490,9 +6490,9 @@ mod hir_opt_tests {
           v11:ArrayExact = ArrayDup v10
           PatchPoint NoSingletonClass(Array@0x1008)
           PatchPoint MethodRedefined(Array@0x1008, map@0x1010, cme:0x1018)
-          v21:BasicObject = CCallWithFrame v11, :Array#map@0x1040, block=0x1048
+          v20:BasicObject = SendDirect v11, 0x1040, :map (0x1050)
           CheckInterrupts
-          Return v21
+          Return v20
         ");
     }
 
