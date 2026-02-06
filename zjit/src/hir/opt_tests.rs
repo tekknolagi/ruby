@@ -11887,4 +11887,44 @@ mod hir_opt_tests {
           Return v31
         ");
     }
+
+    #[test]
+    fn test_array_each() {
+        eval("[1, 2, 3].each { |x| x }");
+        assert_snapshot!(hir_string_proc("Array.instance_method(:each)"), @r"
+        fn each@<internal:array>:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject):
+          EntryPoint JIT(0)
+          v6:NilClass = Const Value(nil)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:NilClass):
+          v13:NilClass = Const Value(nil)
+          v15:TrueClass|NilClass = Defined yield, v13
+          v17:CBool = Test v15
+          IfFalse v17, bb3(v8, v9)
+          v35:Fixnum[0] = Const Value(0)
+          Jump bb7(v8, v35)
+        bb3(v23:BasicObject, v24:NilClass):
+          v28:BasicObject = InvokeBuiltin <inline_expr>, v23
+          CheckInterrupts
+          Return v28
+        bb7(v48:BasicObject, v49:BasicObject):
+          v52:BasicObject = InvokeBuiltin ary_at_end, v48, v49
+          v54:CBool = Test v52
+          IfFalse v54, bb6(v48, v49)
+          CheckInterrupts
+          Return v48
+        bb6(v67:BasicObject, v68:BasicObject):
+          v72:BasicObject = InvokeBuiltin ary_at, v67, v68
+          v74:BasicObject = InvokeBlock, v72 # SendFallbackReason: Uncategorized(invokeblock)
+          v78:BasicObject = InvokeBuiltin fixnum_inc, v67, v68
+          PatchPoint NoEPEscape(each)
+          Jump bb7(v67, v78)
+        ");
+    }
 }

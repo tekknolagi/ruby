@@ -223,9 +223,9 @@ class Array
           return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
         end
         _i = 0
-        value = nil
-        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
-          yield value
+        until Primitive.ary_at_end(_i)
+          yield Primitive.ary_at(_i)
+          _i = Primitive.fixnum_inc(_i)
         end
         self
       end
@@ -242,11 +242,11 @@ class Array
         end
 
         _i = 0
-        value = nil
         result = Primitive.ary_sized_alloc
-        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
-          value = yield(value)
-          Primitive.cexpr!(%q{ rb_ary_push(result, value) })
+        until Primitive.ary_at_end(_i)
+          _value = yield(Primitive.ary_at(_i))
+          Primitive.cexpr!(%q{ rb_ary_push(result, _value) })
+          _i = Primitive.fixnum_inc(_i)
         end
         result
       end
@@ -268,12 +268,13 @@ class Array
         end
 
         _i = 0
-        value = nil
         result = Primitive.ary_sized_alloc
-        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
+        until Primitive.ary_at_end(_i)
+          value = Primitive.ary_at(_i)
           if yield value
             Primitive.cexpr!(%q{ rb_ary_push(result, value) })
           end
+          _i = Primitive.fixnum_inc(_i)
         end
         result
       end
@@ -294,9 +295,10 @@ class Array
           return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
         end
         _i = 0
-        value = nil
-        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
+        until Primitive.ary_at_end(_i)
+          value = Primitive.ary_at(_i)
           return value if yield(value)
+          _i = Primitive.fixnum_inc(_i)
         end
         if_none_proc&.call
       end
