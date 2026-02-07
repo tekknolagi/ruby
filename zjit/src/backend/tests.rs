@@ -73,13 +73,13 @@ fn test_alloc_regs_across_blocks() {
 
     asm.set_current_block(entry);
     let entry_label = asm.new_label("entry_block");
-    asm.write_label(Target::Label(entry_label));
+    asm.write_label(entry_label);
     let v0 = asm.add(EC, Opnd::UImm(1));
     asm.jmp(Target::Block(BranchEdge { target: exit, args: vec![] }));
 
     asm.set_current_block(exit);
     let exit_label = asm.new_label("exit_block");
-    asm.write_label(Target::Label(exit_label));
+    asm.write_label(exit_label);
     let v1 = asm.add(v0, Opnd::UImm(2));
     asm.cret(v1);
 
