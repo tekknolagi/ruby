@@ -6,7 +6,7 @@ const ENTRY_NUM_BITS: usize = Entry::BITS as usize;
 
 // TODO(max): Make a `SmallBitSet` and `LargeBitSet` and switch between them if `num_bits` fits in
 // `Entry`.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BitSet<T: Into<usize> + Copy> {
     entries: Vec<Entry>,
     num_bits: usize,
@@ -25,8 +25,8 @@ impl<T: Into<usize> + Copy> BitSet<T> {
         debug_assert!(idx.into() < self.num_bits);
         let entry_idx = idx.into() / ENTRY_NUM_BITS;
         let bit_idx = idx.into() % ENTRY_NUM_BITS;
-        let newly_inserted = (self.entries[entry_idx] & (1 << bit_idx)) == 0;
-        self.entries[entry_idx] |= 1 << bit_idx;
+        let newly_inserted = (self.entries[entry_idx] & (1u128 << bit_idx)) == 0;
+        self.entries[entry_idx] |= 1u128 << bit_idx;
         newly_inserted
     }
 
@@ -37,11 +37,49 @@ impl<T: Into<usize> + Copy> BitSet<T> {
         }
     }
 
+    pub fn remove(&mut self, idx: T) -> bool {
+        debug_assert!(idx.into() < self.num_bits);
+        let entry_idx = idx.into() / ENTRY_NUM_BITS;
+        let bit_idx = idx.into() % ENTRY_NUM_BITS;
+        let mask = 1u128 << bit_idx;
+        let was_set = (self.entries[entry_idx] & mask) != 0;
+        self.entries[entry_idx] &= !mask;
+        was_set
+    }
+
     pub fn get(&self, idx: T) -> bool {
         debug_assert!(idx.into() < self.num_bits);
         let entry_idx = idx.into() / ENTRY_NUM_BITS;
         let bit_idx = idx.into() % ENTRY_NUM_BITS;
-        (self.entries[entry_idx] & (1 << bit_idx)) != 0
+        (self.entries[entry_idx] & (1u128 << bit_idx)) != 0
+    }
+
+    /// Modify `self` to include any bits set in `other`. Returns true if `self` was modified,
+    /// and false otherwise.
+    /// `self` and `other` must have the same number of bits.
+    pub fn union_with(&mut self, other: &Self) -> bool {
+        assert_eq!(self.num_bits, other.num_bits);
+        let mut changed = false;
+        for i in 0..self.entries.len() {
+            let before = self.entries[i];
+            self.entries[i] |= other.entries[i];
+            changed |= self.entries[i] != before;
+        }
+        changed
+    }
+
+    /// Modify `self` to clear bits that are set in `other`. Returns true if `self` was modified,
+    /// and false otherwise.
+    /// `self` and `other` must have the same number of bits.
+    pub fn subtract_with(&mut self, other: &Self) -> bool {
+        assert_eq!(self.num_bits, other.num_bits);
+        let mut changed = false;
+        for i in 0..self.entries.len() {
+            let before = self.entries[i];
+            self.entries[i] &= !other.entries[i];
+            changed |= self.entries[i] != before;
+        }
+        changed
     }
 
     /// Modify `self` to only have bits set if they are also set in `other`. Returns true if `self`
@@ -56,6 +94,50 @@ impl<T: Into<usize> + Copy> BitSet<T> {
             changed |= self.entries[i] != before;
         }
         changed
+    }
+
+    pub fn iter_indices(&self) -> BitSetIter<'_> {
+        BitSetIter {
+            entries: &self.entries,
+            num_bits: self.num_bits,
+            entry_idx: 0,
+            base_idx: 0,
+            remaining: 0,
+        }
+    }
+}
+
+pub struct BitSetIter<'a> {
+    entries: &'a [Entry],
+    num_bits: usize,
+    entry_idx: usize,
+    base_idx: usize,
+    remaining: Entry,
+}
+
+impl<'a> Iterator for BitSetIter<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.remaining != 0 {
+                let tz = self.remaining.trailing_zeros() as usize;
+                let idx = self.base_idx + tz;
+                self.remaining &= !(1u128 << tz);
+                if idx < self.num_bits {
+                    return Some(idx);
+                }
+                continue;
+            }
+
+            if self.entry_idx >= self.entries.len() {
+                return None;
+            }
+
+            self.remaining = self.entries[self.entry_idx];
+            self.base_idx = self.entry_idx * ENTRY_NUM_BITS;
+            self.entry_idx += 1;
+        }
     }
 }
 

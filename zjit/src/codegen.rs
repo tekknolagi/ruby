@@ -305,7 +305,12 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         for (idx, &insn_id) in block.params().enumerate() {
             match function.find(insn_id) {
                 Insn::Param => {
-                    jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx));
+                    let is_entry_block = function.is_entry_block(block_id);
+                    let param_opnd = gen_param(&mut asm, idx, is_entry_block);
+                    if !is_entry_block {
+                        asm.current_block().add_parameter(param_opnd);
+                    }
+                    jit.opnds[insn_id.0] = Some(param_opnd);
                 },
                 insn => unreachable!("Non-param insn found in block.params: {insn:?}"),
             }
@@ -1269,13 +1274,11 @@ fn gen_const_uint32(val: u32) -> lir::Opnd {
 }
 
 /// Compile a basic block argument
-fn gen_param(asm: &mut Assembler, idx: usize) -> lir::Opnd {
-    // Allocate a register or a stack slot
-    match Assembler::param_opnd(idx) {
-        // If it's a register, insert LiveReg instruction to reserve the register
-        // in the register pool for register allocation.
-        param @ Opnd::Reg(_) => asm.live_reg_opnd(param),
-        param => param,
+fn gen_param(asm: &mut Assembler, idx: usize, is_entry_block: bool) -> lir::Opnd {
+    if is_entry_block {
+        asm.load(Assembler::param_opnd(idx))
+    } else {
+        asm.new_param_opnd()
     }
 }
 
