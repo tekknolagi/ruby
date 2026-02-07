@@ -1842,7 +1842,7 @@ impl Assembler
         };
     }
 
-    fn compute_live_ranges(&self) -> LiveRanges {
+    pub(super) fn compute_live_ranges(&self) -> LiveRanges {
         fn record_use(opnd: Opnd, defs: &BitSet<VRegId>, uses: &mut BitSet<VRegId>) {
             match opnd {
                 Opnd::VReg { idx, .. } => {
@@ -2187,7 +2187,7 @@ impl Assembler
         let live_ranges = self.compute_live_ranges();
 
         let mut current_block_id = asm.current_block().id;
-        let mut alloc_block_params = |block: &BasicBlock, pool: &mut RegisterPool, vreg_opnd: &mut Vec<Option<Opnd>>| {
+        let alloc_block_params = |block: &BasicBlock, pool: &mut RegisterPool, vreg_opnd: &mut Vec<Option<Opnd>>| {
             for param in &block.parameters {
                 if let Opnd::VReg { idx, num_bits } = *param {
                     if vreg_opnd[idx.0].is_none() {

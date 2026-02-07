@@ -1,4 +1,4 @@
-use std::mem::{self, take};
+use std::mem;
 
 use crate::asm::*;
 use crate::asm::x86_64::*;

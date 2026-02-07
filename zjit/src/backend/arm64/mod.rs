@@ -1,5 +1,3 @@
-use std::mem::take;
-
 use crate::asm::{CodeBlock, Label};
 use crate::asm::arm64::*;
 use crate::codegen::split_patch_point;
