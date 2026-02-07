@@ -140,7 +140,7 @@ impl Assembler {
     {
         let mut asm_local = Assembler::new_with_asm(&self);
         let asm = &mut asm_local;
-        let live_ranges = take(&mut self.live_ranges);
+        let live_ranges = self.compute_live_ranges();
         let mut iterator = self.instruction_iterator();
 
         while let Some((index, mut insn)) = iterator.next(asm) {

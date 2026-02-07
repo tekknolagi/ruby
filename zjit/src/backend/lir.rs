@@ -15,6 +15,7 @@ use crate::stats::{exit_counter_ptr, exit_counter_ptr_for_opcode, side_exit_coun
 use crate::virtualmem::CodePtr;
 use crate::asm::{CodeBlock, Label};
 use crate::state::rb_zjit_record_exit_stack;
+use crate::bitset::BitSet;
 
 /// LIR Block ID. Unique ID for each block, and also defined in LIR so
 /// we can differentiate it from HIR block ids.
@@ -1670,7 +1671,8 @@ impl Assembler
     // one assembler to a new one.
     pub fn new_block_from_old_block(&mut self, old_block: &BasicBlock) -> BlockId {
         let bb_id = BlockId(self.basic_blocks.len());
-        let lir_bb = BasicBlock::new(bb_id, old_block.hir_block_id, old_block.is_entry, old_block.rpo_index);
+        let mut lir_bb = BasicBlock::new(bb_id, old_block.hir_block_id, old_block.is_entry, old_block.rpo_index);
+        lir_bb.parameters = old_block.parameters.clone();
         self.basic_blocks.push(lir_bb);
         bb_id
     }
@@ -1776,9 +1778,10 @@ impl Assembler
         // Helper to process branch arguments and return the label target
         let mut process_edge = |edge: &BranchEdge| -> Label {
             if !edge.args.is_empty() {
+                let params = &self.basic_blocks[edge.target.0].parameters;
                 insns.push(Insn::ParallelMov {
                     moves: edge.args.iter().enumerate()
-                        .map(|(idx, &arg)| (Assembler::param_opnd(idx), arg))
+                        .map(|(idx, &arg)| (params[idx], arg))
                         .collect()
                 });
             }
@@ -1839,11 +1842,225 @@ impl Assembler
         };
     }
 
+    fn compute_live_ranges(&self) -> LiveRanges {
+        fn record_use(opnd: Opnd, defs: &BitSet<VRegId>, uses: &mut BitSet<VRegId>) {
+            match opnd {
+                Opnd::VReg { idx, .. } => {
+                    if !defs.get(idx) {
+                        uses.insert(idx);
+                    }
+                }
+                Opnd::Mem(Mem { base: MemBase::VReg(idx), .. }) => {
+                    if !defs.get(idx) {
+                        uses.insert(idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn update_start(range: &mut LiveRange, pos: usize) {
+            if range.start.is_none() || range.start.unwrap() > pos {
+                range.start = Some(pos);
+            }
+        }
+
+        fn update_end(range: &mut LiveRange, pos: usize) {
+            if range.end.is_none() || range.end.unwrap() < pos {
+                range.end = Some(pos);
+            }
+        }
+
+        let num_vregs = self.live_ranges.len();
+        let num_blocks = self.basic_blocks.len();
+        let mut block_uses: Vec<BitSet<VRegId>> = (0..num_blocks)
+            .map(|_| BitSet::with_capacity(num_vregs))
+            .collect();
+        let mut block_defs: Vec<BitSet<VRegId>> = (0..num_blocks)
+            .map(|_| BitSet::with_capacity(num_vregs))
+            .collect();
+
+        for block in &self.basic_blocks {
+            let block_id = block.id.0;
+            let mut defs = BitSet::with_capacity(num_vregs);
+            let mut uses = BitSet::with_capacity(num_vregs);
+
+            for param in &block.parameters {
+                if let Opnd::VReg { idx, .. } = param {
+                    defs.insert(*idx);
+                }
+            }
+
+            for insn in &block.insns {
+                match insn {
+                    Insn::ParallelMov { moves } => {
+                        for (dst, src) in moves {
+                            record_use(*src, &defs, &mut uses);
+                            match dst {
+                                Opnd::VReg { idx, .. } => {
+                                    defs.insert(*idx);
+                                }
+                                _ => record_use(*dst, &defs, &mut uses),
+                            }
+                        }
+                    }
+                    _ => {
+                        for opnd in insn.opnd_iter() {
+                            record_use(*opnd, &defs, &mut uses);
+                        }
+                        if let Some(Opnd::VReg { idx, .. }) = insn.out_opnd() {
+                            defs.insert(*idx);
+                        }
+                    }
+                }
+            }
+
+            block_uses[block_id] = uses;
+            block_defs[block_id] = defs;
+        }
+
+        let mut live_in: Vec<BitSet<VRegId>> = (0..num_blocks)
+            .map(|_| BitSet::with_capacity(num_vregs))
+            .collect();
+        let mut live_out: Vec<BitSet<VRegId>> = (0..num_blocks)
+            .map(|_| BitSet::with_capacity(num_vregs))
+            .collect();
+
+        let sorted_blocks = self.sorted_blocks();
+        loop {
+            let mut changed = false;
+            for block in sorted_blocks.iter().rev() {
+                let block_id = block.id.0;
+                let mut new_out = BitSet::with_capacity(num_vregs);
+
+                for insn in &block.insns {
+                    if !insn.is_terminator() {
+                        continue;
+                    }
+                    if let Some(Target::Block(edge)) = insn.target() {
+                        new_out.union_with(&live_in[edge.target.0]);
+                    }
+                }
+
+                if new_out != live_out[block_id] {
+                    live_out[block_id] = new_out.clone();
+                    changed = true;
+                }
+
+                let mut new_in = new_out;
+                new_in.subtract_with(&block_defs[block_id]);
+                new_in.union_with(&block_uses[block_id]);
+
+                if new_in != live_in[block_id] {
+                    live_in[block_id] = new_in;
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        let mut block_start = vec![0usize; num_blocks];
+        let mut block_end = vec![0usize; num_blocks];
+        let mut idx = 0usize;
+        for block in &sorted_blocks {
+            block_start[block.id.0] = idx;
+            if block.insns.is_empty() {
+                block_end[block.id.0] = idx;
+            } else {
+                block_end[block.id.0] = idx + block.insns.len() - 1;
+                idx += block.insns.len();
+            }
+        }
+
+        let mut live_ranges = LiveRanges::new(num_vregs);
+        for block in &sorted_blocks {
+            let block_id = block.id.0;
+            let start_idx = block_start[block_id];
+            let end_idx = block_end[block_id];
+
+            for param in &block.parameters {
+                if let Opnd::VReg { idx, .. } = param {
+                    let range = &mut live_ranges[*idx];
+                    update_start(range, start_idx);
+                    update_end(range, start_idx);
+                }
+            }
+
+            for vreg_idx in live_out[block_id].iter_indices() {
+                let idx = VRegId(vreg_idx);
+                let range = &mut live_ranges[idx];
+                update_end(range, end_idx);
+                if range.start.is_none() {
+                    update_start(range, start_idx);
+                }
+            }
+
+            let mut insn_idx = start_idx;
+            for insn in &block.insns {
+                for opnd in insn.opnd_iter() {
+                    match *opnd {
+                        Opnd::VReg { idx, .. } => {
+                            let range = &mut live_ranges[idx];
+                            update_end(range, insn_idx);
+                            if range.start.is_none() {
+                                update_start(range, insn_idx);
+                            }
+                        }
+                        Opnd::Mem(Mem { base: MemBase::VReg(idx), .. }) => {
+                            let range = &mut live_ranges[idx];
+                            update_end(range, insn_idx);
+                            if range.start.is_none() {
+                                update_start(range, insn_idx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(Opnd::VReg { idx, .. }) = insn.out_opnd() {
+                    let range = &mut live_ranges[*idx];
+                    update_start(range, insn_idx);
+                    if range.end.is_none() {
+                        update_end(range, insn_idx);
+                    }
+                }
+
+                insn_idx += 1;
+            }
+        }
+
+        for range in &mut live_ranges.0 {
+            match (range.start, range.end) {
+                (None, None) => {
+                    range.start = Some(0);
+                    range.end = Some(0);
+                }
+                (None, Some(end)) => {
+                    range.start = Some(end);
+                }
+                (Some(start), None) => {
+                    range.end = Some(start);
+                }
+                _ => {}
+            }
+        }
+
+        live_ranges
+    }
+
     /// Build an Opnd::VReg and initialize its LiveRange
     pub(super) fn new_vreg(&mut self, num_bits: u8) -> Opnd {
         let vreg = Opnd::VReg { idx: VRegId(self.live_ranges.len()), num_bits };
         self.live_ranges.0.push(LiveRange { start: None, end: None });
         vreg
+    }
+
+    /// Create a new block parameter VReg without emitting an instruction.
+    pub fn new_param_opnd(&mut self) -> Opnd {
+        self.new_vreg(Opnd::DEFAULT_NUM_BITS)
     }
 
     /// Append an instruction onto the current list of instructions and update
@@ -1960,16 +2177,33 @@ impl Assembler
         // Remember the indexes of Insn::FrameSetup to update the stack size later
         let mut frame_setup_idxs: Vec<(BlockId, usize)> = vec![];
 
-        // live_ranges is indexed by original `index` given by the iterator.
+        // live_ranges is indexed by VRegId.
         let mut asm_local = Assembler::new_with_asm(&self);
 
         let iterator = &mut self.instruction_iterator();
 
         let asm = &mut asm_local;
 
-        let live_ranges = take(&mut self.live_ranges);
+        let live_ranges = self.compute_live_ranges();
+
+        let mut current_block_id = asm.current_block().id;
+        let mut alloc_block_params = |block: &BasicBlock, pool: &mut RegisterPool, vreg_opnd: &mut Vec<Option<Opnd>>| {
+            for param in &block.parameters {
+                if let Opnd::VReg { idx, num_bits } = *param {
+                    if vreg_opnd[idx.0].is_none() {
+                        let opnd = pool.alloc_opnd(idx).with_num_bits(num_bits);
+                        vreg_opnd[idx.0] = Some(opnd);
+                    }
+                }
+            }
+        };
+        alloc_block_params(asm.current_block(), &mut pool, &mut vreg_opnd);
 
         while let Some((index, mut insn)) = iterator.next(asm) {
+            if asm.current_block().id != current_block_id {
+                current_block_id = asm.current_block().id;
+                alloc_block_params(asm.current_block(), &mut pool, &mut vreg_opnd);
+            }
             // Remember the index of FrameSetup to bump slot_count when we know the max number of spilled VRegs.
             if let Insn::FrameSetup { .. } = insn {
                 assert!(asm.current_block().is_entry);

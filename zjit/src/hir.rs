@@ -5392,9 +5392,8 @@ impl Function {
         Ok(())
     }
 
-    // Validate that every instruction use is from a block-local definition, which is a temporary
-    // constraint until we get a global register allocator.
-    // TODO(tenderworks): Remove this
+    // Validate that every instruction use is from a block-local definition.
+    // Kept for tests to exercise the previous block-local constraint.
     fn temporary_validate_block_local_definite_assignment(&self) -> Result<(), ValidationError> {
         for block in self.rpo() {
             let mut assigned = InsnSet::with_capacity(self.insns.len());
@@ -5728,7 +5727,6 @@ impl Function {
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.validate_block_terminators_and_jumps()?;
         self.validate_definite_assignment()?;
-        self.temporary_validate_block_local_definite_assignment()?;
         self.validate_insn_uniqueness()?;
         self.validate_types()?;
         Ok(())
@@ -8034,6 +8032,18 @@ mod validation_tests {
         let dangling = function.new_insn(Insn::Const{val: Const::CBool(true)});
         let val = function.push_insn(function.entry_block, Insn::ArrayDup { val: dangling, state: InsnId(0usize) });
         assert_matches_err(function.validate_definite_assignment(), ValidationError::OperandNotDefined(entry, val, dangling));
+    }
+
+    #[test]
+    fn allow_cross_block_use_with_dominance() {
+        let mut function = Function::new(std::ptr::null());
+        let entry = function.entry_block;
+        let target = function.new_block(0);
+        let value = function.push_insn(entry, Insn::Const { val: Const::CBool(true) });
+        function.push_insn(entry, Insn::Jump(BranchEdge { target, args: vec![] }));
+        function.push_insn(target, Insn::ArrayDup { val: value, state: value });
+        function.push_insn(target, Insn::Return { val: value });
+        function.validate().unwrap();
     }
 
     #[test]

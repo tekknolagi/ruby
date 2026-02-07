@@ -2,6 +2,7 @@ use crate::asm::CodeBlock;
 use crate::backend::lir::*;
 use crate::cruby::*;
 use crate::codegen::c_callable;
+use crate::hir;
 use crate::options::rb_zjit_prepare_options;
 
 #[test]
@@ -61,6 +62,28 @@ fn test_alloc_regs() {
         Some(Opnd::Reg(value)) => assert_eq!(value, &reg0),
         val => panic!("Unexpected register value {:?}", val),
     }
+}
+
+#[test]
+fn test_alloc_regs_across_blocks() {
+    rb_zjit_prepare_options(); // for asm.alloc_regs
+    let mut asm = Assembler::new();
+    let entry = asm.new_block(hir::BlockId(0), true, 0);
+    let exit = asm.new_block(hir::BlockId(1), false, 1);
+
+    asm.set_current_block(entry);
+    let entry_label = asm.new_label("entry_block");
+    asm.write_label(Target::Label(entry_label));
+    let v0 = asm.add(EC, Opnd::UImm(1));
+    asm.jmp(Target::Block(BranchEdge { target: exit, args: vec![] }));
+
+    asm.set_current_block(exit);
+    let exit_label = asm.new_label("exit_block");
+    asm.write_label(Target::Label(exit_label));
+    let v1 = asm.add(v0, Opnd::UImm(2));
+    asm.cret(v1);
+
+    asm.alloc_regs(Assembler::get_alloc_regs()).unwrap();
 }
 
 fn setup_asm() -> (Assembler, CodeBlock) {
