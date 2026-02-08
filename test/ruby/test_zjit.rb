@@ -4838,6 +4838,38 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_ep_escape_with_optional_params
+    # Regression test: when a method with optional params creates a lambda
+    # (causing EP to escape), recompilation must use EP-based locals instead
+    # of SSA locals. Otherwise, the spill writes to the old stack location
+    # while reads go to the heap-allocated EP, causing locals to appear as nil.
+    assert_runs ':ok', %q{
+      CONST = {}.freeze
+      def test(list, sep=nil, iter_method=:each)
+        sep ||= lambda { }
+        first = true
+        kwsplat = CONST
+        list.__send__(iter_method) {|*v|
+          if first
+            first = false
+          else
+            sep.call
+          end
+          yield(*v)
+        }
+      end
+
+      test({a: 1}, nil, :each_pair) { |k, v|
+        test([1], lambda { }) { |x| }
+      }
+
+      test({a: 1}, nil, :each_pair) { |k, v|
+        test([1], lambda { }) { |x| }
+      }
+      :ok
+    }
+  end
+
   def test_exit_tracing
     # This is a very basic smoke test. The StackProf format
     # this option generates is external to us.

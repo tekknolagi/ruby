@@ -10556,24 +10556,25 @@ mod hir_opt_tests {
          Jump bb2(v8, v9, v10, v11, v12)
        bb2(v14:BasicObject, v15:BasicObject, v16:BasicObject, v17:BasicObject, v18:NilClass):
          CheckInterrupts
+         SetLocal :formatted, l0, EP@3, v15
          PatchPoint SingleRactorMode
-         v56:HeapBasicObject = GuardType v14, HeapBasicObject
-         v57:CShape = LoadField v56, :_shape_id@0x1000
-         v58:CShape[0x1001] = GuardBitEquals v57, CShape(0x1001)
-         StoreField v56, :@formatted@0x1002, v15
-         WriteBarrier v56, v15
-         v61:CShape[0x1003] = Const CShape(0x1003)
-         StoreField v56, :_shape_id@0x1000, v61
-         v45:Class[VMFrozenCore] = Const Value(VALUE(0x1008))
+         v57:HeapBasicObject = GuardType v14, HeapBasicObject
+         v58:CShape = LoadField v57, :_shape_id@0x1000
+         v59:CShape[0x1001] = GuardBitEquals v58, CShape(0x1001)
+         StoreField v57, :@formatted@0x1002, v15
+         WriteBarrier v57, v15
+         v62:CShape[0x1003] = Const CShape(0x1003)
+         StoreField v57, :_shape_id@0x1000, v62
+         v46:Class[VMFrozenCore] = Const Value(VALUE(0x1008))
          PatchPoint NoSingletonClass(Class@0x1010)
          PatchPoint MethodRedefined(Class@0x1010, lambda@0x1018, cme:0x1020)
-         v66:BasicObject = CCallWithFrame v45, :RubyVM::FrozenCore.lambda@0x1048, block=0x1050
-         v48:BasicObject = GetLocal :a, l0, EP@6
-         v49:BasicObject = GetLocal :_b, l0, EP@5
-         v50:BasicObject = GetLocal :_c, l0, EP@4
-         v51:BasicObject = GetLocal :formatted, l0, EP@3
+         v67:BasicObject = CCallWithFrame v46, :RubyVM::FrozenCore.lambda@0x1048, block=0x1050
+         v49:BasicObject = GetLocal :a, l0, EP@6
+         v50:BasicObject = GetLocal :_b, l0, EP@5
+         v51:BasicObject = GetLocal :_c, l0, EP@4
+         v52:BasicObject = GetLocal :formatted, l0, EP@3
          CheckInterrupts
-         Return v66
+         Return v67
        ");
     }
 
@@ -11575,8 +11576,9 @@ mod hir_opt_tests {
           v35:HeapObject[class_exact:B] = GuardType v10, HeapObject[class_exact:B]
           v36:BasicObject = CCallWithFrame v35, :Kernel#proc@0x1038, block=0x1040
           v18:BasicObject = GetLocal :blk, l0, EP@4
-          PatchPoint NoEPEscape(foo)
-          v27:BasicObject = InvokeSuper v10, 0x1048, v36 # SendFallbackReason: super: complex argument passing to `super` call
+          SetLocal :other_block, l0, EP@3, v36
+          v25:BasicObject = GetLocal :other_block, l0, EP@3
+          v27:BasicObject = InvokeSuper v10, 0x1048, v25 # SendFallbackReason: super: complex argument passing to `super` call
           CheckInterrupts
           Return v27
         ");
@@ -11880,6 +11882,99 @@ mod hir_opt_tests {
           SetIvar v28, :@d, v31
           CheckInterrupts
           Return v31
+        ");
+    }
+
+    #[test]
+    fn recompile_after_ep_escape_uses_ep_locals() {
+        // When a method creates a lambda, EP escapes to the heap. After
+        // invalidation and recompilation, the compiler must use EP-based
+        // locals (SetLocal/GetLocal) instead of SSA locals, because the
+        // spill target (stack) and the read target (heap EP) diverge.
+        eval("
+            CONST = {}.freeze
+            def test_ep_escape(list, sep=nil, iter_method=:each)
+                sep ||= lambda { }
+                kwsplat = CONST
+                list.__send__(iter_method) {|*v| yield(*v) }
+            end
+
+            test_ep_escape({a: 1}, nil, :each_pair) { |k, v|
+                test_ep_escape([1], lambda { }) { |x| }
+            }
+            test_ep_escape({a: 1}, nil, :each_pair) { |k, v|
+                test_ep_escape([1], lambda { }) { |x| }
+            }
+        ");
+        assert_snapshot!(hir_string("test_ep_escape"), @r"
+        fn test_ep_escape@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal :list, l0, SP@7
+          v3:BasicObject = GetLocal :sep, l0, SP@6
+          v4:BasicObject = GetLocal :iter_method, l0, SP@5
+          v5:NilClass = Const Value(nil)
+          v6:CPtr = LoadPC
+          v7:CPtr[CPtr(0x1000)] = Const CPtr(0x1008)
+          v8:CBool = IsBitEqual v6, v7
+          IfTrue v8, bb2(v1, v2, v3, v4, v5)
+          v10:CPtr[CPtr(0x1000)] = Const CPtr(0x1008)
+          v11:CBool = IsBitEqual v6, v10
+          IfTrue v11, bb4(v1, v2, v3, v4, v5)
+          Jump bb6(v1, v2, v3, v4, v5)
+        bb1(v15:BasicObject, v16:BasicObject):
+          EntryPoint JIT(0)
+          v17:NilClass = Const Value(nil)
+          v18:NilClass = Const Value(nil)
+          v19:NilClass = Const Value(nil)
+          Jump bb2(v15, v16, v17, v18, v19)
+        bb2(v35:BasicObject, v36:BasicObject, v37:BasicObject, v38:BasicObject, v39:NilClass):
+          v42:NilClass = Const Value(nil)
+          SetLocal :sep, l0, EP@5, v42
+          Jump bb4(v35, v36, v42, v38, v39)
+        bb3(v22:BasicObject, v23:BasicObject, v24:BasicObject):
+          EntryPoint JIT(1)
+          v25:NilClass = Const Value(nil)
+          v26:NilClass = Const Value(nil)
+          Jump bb4(v22, v23, v24, v25, v26)
+        bb4(v46:BasicObject, v47:BasicObject, v48:BasicObject, v49:BasicObject, v50:NilClass):
+          v53:StaticSymbol[:each] = Const Value(VALUE(0x1010))
+          SetLocal :iter_method, l0, EP@4, v53
+          Jump bb6(v46, v47, v48, v53, v50)
+        bb5(v29:BasicObject, v30:BasicObject, v31:BasicObject, v32:BasicObject):
+          EntryPoint JIT(2)
+          v33:NilClass = Const Value(nil)
+          Jump bb6(v29, v30, v31, v32, v33)
+        bb6(v57:BasicObject, v58:BasicObject, v59:BasicObject, v60:BasicObject, v61:NilClass):
+          CheckInterrupts
+          v67:CBool = Test v59
+          v68:Truthy = RefineType v59, Truthy
+          IfTrue v67, bb7(v57, v58, v68, v60, v61)
+          v70:Falsy = RefineType v59, Falsy
+          PatchPoint NoSingletonClass(Object@0x1018)
+          PatchPoint MethodRedefined(Object@0x1018, lambda@0x1020, cme:0x1028)
+          v114:HeapObject[class_exact*:Object@VALUE(0x1018)] = GuardType v57, HeapObject[class_exact*:Object@VALUE(0x1018)]
+          v115:BasicObject = CCallWithFrame v114, :Kernel#lambda@0x1050, block=0x1058
+          v74:BasicObject = GetLocal :list, l0, EP@6
+          v76:BasicObject = GetLocal :iter_method, l0, EP@4
+          v77:BasicObject = GetLocal :kwsplat, l0, EP@3
+          SetLocal :sep, l0, EP@5, v115
+          Jump bb7(v57, v74, v115, v76, v77)
+        bb7(v81:BasicObject, v82:BasicObject, v83:BasicObject, v84:BasicObject, v85:BasicObject):
+          PatchPoint SingleRactorMode
+          PatchPoint StableConstantNames(0x1060, CONST)
+          v110:HashExact[VALUE(0x1068)] = Const Value(VALUE(0x1068))
+          SetLocal :kwsplat, l0, EP@3, v110
+          v95:BasicObject = GetLocal :list, l0, EP@6
+          v97:BasicObject = GetLocal :iter_method, l0, EP@4
+          v99:BasicObject = Send v95, 0x1070, :__send__, v97 # SendFallbackReason: Send: unsupported method type Optimized
+          v100:BasicObject = GetLocal :list, l0, EP@6
+          v101:BasicObject = GetLocal :sep, l0, EP@5
+          v102:BasicObject = GetLocal :iter_method, l0, EP@4
+          v103:BasicObject = GetLocal :kwsplat, l0, EP@3
+          CheckInterrupts
+          Return v99
         ");
     }
 }
