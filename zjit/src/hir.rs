@@ -6085,14 +6085,12 @@ pub fn jit_entry_insns(iseq: IseqPtr) -> Vec<u32> {
 
 struct BytecodeInfo {
     jump_targets: Vec<u32>,
-    has_blockiseq: bool,
 }
 
 fn compute_bytecode_info(iseq: *const rb_iseq_t, opt_table: &[u32]) -> BytecodeInfo {
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     let mut insn_idx = 0;
     let mut jump_targets: HashSet<u32> = opt_table.iter().copied().collect();
-    let mut has_blockiseq = false;
     while insn_idx < iseq_size {
         // Get the current pc and opcode
         let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
@@ -6116,18 +6114,12 @@ fn compute_bytecode_info(iseq: *const rb_iseq_t, opt_table: &[u32]) -> BytecodeI
                     jump_targets.insert(insn_idx);
                 }
             }
-            YARVINSN_send | YARVINSN_invokesuper => {
-                let blockiseq: IseqPtr = get_arg(pc, 1).as_iseq();
-                if !blockiseq.is_null() {
-                    has_blockiseq = true;
-                }
-            }
             _ => {}
         }
     }
     let mut result = jump_targets.into_iter().collect::<Vec<_>>();
     result.sort();
-    BytecodeInfo { jump_targets: result, has_blockiseq }
+    BytecodeInfo { jump_targets: result }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -6242,7 +6234,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
 
     // Compute a map of PC->Block by finding jump targets
     let jit_entry_insns = jit_entry_insns(iseq);
-    let BytecodeInfo { jump_targets, has_blockiseq } = compute_bytecode_info(iseq, &jit_entry_insns);
+    let BytecodeInfo { jump_targets } = compute_bytecode_info(iseq, &jit_entry_insns);
 
     // Make all empty basic blocks. The ordering of the BBs matters for getting fallthrough jumps
     // in good places, but it's not necessary for correctness. TODO: Higher quality scheduling during lowering.
@@ -6607,7 +6599,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     // Use FrameState to get kw_bits when possible, just like getlocal_WC_0.
                     let val = if !local_inval {
                         state.getlocal(ep_offset)
-                    } else if ep_escaped || has_blockiseq {
+                    } else if ep_escaped {
                         fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false })
                     } else {
                         let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state.without_locals() });
@@ -6730,7 +6722,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                         // In case of JIT-to-JIT send locals might never end up in EP memory.
                         let val = state.getlocal(ep_offset);
                         state.stack_push(val);
-                    } else if ep_escaped || has_blockiseq { // TODO: figure out how to drop has_blockiseq here
+                    } else if ep_escaped {
                         // Read the local using EP
                         let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
                         state.setlocal(ep_offset, val); // remember the result to spill on side-exits
@@ -6751,7 +6743,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 YARVINSN_setlocal_WC_0 => {
                     let ep_offset = get_arg(pc, 0).as_u32();
                     let val = state.stack_pop()?;
-                    if ep_escaped || has_blockiseq { // TODO: figure out how to drop has_blockiseq here
+                    if ep_escaped {
                         // Write the local using EP
                         fun.push_insn(block, Insn::SetLocal { val, ep_offset, level: 0 });
                     } else if local_inval {
