@@ -1271,11 +1271,16 @@ impl Insn {
     /// Return a value number for this instruction if it is pure (effects are Empty).
     /// Two instructions with the same ValueNumber compute the same result and one
     /// can be replaced by the other.
-    fn value_number(&self) -> Option<ValueNumber> {
+    ///
+    /// The `resolve` function canonicalizes operands (e.g. chasing through guards)
+    /// so that instructions using different guards on the same underlying value
+    /// produce identical ValueNumbers.
+    fn value_number(&self, resolve: impl Fn(InsnId) -> InsnId) -> Option<ValueNumber> {
         if !effects::Empty.includes(self.effects_of()) {
             return None;
         }
         let opcode = std::mem::discriminant(self);
+        let r = &resolve;
         use Insn::*;
         match self {
             // Not meaningfully hashable / unique per definition site
@@ -1289,11 +1294,11 @@ impl Insn {
 
             // 1 operand, no data
             Test { val } | IsNil { val } | BoxBool { val } => {
-                Some(ValueNumber { opcode, operands: vec![*val], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*val)], data: vec![] })
             }
             // 1 operand, state excluded (side-exit only)
             BoxFixnum { val, .. } => {
-                Some(ValueNumber { opcode, operands: vec![*val], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*val)], data: vec![] })
             }
 
             // 2 operands, no data
@@ -1304,13 +1309,13 @@ impl Insn {
             | FixnumAnd { left, right } | FixnumOr { left, right }
             | FixnumXor { left, right }
             | FixnumRShift { left, right } => {
-                Some(ValueNumber { opcode, operands: vec![*left, *right], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*left), r(*right)], data: vec![] })
             }
             FixnumAref { recv, index } => {
-                Some(ValueNumber { opcode, operands: vec![*recv, *index], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*recv), r(*index)], data: vec![] })
             }
             IsA { val, class } => {
-                Some(ValueNumber { opcode, operands: vec![*val, *class], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*val), r(*class)], data: vec![] })
             }
 
             // 2 operands + state excluded
@@ -1318,7 +1323,7 @@ impl Insn {
             | FixnumSub { left, right, .. }
             | FixnumMult { left, right, .. }
             | FixnumLShift { left, right, .. } => {
-                Some(ValueNumber { opcode, operands: vec![*left, *right], data: vec![] })
+                Some(ValueNumber { opcode, operands: vec![r(*left), r(*right)], data: vec![] })
             }
 
             // 0 operands
@@ -4725,6 +4730,11 @@ impl Function {
     /// Local value numbering (LVN) per basic block.
     /// For each pure instruction, look up or insert its ValueNumber in a block-local map.
     /// Redundant computations within the same block are replaced via make_equal_to.
+    ///
+    /// Operands are canonicalized through chase_insn, which looks through guards and
+    /// RefineType to the underlying value. This lets LVN see through guards: if two
+    /// GuardType instructions guard the same underlying value, downstream pure operations
+    /// on either guard output will hash identically and be deduplicated.
     // TODO: Upgrade to global value numbering (GVN) by propagating the value map from
     // the immediate dominator. This requires maximal SSA so that cross-block replacements
     // satisfy the block-local definite assignment validator.
@@ -4738,7 +4748,7 @@ impl Function {
             let mut new_insns = Vec::with_capacity(old_insns.len());
             for insn_id in old_insns {
                 let insn = self.find(insn_id);
-                if let Some(vn) = insn.value_number() {
+                if let Some(vn) = insn.value_number(|id| self.chase_insn(id)) {
                     if let Some(&existing) = map.get(&vn) {
                         self.make_equal_to(insn_id, existing);
                         continue;

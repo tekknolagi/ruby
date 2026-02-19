@@ -12920,6 +12920,56 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_value_numbering_sees_through_guards() {
+        // a + b appears twice. Each produces its own GuardType pair, but LVN
+        // chases through guards and deduplicates the second FixnumAdd.
+        eval("
+            def test(a, b)
+                x = a + b
+                y = a + b
+                x + y
+            end
+            test(1, 2)
+            test(3, 4)
+        ");
+        // LVN eliminates the second FixnumAdd (v55) because it sees through
+        // GuardType v53/v54 to the same underlying values as GuardType v47/v48.
+        // The final add uses v49 + v49 instead of v49 + v55.
+        assert_snapshot!(hir_string("test"), @r"
+          fn test@<compiled>:3:
+          bb1():
+            EntryPoint interpreter
+            v1:BasicObject = LoadSelf
+            v2:BasicObject = GetLocal :a, l0, SP@7
+            v3:BasicObject = GetLocal :b, l0, SP@6
+            v4:NilClass = Const Value(nil)
+            Jump bb3(v1, v2, v3, v4, v4)
+          bb2():
+            EntryPoint JIT(0)
+            v8:BasicObject = LoadArg :self@0
+            v9:BasicObject = LoadArg :a@1
+            v10:BasicObject = LoadArg :b@2
+            v11:NilClass = Const Value(nil)
+            Jump bb3(v8, v9, v10, v11, v11)
+          bb3(v14:BasicObject, v15:BasicObject, v16:BasicObject, v17:NilClass, v18:NilClass):
+            PatchPoint MethodRedefined(Integer@0x1000, +@0x1008, cme:0x1010)
+            v47:Fixnum = GuardType v15, Fixnum
+            v48:Fixnum = GuardType v16, Fixnum
+            v49:Fixnum = FixnumAdd v47, v48
+            IncrCounter inline_cfunc_optimized_send_count
+            PatchPoint MethodRedefined(Integer@0x1000, +@0x1008, cme:0x1010)
+            v53:Fixnum = GuardType v15, Fixnum
+            v54:Fixnum = GuardType v16, Fixnum
+            IncrCounter inline_cfunc_optimized_send_count
+            PatchPoint MethodRedefined(Integer@0x1000, +@0x1008, cme:0x1010)
+            v59:Fixnum = FixnumAdd v49, v49
+            IncrCounter inline_cfunc_optimized_send_count
+            CheckInterrupts
+            Return v59
+        ");
+    }
+
+    #[test]
     fn test_value_numbering_eliminates_duplicate_const() {
         // fold_constants produces duplicate Const Value(3) from 1+2; LVN deduplicates them.
         eval("
