@@ -321,6 +321,25 @@ impl Const {
     pub fn print<'a>(&'a self, ptr_map: &'a PtrPrintMap) -> ConstPrinter<'a> {
         ConstPrinter { inner: self, ptr_map }
     }
+
+    /// Convert this constant to a usize for use in value numbering.
+    fn as_usize(&self) -> usize {
+        match self {
+            Const::Value(v) => v.0 as usize,
+            Const::CBool(b) => *b as usize,
+            Const::CInt8(n) => *n as usize,
+            Const::CInt16(n) => *n as usize,
+            Const::CInt32(n) => *n as usize,
+            Const::CInt64(n) => *n as usize,
+            Const::CUInt8(n) => *n as usize,
+            Const::CUInt16(n) => *n as usize,
+            Const::CUInt32(n) => *n as usize,
+            Const::CUInt64(n) => *n as usize,
+            Const::CShape(s) => s.0 as usize,
+            Const::CPtr(p) => *p as usize,
+            Const::CDouble(f) => f.to_bits() as usize,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1058,6 +1077,15 @@ pub enum Insn {
     CheckInterrupts { state: InsnId },
 }
 
+/// A hash key representing the "value" computed by a pure instruction.
+/// Two instructions with the same ValueNumber produce the same result.
+#[derive(Clone, Hash, Eq, PartialEq)]
+struct ValueNumber {
+    opcode: std::mem::Discriminant<Insn>,
+    operands: Vec<InsnId>,
+    data: Vec<usize>,
+}
+
 impl Insn {
     /// Not every instruction returns a value. Return true if the instruction does and false otherwise.
     pub fn has_output(&self) -> bool {
@@ -1237,6 +1265,75 @@ impl Insn {
             Insn::RefineType { .. } => effects::Empty,
             Insn::HasType { .. } => effects::Empty,
             Insn::Entries { .. } => effects::Any,
+        }
+    }
+
+    /// Return a value number for this instruction if it is pure (effects are Empty).
+    /// Two instructions with the same ValueNumber compute the same result and one
+    /// can be replaced by the other.
+    fn value_number(&self) -> Option<ValueNumber> {
+        if !effects::Empty.includes(self.effects_of()) {
+            return None;
+        }
+        let opcode = std::mem::discriminant(self);
+        use Insn::*;
+        match self {
+            // Not meaningfully hashable / unique per definition site
+            Param | LoadArg { .. } | Snapshot { .. } | Entries { .. } => None,
+            // Skip: Type is not Hash/Eq
+            RefineType { .. } | HasType { .. } => None,
+
+            Const { val } => {
+                Some(ValueNumber { opcode, operands: vec![], data: vec![val.as_usize()] })
+            }
+
+            // 1 operand, no data
+            Test { val } | IsNil { val } | BoxBool { val } => {
+                Some(ValueNumber { opcode, operands: vec![*val], data: vec![] })
+            }
+            // 1 operand, state excluded (side-exit only)
+            BoxFixnum { val, .. } => {
+                Some(ValueNumber { opcode, operands: vec![*val], data: vec![] })
+            }
+
+            // 2 operands, no data
+            IsBitEqual { left, right }
+            | FixnumEq { left, right } | FixnumNeq { left, right }
+            | FixnumLt { left, right } | FixnumLe { left, right }
+            | FixnumGt { left, right } | FixnumGe { left, right }
+            | FixnumAnd { left, right } | FixnumOr { left, right }
+            | FixnumXor { left, right }
+            | FixnumRShift { left, right } => {
+                Some(ValueNumber { opcode, operands: vec![*left, *right], data: vec![] })
+            }
+            FixnumAref { recv, index } => {
+                Some(ValueNumber { opcode, operands: vec![*recv, *index], data: vec![] })
+            }
+            IsA { val, class } => {
+                Some(ValueNumber { opcode, operands: vec![*val, *class], data: vec![] })
+            }
+
+            // 2 operands + state excluded
+            FixnumAdd { left, right, .. }
+            | FixnumSub { left, right, .. }
+            | FixnumMult { left, right, .. }
+            | FixnumLShift { left, right, .. } => {
+                Some(ValueNumber { opcode, operands: vec![*left, *right], data: vec![] })
+            }
+
+            // 0 operands
+            LoadEC | GetLEP => {
+                Some(ValueNumber { opcode, operands: vec![], data: vec![] })
+            }
+
+            // 0 operands + scalar data
+            GetEP { level } => {
+                Some(ValueNumber { opcode, operands: vec![], data: vec![*level as usize] })
+            }
+
+            // Anything else with Empty effects that we haven't listed:
+            // conservatively don't value-number it.
+            _ => None,
         }
     }
 
@@ -4625,6 +4722,36 @@ impl Function {
         }
     }
 
+    /// Local value numbering (LVN) per basic block.
+    /// For each pure instruction, look up or insert its ValueNumber in a block-local map.
+    /// Redundant computations within the same block are replaced via make_equal_to.
+    // TODO: Upgrade to global value numbering (GVN) by propagating the value map from
+    // the immediate dominator. This requires maximal SSA so that cross-block replacements
+    // satisfy the block-local definite assignment validator.
+    fn value_numbering(&mut self) {
+        type ValueMap = HashMap<ValueNumber, InsnId>;
+
+        for block in self.rpo() {
+            let mut map = ValueMap::new();
+
+            let old_insns = std::mem::take(&mut self.blocks[block.0].insns);
+            let mut new_insns = Vec::with_capacity(old_insns.len());
+            for insn_id in old_insns {
+                let insn = self.find(insn_id);
+                if let Some(vn) = insn.value_number() {
+                    if let Some(&existing) = map.get(&vn) {
+                        self.make_equal_to(insn_id, existing);
+                        continue;
+                    } else {
+                        map.insert(vn, insn_id);
+                    }
+                }
+                new_insns.push(insn_id);
+            }
+            self.blocks[block.0].insns = new_insns;
+        }
+    }
+
     fn worklist_traverse_single_insn(&self, insn: &Insn, worklist: &mut VecDeque<InsnId>) {
         match insn {
             &Insn::Const { .. }
@@ -5217,6 +5344,7 @@ impl Function {
         run_pass!(optimize_getivar);
         run_pass!(optimize_c_calls);
         run_pass!(fold_constants);
+        run_pass!(value_numbering);
         run_pass!(clean_cfg);
         run_pass!(eliminate_dead_code);
 
