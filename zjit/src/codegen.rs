@@ -1016,18 +1016,25 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
                                 last_snapshot = id;
                             }
                         }
-                        if let Insn::Snapshot { state } = function.find(last_snapshot) {
-                            let stack_vals: Vec<CLValue> = state.stack().map(|&id| cl_opnd!(id)).collect();
-                            let local_vals: Vec<CLValue> = state.locals().map(|&id| cl_opnd!(id)).collect();
-                            let exit = create_side_exit(builder, side_exit_blocks, state.pc as *const u8, stack_vals, local_vals, SideExitReason::UnhandledHIRInsn(insn_id));
-                            builder.ins().jump(exit, &[]);
-                            let cont = builder.create_block();
-                            builder.seal_block(cont);
-                            builder.switch_to_block(cont);
-                            break; // Don't compile further in this block
-                        } else {
-                            panic!("No snapshot found for unhandled instruction {insn_id}: {other}");
+                        if last_snapshot.0 != 0 {
+                            if let Insn::Snapshot { state } = function.find(last_snapshot) {
+                                let stack_vals: Vec<CLValue> = state.stack().map(|&id| cl_opnd!(id)).collect();
+                                let local_vals: Vec<CLValue> = state.locals().map(|&id| cl_opnd!(id)).collect();
+                                let exit = create_side_exit(builder, side_exit_blocks, state.pc as *const u8, stack_vals, local_vals, SideExitReason::UnhandledHIRInsn(insn_id));
+                                builder.ins().jump(exit, &[]);
+                                let cont = builder.create_block();
+                                builder.seal_block(cont);
+                                builder.switch_to_block(cont);
+                                break;
+                            }
                         }
+                        // No snapshot found — return Qundef to bail to interpreter
+                        let qundef = builder.ins().iconst(cl_types::I64, Qundef.as_i64());
+                        builder.ins().return_(&[qundef]);
+                        let cont = builder.create_block();
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        break;
                     }
                 }
             }
