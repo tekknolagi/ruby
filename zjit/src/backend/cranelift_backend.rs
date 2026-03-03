@@ -78,8 +78,10 @@ pub struct CraneliftBuilder {
 
 impl CraneliftBuilder {
     /// Create a new CraneliftBuilder for a function with the ZJIT calling convention:
-    /// `(EC: i64, CFP: i64) -> i64`
-    pub fn new() -> Self {
+    /// `(EC: i64, CFP: i64, arg0: i64, arg1: i64, ...) -> i64`
+    ///
+    /// `num_args` is the number of JIT entry arguments (LoadArg/Param in entry blocks).
+    pub fn new(num_args: usize) -> Self {
         let shared_builder = settings::builder();
         let shared_flags = settings::Flags::new(shared_builder);
         let isa = isa::lookup(target_lexicon::Triple::host())
@@ -91,6 +93,9 @@ impl CraneliftBuilder {
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(types::I64)); // EC
         sig.params.push(AbiParam::new(types::I64)); // CFP
+        for _ in 0..num_args {
+            sig.params.push(AbiParam::new(types::I64)); // JIT entry args
+        }
         sig.returns.push(AbiParam::new(types::I64)); // VALUE return
 
         let func = Function::with_name_signature(UserFuncName::default(), sig);

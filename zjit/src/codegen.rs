@@ -280,16 +280,27 @@ fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, mut version: IseqVersionRef,
 
 /// Compile a function using the Cranelift backend
 fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
-    let mut cl = CraneliftBuilder::new();
+    // Count max params across all blocks to determine function ABI params
+    let num_jit_args = max_num_params(function);
+    let mut cl = CraneliftBuilder::new(num_jit_args);
 
     // Cranelift operands indexed by HIR InsnId
     let mut cl_opnds: Vec<Option<CLValue>> = vec![None; function.num_insns()];
     let iseq_calls: Vec<IseqCallRef> = Vec::new();
 
-    cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, _next_var| {
+    cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, next_var| {
         // Map HIR blocks → Cranelift blocks
         let reverse_post_order = function.rpo();
         let mut hir_to_cl: Vec<Option<CLBlock>> = vec![None; function.num_blocks()];
+
+        // Create Cranelift Variables for each ABI arg so LoadArg can use them
+        // from any block (not just the entry block).
+        let arg_vars: Vec<Variable> = (0..num_jit_args).map(|i| {
+            let var = Variable::from_u32((*next_var + i) as u32);
+            builder.declare_var(var, cl_types::I64);
+            var
+        }).collect();
+        *next_var += num_jit_args;
 
         // Create all Cranelift blocks for HIR blocks
         for &block_id in reverse_post_order.iter() {
@@ -297,7 +308,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
             let cl_block = builder.create_block();
             hir_to_cl[block_id.0] = Some(cl_block);
 
-            // Add block parameters for HIR block params
+            // Add block parameters for HIR block params (SSA phi values)
             let block = function.block(block_id);
             for _ in block.params() {
                 builder.append_block_param(cl_block, cl_types::I64);
@@ -314,15 +325,15 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
 
             let block = function.block(block_id);
 
-            // On the very first block, set up EC, CFP, SP from function params
+            // On the first block (function entry), append the ABI params
+            // and store EC, CFP, SP, and arg values into Variables.
             if is_first_block {
-                let entry_block = cl_block;
-                builder.append_block_params_for_function_params(entry_block);
-                let params = builder.block_params(entry_block);
-                // The function params come after block params
+                builder.append_block_params_for_function_params(cl_block);
+                let all_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
+                // Layout: [block_param_0..N, EC, CFP, arg0, arg1, ...]
                 let num_block_params = block.params().count();
-                let ec_val = params[num_block_params];
-                let cfp_val = params[num_block_params + 1];
+                let ec_val = all_params[num_block_params];
+                let cfp_val = all_params[num_block_params + 1];
                 builder.def_var(ec_var, ec_val);
                 builder.def_var(cfp_var, cfp_val);
 
@@ -330,33 +341,18 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
                 let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
                 builder.def_var(sp_var, sp_val);
 
+                // Store ABI args into Variables so any block can access them
+                for (i, &var) in arg_vars.iter().enumerate() {
+                    builder.def_var(var, all_params[num_block_params + 2 + i]);
+                }
+
                 is_first_block = false;
             }
 
-            // Map block parameters
-            let block_params = builder.block_params(cl_block);
+            // Map block parameters (SSA phi values)
+            let block_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
             for (idx, &insn_id) in block.params().enumerate() {
                 cl_opnds[insn_id.0] = Some(block_params[idx]);
-            }
-
-            // In JIT entry blocks, compile LoadArg: function args come from SP
-            if function.is_entry_block(block_id) {
-                for &insn_id in block.insns() {
-                    if let Insn::LoadArg { idx, .. } = function.find(insn_id) {
-                        let sp = builder.use_var(sp_var);
-                        // Arguments are at SP[-(local_table_size - idx) - 1] but for
-                        // the entry point they are passed from the interpreter stack.
-                        // Actually LoadArg reads from the calling convention — in ZJIT
-                        // entry blocks, args are on the interpreter stack at SP offsets.
-                        // We'll use the same approach as the LIR backend: args at specific
-                        // negative offsets from SP.
-                        let local_size = unsafe { get_iseq_body_local_table_size(iseq) } as usize;
-                        let ep_offset = local_size - idx as usize - 1 + VM_ENV_DATA_SIZE as usize;
-                        let byte_offset = -(ep_offset as i32 + 1) * SIZEOF_VALUE_I32;
-                        let val = builder.ins().load(cl_types::I64, MemFlags::trusted(), sp, Offset32::new(byte_offset));
-                        cl_opnds[insn_id.0] = Some(val);
-                    }
-                }
             }
 
             // Compile all instructions in this block
@@ -414,7 +410,9 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
 
                     // === Parameters ===
                     Insn::Param => {} // handled above via block params
-                    Insn::LoadArg { .. } => {} // handled in the LoadArg pre-pass
+                    Insn::LoadArg { idx, .. } => {
+                        cl_opnds[insn_id.0] = Some(builder.use_var(arg_vars[idx as usize]));
+                    }
 
                     // === Snapshots (no-op) ===
                     Insn::Snapshot { .. } => {}
@@ -788,6 +786,226 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
                         call_c_function_void(builder, isa, rb_zjit_writebarrier_check_immediate as *const u8, &[r, v]);
                     }
 
+                    // Send/InvokeSuper/etc. are complex — handled by fallback side-exit for now
+
+                    // === GetEP ===
+                    Insn::GetEP { level } => {
+                        let cfp = builder.use_var(cfp_var);
+                        let mut ep = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_EP));
+                        for _ in 0..level {
+                            let specval_offset = SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL;
+                            ep = builder.ins().load(cl_types::I64, MemFlags::trusted(), ep, Offset32::new(specval_offset));
+                            let mask = builder.ins().iconst(cl_types::I64, !0x03i64);
+                            ep = builder.ins().band(ep, mask);
+                        }
+                        cl_opnds[insn_id.0] = Some(ep);
+                    }
+
+                    // === Fixnum shifts ===
+                    Insn::FixnumRShift { left, right } => {
+                        let shift_amount = function.type_of(right).fixnum_value().unwrap() as i64;
+                        let result = builder.ins().sshr_imm(cl_opnd!(left), shift_amount);
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let v = builder.ins().bor(result, one);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumLShift { left, right, state } => {
+                        let shift_amount = function.type_of(right).fixnum_value().unwrap() as i64;
+                        let l = cl_opnd!(left);
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let in_val = builder.ins().isub(l, one);
+                        let out_val = builder.ins().ishl_imm(in_val, shift_amount);
+                        let unshifted = builder.ins().sshr_imm(out_val, shift_amount);
+                        let cond = builder.ins().icmp(IntCC::NotEqual, in_val, unshifted);
+                        let exit = cl_side_exit!(state, FixnumLShiftOverflow);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        let tagged = builder.ins().iadd(out_val, one);
+                        cl_opnds[insn_id.0] = Some(tagged);
+                    }
+                    Insn::FixnumMod { left, right, state } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let zero_fix = builder.ins().iconst(cl_types::I64, VALUE::fixnum_from_usize(0).as_i64());
+                        let is_zero = builder.ins().icmp(IntCC::Equal, r, zero_fix);
+                        let exit = cl_side_exit!(state, FixnumModByZero);
+                        let cont = builder.create_block();
+                        builder.ins().brif(is_zero, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        let v = call_c_function(builder, isa, rb_fix_mod_fix as *const u8, &[l, r]);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumDiv { left, right, state } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        cl_save_sp(builder, cfp_var, sp_var, 0);
+                        let zero_fix = builder.ins().iconst(cl_types::I64, VALUE::fixnum_from_usize(0).as_i64());
+                        let is_zero = builder.ins().icmp(IntCC::Equal, r, zero_fix);
+                        let exit = cl_side_exit!(state, FixnumDivByZero);
+                        let cont = builder.create_block();
+                        builder.ins().brif(is_zero, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        let v = call_c_function(builder, isa, rb_jit_fix_div_fix as *const u8, &[l, r]);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumAref { recv, index } => {
+                        let v = call_c_function(builder, isa, rb_fix_aref as *const u8, &[cl_opnd!(recv), cl_opnd!(index)]);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Box/Unbox ===
+                    Insn::BoxBool { val } => {
+                        let v = cl_opnd!(val);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let is_nz = builder.ins().icmp(IntCC::NotEqual, v, zero);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let result = builder.ins().select(is_nz, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(result);
+                    }
+                    Insn::BoxFixnum { val, state } => {
+                        let v = cl_opnd!(val);
+                        // Shift left by 1 and check for overflow by checking if
+                        // (shifted >> 1) == original
+                        let shifted = builder.ins().ishl_imm(v, 1);
+                        let unshifted = builder.ins().sshr_imm(shifted, 1);
+                        let overflow = builder.ins().icmp(IntCC::NotEqual, v, unshifted);
+                        let exit = cl_side_exit!(state, BoxFixnumOverflow);
+                        let cont = builder.create_block();
+                        builder.ins().brif(overflow, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        let flag = builder.ins().iconst(cl_types::I64, RUBY_FIXNUM_FLAG as i64);
+                        let tagged = builder.ins().bor(shifted, flag);
+                        cl_opnds[insn_id.0] = Some(tagged);
+                    }
+
+                    // === IsBitEqual / IsBitNotEqual ===
+                    Insn::IsBitEqual { left, right } => {
+                        let cond = builder.ins().icmp(IntCC::Equal, cl_opnd!(left), cl_opnd!(right));
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let v = builder.ins().select(cond, one, zero);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::IsBitNotEqual { left, right } => {
+                        let cond = builder.ins().icmp(IntCC::NotEqual, cl_opnd!(left), cl_opnd!(right));
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let v = builder.ins().select(cond, one, zero);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::IsBlockGiven { lep } => {
+                        let ep = cl_opnd!(lep);
+                        let specval_offset = SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL;
+                        let block_handler = builder.ins().load(cl_types::I64, MemFlags::trusted(), ep, Offset32::new(specval_offset));
+                        let none = builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64);
+                        let cond = builder.ins().icmp(IntCC::Equal, block_handler, none);
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let v = builder.ins().select(cond, qfalse, qtrue);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === GuardBitEquals / GuardAnyBitSet / GuardNoBitsSet ===
+                    Insn::GuardBitEquals { val, expected, reason, state } => {
+                        let v = cl_opnd!(val);
+                        let exp = match expected {
+                            Const::Value(value) => builder.ins().iconst(cl_types::I64, value.as_i64()),
+                            Const::CPtr(ptr) => builder.ins().iconst(cl_types::I64, ptr as i64),
+                            Const::CInt64(i) => builder.ins().iconst(cl_types::I64, i),
+                            _ => builder.ins().iconst(cl_types::I64, 0),
+                        };
+                        let cond = builder.ins().icmp(IntCC::NotEqual, v, exp);
+                        let exit = cl_side_exit!(state, reason);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::GuardAnyBitSet { val, mask, reason, state, .. } => {
+                        let v = cl_opnd!(val);
+                        let m = match mask {
+                            Const::Value(value) => builder.ins().iconst(cl_types::I64, value.as_i64()),
+                            Const::CInt64(i) => builder.ins().iconst(cl_types::I64, i),
+                            _ => builder.ins().iconst(cl_types::I64, 0),
+                        };
+                        let masked = builder.ins().band(v, m);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let cond = builder.ins().icmp(IntCC::Equal, masked, zero);
+                        let exit = cl_side_exit!(state, reason);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::GuardNoBitsSet { val, mask, reason, state, .. } => {
+                        let v = cl_opnd!(val);
+                        let m = match mask {
+                            Const::Value(value) => builder.ins().iconst(cl_types::I64, value.as_i64()),
+                            Const::CInt64(i) => builder.ins().iconst(cl_types::I64, i),
+                            _ => builder.ins().iconst(cl_types::I64, 0),
+                        };
+                        let masked = builder.ins().band(v, m);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let cond = builder.ins().icmp(IntCC::NotEqual, masked, zero);
+                        let exit = cl_side_exit!(state, reason);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::GuardLess { left, right, state } => {
+                        let cond = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, cl_opnd!(left), cl_opnd!(right));
+                        let exit = cl_side_exit!(state, SideExitReason::GuardLess);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(cl_opnd!(left));
+                    }
+                    Insn::GuardGreaterEq { left, right, state, .. } => {
+                        let cond = builder.ins().icmp(IntCC::SignedLessThan, cl_opnd!(left), cl_opnd!(right));
+                        let exit = cl_side_exit!(state, SideExitReason::GuardGreaterEq);
+                        let cont = builder.create_block();
+                        builder.ins().brif(cond, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(cl_opnd!(left));
+                    }
+                    Insn::GuardTypeNot { val, guard_type, state } => {
+                        // For now, just pass through — most GuardTypeNot
+                        // patterns are handled by type inference
+                        cl_opnds[insn_id.0] = Some(cl_opnd!(val));
+                    }
+
+                    // === HasType ===
+                    Insn::HasType { val, expected } => {
+                        let v = cl_opnd!(val);
+                        if expected.is_subtype(types::Fixnum) {
+                            let flag = builder.ins().iconst(cl_types::I64, RUBY_FIXNUM_FLAG as i64);
+                            let masked = builder.ins().band(v, flag);
+                            let zero = builder.ins().iconst(cl_types::I64, 0);
+                            let cond = builder.ins().icmp(IntCC::NotEqual, masked, zero);
+                            let one = builder.ins().iconst(cl_types::I64, 1);
+                            let result = builder.ins().select(cond, one, zero);
+                            cl_opnds[insn_id.0] = Some(result);
+                        } else {
+                            // Fallback: return 0 (false)
+                            let zero = builder.ins().iconst(cl_types::I64, 0);
+                            cl_opnds[insn_id.0] = Some(zero);
+                        }
+                    }
+
+                    // Array/String/Hash/Send operations fall through to side-exit for now
+
                     // === Fallback: side-exit for unimplemented instructions ===
                     other => {
                         // Find the last snapshot for this instruction
@@ -857,9 +1075,38 @@ fn cl_save_sp(builder: &mut FunctionBuilder, cfp_var: Variable, sp_var: Variable
     builder.ins().store(MemFlags::trusted(), sp_addr, cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
 }
 
-/// Save PC to CFP for Cranelift builder
-fn cl_save_pc(_builder: &mut FunctionBuilder, _cfp_var: Variable, _state: &FrameState) {
-    // TODO: properly save PC from frame state
+/// Save PC to CFP from a FrameState
+fn cl_save_pc_from_state(builder: &mut FunctionBuilder, cfp_var: Variable, state: &FrameState) {
+    let cfp = builder.use_var(cfp_var);
+    let pc = builder.ins().iconst(cl_types::I64, state.pc as i64);
+    builder.ins().store(MemFlags::trusted(), pc, cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+}
+
+/// Spill stack and locals for a non-leaf call
+fn cl_spill_state(
+    builder: &mut FunctionBuilder,
+    state: &FrameState,
+    cl_opnds: &[Option<CLValue>],
+    cfp_var: Variable,
+    sp_var: Variable,
+    iseq: IseqPtr,
+) {
+    let sp = builder.use_var(sp_var);
+    // Spill stack
+    for (idx, &insn_id) in state.stack().enumerate() {
+        if let Some(val) = cl_opnds[insn_id.0] {
+            let offset = (idx as i32) * SIZEOF_VALUE_I32;
+            builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(offset));
+        }
+    }
+    // Spill locals
+    for (idx, &insn_id) in state.locals().enumerate() {
+        if let Some(val) = cl_opnds[insn_id.0] {
+            let ep_offset = local_idx_to_ep_offset(iseq, idx);
+            let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+            builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(byte_offset));
+        }
+    }
 }
 
 /// Compile an instruction
