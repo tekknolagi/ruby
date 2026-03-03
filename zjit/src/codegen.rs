@@ -16,7 +16,7 @@ use crate::invariants::{
 use crate::gc::append_gc_offsets;
 use crate::payload::{get_or_create_iseq_payload, IseqCodePtrs, IseqVersion, IseqVersionRef, IseqStatus};
 use crate::state::ZJITState;
-use crate::stats::{CompileError, exit_counter_for_compile_error, exit_counter_for_unhandled_hir_insn, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_for_super_method_type, send_fallback_counter_ptr_for_opcode, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type};
+use crate::stats::{CompileError, exit_counter_for_compile_error, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_for_super_method_type, send_fallback_counter_ptr_for_opcode, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type};
 use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::{compile_time_ns, exit_compile_error}};
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::backend::lir::{self, Assembler, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_STACK_PTR, Opnd, SP, SideExit, Target, asm_ccall, asm_comment};
@@ -25,6 +25,18 @@ use crate::hir::{Const, FrameState, Function, Insn, InsnId, SendFallbackReason};
 use crate::hir_type::{types, Type};
 use crate::options::get_option;
 use crate::cast::IntoUsize;
+
+// Cranelift backend
+use cranelift_codegen::ir::{
+    types as cl_types, Block as CLBlock, InstBuilder, MemFlags, Value as CLValue,
+    condcodes::IntCC,
+};
+use cranelift_codegen::ir::immediates::Offset32;
+use cranelift_frontend::{FunctionBuilder, Variable};
+use crate::backend::cranelift_backend::{
+    CraneliftBuilder, call_c_function, call_c_function_void,
+    create_side_exit, emit_side_exit_block,
+};
 
 /// At the moment, we support recompiling each ISEQ only once.
 pub const MAX_ISEQ_VERSIONS: usize = 2;
@@ -266,172 +278,588 @@ fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, mut version: IseqVersionRef,
     Ok(iseq_code_ptrs)
 }
 
-/// Compile a function
-fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
-    let num_spilled_params = max_num_params(function).saturating_sub(ALLOC_REGS.len());
-    let mut jit = JITState::new(iseq, version, function.num_insns(), function.num_blocks());
-    let mut asm = Assembler::new_with_stack_slots(num_spilled_params);
+/// Compile a function using the Cranelift backend
+fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
+    let mut cl = CraneliftBuilder::new();
 
-    // Mapping from HIR block IDs to LIR block IDs.
-    // This is is a one-to-one mapping from HIR to LIR blocks used for finding
-    // jump targets in LIR (LIR should always jump to the head of an HIR block)
-    let mut hir_to_lir: Vec<Option<lir::BlockId>> = vec![None; function.num_blocks()];
+    // Cranelift operands indexed by HIR InsnId
+    let mut cl_opnds: Vec<Option<CLValue>> = vec![None; function.num_insns()];
+    let iseq_calls: Vec<IseqCallRef> = Vec::new();
 
-    let reverse_post_order = function.rpo();
+    cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, _next_var| {
+        // Map HIR blocks → Cranelift blocks
+        let reverse_post_order = function.rpo();
+        let mut hir_to_cl: Vec<Option<CLBlock>> = vec![None; function.num_blocks()];
 
-    // Create all LIR basic blocks corresponding to HIR basic blocks
-    for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
-        // Skip the entries superblock — it's an internal CFG artifact
-        if block_id == function.entries_block { continue; }
-        let lir_block_id = asm.new_block(block_id, function.is_entry_block(block_id), rpo_idx);
-        hir_to_lir[block_id.0] = Some(lir_block_id);
-    }
+        // Create all Cranelift blocks for HIR blocks
+        for &block_id in reverse_post_order.iter() {
+            if block_id == function.entries_block { continue; }
+            let cl_block = builder.create_block();
+            hir_to_cl[block_id.0] = Some(cl_block);
 
-    // Compile each basic block
-    for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
-        // Skip the entries superblock — it's an internal CFG artifact
-        if block_id == function.entries_block { continue; }
-        // Set the current block to the LIR block that corresponds to this
-        // HIR block.
-        let lir_block_id = hir_to_lir[block_id.0].unwrap();
-        asm.set_current_block(lir_block_id);
-
-        // Write a label to jump to the basic block
-        let label = jit.get_label(&mut asm, lir_block_id, block_id);
-        asm.write_label(label);
-
-        let block = function.block(block_id);
-        asm_comment!(
-            asm, "{block_id}({}): {}",
-            block.params().map(|param| format!("{param}")).collect::<Vec<_>>().join(", "),
-            iseq_get_location(iseq, block.insn_idx),
-        );
-
-        // Compile all parameters
-        for (idx, &insn_id) in block.params().enumerate() {
-            match function.find(insn_id) {
-                Insn::Param => {
-                    jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx));
-                },
-                insn => unreachable!("Non-param insn found in block.params: {insn:?}"),
+            // Add block parameters for HIR block params
+            let block = function.block(block_id);
+            for _ in block.params() {
+                builder.append_block_param(cl_block, cl_types::I64);
             }
         }
 
-        // In JIT entry blocks, compile LoadArg instructions before other instructions
-        // so that calling convention registers are reserved early, like Param.
-        if function.is_entry_block(block_id) {
+        // Emit each HIR block
+        let mut is_first_block = true;
+        for &block_id in reverse_post_order.iter() {
+            if block_id == function.entries_block { continue; }
+
+            let cl_block = hir_to_cl[block_id.0].unwrap();
+            builder.switch_to_block(cl_block);
+
+            let block = function.block(block_id);
+
+            // On the very first block, set up EC, CFP, SP from function params
+            if is_first_block {
+                let entry_block = cl_block;
+                builder.append_block_params_for_function_params(entry_block);
+                let params = builder.block_params(entry_block);
+                // The function params come after block params
+                let num_block_params = block.params().count();
+                let ec_val = params[num_block_params];
+                let cfp_val = params[num_block_params + 1];
+                builder.def_var(ec_var, ec_val);
+                builder.def_var(cfp_var, cfp_val);
+
+                // Load SP from [CFP + RUBY_OFFSET_CFP_SP]
+                let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
+                builder.def_var(sp_var, sp_val);
+
+                is_first_block = false;
+            }
+
+            // Map block parameters
+            let block_params = builder.block_params(cl_block);
+            for (idx, &insn_id) in block.params().enumerate() {
+                cl_opnds[insn_id.0] = Some(block_params[idx]);
+            }
+
+            // In JIT entry blocks, compile LoadArg: function args come from SP
+            if function.is_entry_block(block_id) {
+                for &insn_id in block.insns() {
+                    if let Insn::LoadArg { idx, .. } = function.find(insn_id) {
+                        let sp = builder.use_var(sp_var);
+                        // Arguments are at SP[-(local_table_size - idx) - 1] but for
+                        // the entry point they are passed from the interpreter stack.
+                        // Actually LoadArg reads from the calling convention — in ZJIT
+                        // entry blocks, args are on the interpreter stack at SP offsets.
+                        // We'll use the same approach as the LIR backend: args at specific
+                        // negative offsets from SP.
+                        let local_size = unsafe { get_iseq_body_local_table_size(iseq) } as usize;
+                        let ep_offset = local_size - idx as usize - 1 + VM_ENV_DATA_SIZE as usize;
+                        let byte_offset = -(ep_offset as i32 + 1) * SIZEOF_VALUE_I32;
+                        let val = builder.ins().load(cl_types::I64, MemFlags::trusted(), sp, Offset32::new(byte_offset));
+                        cl_opnds[insn_id.0] = Some(val);
+                    }
+                }
+            }
+
+            // Compile all instructions in this block
             for &insn_id in block.insns() {
-                if let Insn::LoadArg { idx, .. } = function.find(insn_id) {
-                    jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx as usize));
+                let insn = function.find(insn_id);
+
+                // Helper to get a previously compiled operand
+                macro_rules! cl_opnd {
+                    ($id:expr) => {
+                        cl_opnds[$id.0].unwrap_or_else(|| panic!("Missing CL opnd for {}", $id))
+                    };
+                }
+
+                // Build a side exit block for the given frame state and reason
+                macro_rules! cl_side_exit {
+                    ($state:expr, $reason:expr) => {{
+                        let state = &function.frame_state($state);
+                        let stack_vals: Vec<CLValue> = state.stack().map(|&id| cl_opnd!(id)).collect();
+                        let local_vals: Vec<CLValue> = state.locals().map(|&id| cl_opnd!(id)).collect();
+                        create_side_exit(builder, side_exit_blocks, state.pc as *const u8, stack_vals, local_vals, $reason)
+                    }};
+                }
+
+                match insn {
+                    // === Constants ===
+                    Insn::Const { val: Const::Value(val) } => {
+                        // Store VALUE in the value pool for GC tracking
+                        let _idx = value_pool.len();
+                        value_pool.push(val);
+                        // For now, just use iconst with the raw value.
+                        // TODO: use value pool indirection for GC safety
+                        let v = builder.ins().iconst(cl_types::I64, val.as_i64());
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::Const { val: Const::CPtr(ptr) } => {
+                        let v = builder.ins().iconst(cl_types::I64, ptr as i64);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::Const { val: Const::CInt64(val) } => {
+                        let v = builder.ins().iconst(cl_types::I64, val);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::Const { val: Const::CUInt16(val) } => {
+                        let v = builder.ins().iconst(cl_types::I64, val as i64);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::Const { val: Const::CUInt32(val) } => {
+                        let v = builder.ins().iconst(cl_types::I64, val as i64);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::Const { val: Const::CShape(val) } => {
+                        let v = builder.ins().iconst(cl_types::I64, val.0 as i64);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Parameters ===
+                    Insn::Param => {} // handled above via block params
+                    Insn::LoadArg { .. } => {} // handled in the LoadArg pre-pass
+
+                    // === Snapshots (no-op) ===
+                    Insn::Snapshot { .. } => {}
+
+                    // === Load VM state ===
+                    Insn::LoadEC => {
+                        cl_opnds[insn_id.0] = Some(builder.use_var(ec_var));
+                    }
+                    Insn::LoadSP => {
+                        cl_opnds[insn_id.0] = Some(builder.use_var(sp_var));
+                    }
+                    Insn::LoadSelf => {
+                        let cfp = builder.use_var(cfp_var);
+                        let v = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::LoadPC => {
+                        let cfp = builder.use_var(cfp_var);
+                        let v = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Fixnum arithmetic ===
+                    Insn::FixnumAdd { left, right, state } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        // Untag left: subtract 1 (the fixnum tag)
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let left_untag = builder.ins().isub(l, one);
+                        // Add and check overflow
+                        let (result, overflow) = builder.ins().sadd_overflow(left_untag, r);
+                        let exit_block = cl_side_exit!(state, FixnumAddOverflow);
+                        let cont_block = builder.create_block();
+                        builder.ins().brif(overflow, exit_block, &[], cont_block, &[]);
+                        builder.seal_block(cont_block);
+                        builder.switch_to_block(cont_block);
+                        cl_opnds[insn_id.0] = Some(result);
+                    }
+                    Insn::FixnumSub { left, right, state } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let (result, overflow) = builder.ins().ssub_overflow(l, r);
+                        let exit_block = cl_side_exit!(state, FixnumSubOverflow);
+                        let cont_block = builder.create_block();
+                        builder.ins().brif(overflow, exit_block, &[], cont_block, &[]);
+                        builder.seal_block(cont_block);
+                        builder.switch_to_block(cont_block);
+                        // Re-tag: add 1
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let tagged = builder.ins().iadd(result, one);
+                        cl_opnds[insn_id.0] = Some(tagged);
+                    }
+                    Insn::FixnumMult { left, right, state } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        // x * y => (x >> 1) * (y - 1) + 1
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let left_untag = builder.ins().sshr_imm(l, 1);
+                        let right_untag = builder.ins().isub(r, one);
+                        let (result, overflow) = builder.ins().smul_overflow(left_untag, right_untag);
+                        let exit_block = cl_side_exit!(state, FixnumMultOverflow);
+                        let cont_block = builder.create_block();
+                        builder.ins().brif(overflow, exit_block, &[], cont_block, &[]);
+                        builder.seal_block(cont_block);
+                        builder.switch_to_block(cont_block);
+                        let tagged = builder.ins().iadd(result, one);
+                        cl_opnds[insn_id.0] = Some(tagged);
+                    }
+
+                    // === Fixnum comparisons ===
+                    Insn::FixnumEq { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::Equal, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumNeq { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::NotEqual, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumLt { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::SignedLessThan, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumLe { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumGt { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumGe { left, right } => {
+                        let l = cl_opnd!(left);
+                        let r = cl_opnd!(right);
+                        let cond = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r);
+                        let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                        let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                        let v = builder.ins().select(cond, qtrue, qfalse);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Fixnum bitwise ===
+                    Insn::FixnumAnd { left, right } => {
+                        let v = builder.ins().band(cl_opnd!(left), cl_opnd!(right));
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumOr { left, right } => {
+                        let v = builder.ins().bor(cl_opnd!(left), cl_opnd!(right));
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::FixnumXor { left, right } => {
+                        let xored = builder.ins().bxor(cl_opnd!(left), cl_opnd!(right));
+                        let one = builder.ins().iconst(cl_types::I64, 1);
+                        let v = builder.ins().iadd(xored, one);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Unbox/box ===
+                    Insn::UnboxFixnum { val } => {
+                        let v = builder.ins().sshr_imm(cl_opnd!(val), 1);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Tests ===
+                    Insn::Test { val } => {
+                        // RB_TEST: val & ~Qnil != 0
+                        let mask = builder.ins().iconst(cl_types::I64, !Qnil.as_i64());
+                        let masked = builder.ins().band(cl_opnd!(val), mask);
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let cond = builder.ins().icmp(IntCC::Equal, masked, zero);
+                        let v_zero = builder.ins().iconst(cl_types::I64, 0);
+                        let v_one = builder.ins().iconst(cl_types::I64, 1);
+                        let v = builder.ins().select(cond, v_zero, v_one);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::IsNil { val } => {
+                        let qnil = builder.ins().iconst(cl_types::I64, Qnil.as_i64());
+                        let cond = builder.ins().icmp(IntCC::Equal, cl_opnd!(val), qnil);
+                        let v_one = builder.ins().iconst(cl_types::I64, 1);
+                        let v_zero = builder.ins().iconst(cl_types::I64, 0);
+                        let v = builder.ins().select(cond, v_one, v_zero);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::RefineType { val, .. } => {
+                        cl_opnds[insn_id.0] = Some(cl_opnd!(val));
+                    }
+
+                    // === Guards ===
+                    Insn::GuardType { val, guard_type, state } => {
+                        let v = cl_opnd!(val);
+                        let exit = cl_side_exit!(state, GuardType(guard_type));
+                        let cont = builder.create_block();
+
+                        if guard_type.is_subtype(types::Fixnum) {
+                            let flag = builder.ins().iconst(cl_types::I64, RUBY_FIXNUM_FLAG as i64);
+                            let masked = builder.ins().band(v, flag);
+                            let zero = builder.ins().iconst(cl_types::I64, 0);
+                            let is_not_fixnum = builder.ins().icmp(IntCC::Equal, masked, zero);
+                            builder.ins().brif(is_not_fixnum, exit, &[], cont, &[]);
+                        } else if guard_type.is_subtype(types::NilClass) {
+                            let qnil = builder.ins().iconst(cl_types::I64, Qnil.as_i64());
+                            let is_not_nil = builder.ins().icmp(IntCC::NotEqual, v, qnil);
+                            builder.ins().brif(is_not_nil, exit, &[], cont, &[]);
+                        } else if guard_type.is_subtype(types::TrueClass) {
+                            let qtrue = builder.ins().iconst(cl_types::I64, Qtrue.as_i64());
+                            let is_not = builder.ins().icmp(IntCC::NotEqual, v, qtrue);
+                            builder.ins().brif(is_not, exit, &[], cont, &[]);
+                        } else if guard_type.is_subtype(types::FalseClass) {
+                            let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                            let is_not = builder.ins().icmp(IntCC::NotEqual, v, qfalse);
+                            builder.ins().brif(is_not, exit, &[], cont, &[]);
+                        } else if let Some(expected_class) = guard_type.runtime_exact_ruby_class() {
+                            // Check not special constant
+                            let imm_mask = builder.ins().iconst(cl_types::I64, RUBY_IMMEDIATE_MASK as i64);
+                            let masked = builder.ins().band(v, imm_mask);
+                            let zero = builder.ins().iconst(cl_types::I64, 0);
+                            let is_immediate = builder.ins().icmp(IntCC::NotEqual, masked, zero);
+                            builder.ins().brif(is_immediate, exit, &[], cont, &[]);
+                            builder.seal_block(cont);
+                            builder.switch_to_block(cont);
+
+                            // Check not false
+                            let cont2 = builder.create_block();
+                            let qfalse = builder.ins().iconst(cl_types::I64, Qfalse.as_i64());
+                            let is_false = builder.ins().icmp(IntCC::Equal, v, qfalse);
+                            builder.ins().brif(is_false, exit, &[], cont2, &[]);
+                            builder.seal_block(cont2);
+                            builder.switch_to_block(cont2);
+
+                            // Check klass
+                            let cont3 = builder.create_block();
+                            let klass = builder.ins().load(cl_types::I64, MemFlags::trusted(), v, Offset32::new(RUBY_OFFSET_RBASIC_KLASS));
+                            let expected = builder.ins().iconst(cl_types::I64, expected_class.as_i64());
+                            let is_wrong_class = builder.ins().icmp(IntCC::NotEqual, klass, expected);
+                            builder.ins().brif(is_wrong_class, exit, &[], cont3, &[]);
+                            builder.seal_block(cont3);
+                            builder.switch_to_block(cont3);
+                            cl_opnds[insn_id.0] = Some(v);
+                            continue; // skip the seal+switch below
+                        } else {
+                            // For other guard types, just jump to the exit unconditionally
+                            // TODO: implement remaining guard types
+                            builder.ins().jump(exit, &[]);
+                            builder.seal_block(cont);
+                            builder.switch_to_block(cont);
+                            cl_opnds[insn_id.0] = Some(v);
+                            continue;
+                        }
+
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Control flow ===
+                    Insn::IfTrue { val, target } => {
+                        let v = cl_opnd!(val);
+                        let then_block = hir_to_cl[target.target.0].unwrap();
+                        let else_block = builder.create_block();
+
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let is_zero = builder.ins().icmp(IntCC::Equal, v, zero);
+                        let args: Vec<CLValue> = target.args.iter().map(|id| cl_opnd!(*id)).collect();
+                        builder.ins().brif(is_zero, else_block, &[], then_block, &args);
+                        builder.seal_block(else_block);
+                        builder.switch_to_block(else_block);
+                    }
+                    Insn::IfFalse { val, target } => {
+                        let v = cl_opnd!(val);
+                        let then_block = hir_to_cl[target.target.0].unwrap();
+                        let else_block = builder.create_block();
+
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        let is_zero = builder.ins().icmp(IntCC::Equal, v, zero);
+                        let args: Vec<CLValue> = target.args.iter().map(|id| cl_opnd!(*id)).collect();
+                        builder.ins().brif(is_zero, then_block, &args, else_block, &[]);
+                        builder.seal_block(else_block);
+                        builder.switch_to_block(else_block);
+                    }
+                    Insn::Jump(target) => {
+                        let target_block = hir_to_cl[target.target.0].unwrap();
+                        let args: Vec<CLValue> = target.args.iter().map(|id| cl_opnd!(*id)).collect();
+                        builder.ins().jump(target_block, &args);
+                    }
+
+                    // === Return ===
+                    Insn::Return { val } => {
+                        let v = cl_opnd!(val);
+                        let cfp = builder.use_var(cfp_var);
+                        let ec = builder.use_var(ec_var);
+
+                        // Pop the current frame (ec->cfp++)
+                        let frame_size = builder.ins().iconst(cl_types::I64, RUBY_SIZEOF_CONTROL_FRAME as i64);
+                        let new_cfp = builder.ins().iadd(cfp, frame_size);
+                        builder.def_var(cfp_var, new_cfp);
+                        builder.ins().store(MemFlags::trusted(), new_cfp, ec, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
+
+                        builder.ins().return_(&[v]);
+                    }
+
+                    // === Entry point ===
+                    Insn::EntryPoint { .. } => {
+                        // In the Cranelift backend, entry points are handled by the
+                        // function structure itself. No special code needed.
+                        // TODO: record entry point addresses for JIT-to-JIT calls
+                    }
+
+                    // === Side exit ===
+                    Insn::SideExit { state, reason } => {
+                        let exit = cl_side_exit!(state, reason);
+                        builder.ins().jump(exit, &[]);
+                        // Create an unreachable continuation block
+                        let cont = builder.create_block();
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                    }
+
+                    // === Check interrupts ===
+                    Insn::CheckInterrupts { state } => {
+                        let ec = builder.use_var(ec_var);
+                        let interrupt_flag = builder.ins().load(cl_types::I32, MemFlags::trusted(), ec, Offset32::new(RUBY_OFFSET_EC_INTERRUPT_FLAG as i32));
+                        let zero = builder.ins().iconst(cl_types::I32, 0);
+                        let has_interrupt = builder.ins().icmp(IntCC::NotEqual, interrupt_flag, zero);
+                        let exit = cl_side_exit!(state, SideExitReason::Interrupt);
+                        let cont = builder.create_block();
+                        builder.ins().brif(has_interrupt, exit, &[], cont, &[]);
+                        builder.seal_block(cont);
+                        builder.switch_to_block(cont);
+                    }
+
+                    // === Memory loads ===
+                    Insn::LoadField { recv, id: _, offset, return_type } => {
+                        let base = cl_opnd!(recv);
+                        let num_bits = return_type.num_bits();
+                        let cl_type = match num_bits {
+                            8 => cl_types::I8,
+                            16 => cl_types::I16,
+                            32 => cl_types::I32,
+                            _ => cl_types::I64,
+                        };
+                        let loaded = builder.ins().load(cl_type, MemFlags::trusted(), base, Offset32::new(offset));
+                        // Sign-extend to I64 if narrower
+                        let v = if num_bits < 64 {
+                            builder.ins().sextend(cl_types::I64, loaded)
+                        } else {
+                            loaded
+                        };
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::StoreField { recv, id: _, offset, val } => {
+                        let base = cl_opnd!(recv);
+                        let v = cl_opnd!(val);
+                        builder.ins().store(MemFlags::trusted(), v, base, Offset32::new(offset));
+                    }
+
+                    // === C calls (generic send, etc.) ===
+                    // For now, delegate most complex operations to C function calls
+                    Insn::CCall { cfunc, recv, args, .. } => {
+                        let mut cargs = vec![cl_opnd!(recv)];
+                        for &arg in args.iter() {
+                            cargs.push(cl_opnd!(arg));
+                        }
+                        // Save SP for potential GC
+                        cl_save_sp(builder, cfp_var, sp_var, 0);
+                        let v = call_c_function(builder, isa, cfunc, &cargs);
+                        cl_opnds[insn_id.0] = Some(v);
+                    }
+
+                    // === Patch points ===
+                    Insn::PatchPoint { invariant: _, state: _ } => {
+                        // TODO: implement proper patch point support with NOPs
+                        // For now, patch points are no-ops (the invariant is assumed to hold)
+                    }
+
+                    // === Counter increment (stats) ===
+                    Insn::IncrCounter(_counter) => {
+                        // TODO: implement counter increment
+                    }
+                    Insn::IncrCounterPtr { .. } => {
+                        // TODO: implement counter increment
+                    }
+
+                    // === Write barrier ===
+                    Insn::WriteBarrier { recv, val } => {
+                        let r = cl_opnd!(recv);
+                        let v = cl_opnd!(val);
+                        call_c_function_void(builder, isa, rb_zjit_writebarrier_check_immediate as *const u8, &[r, v]);
+                    }
+
+                    // === Fallback: side-exit for unimplemented instructions ===
+                    other => {
+                        // Find the last snapshot for this instruction
+                        let mut last_snapshot = InsnId(0);
+                        for &id in block.insns() {
+                            if id == insn_id { break; }
+                            if matches!(function.find(id), Insn::Snapshot { .. }) {
+                                last_snapshot = id;
+                            }
+                        }
+                        if let Insn::Snapshot { state } = function.find(last_snapshot) {
+                            let stack_vals: Vec<CLValue> = state.stack().map(|&id| cl_opnd!(id)).collect();
+                            let local_vals: Vec<CLValue> = state.locals().map(|&id| cl_opnd!(id)).collect();
+                            let exit = create_side_exit(builder, side_exit_blocks, state.pc as *const u8, stack_vals, local_vals, SideExitReason::UnhandledHIRInsn(insn_id));
+                            builder.ins().jump(exit, &[]);
+                            let cont = builder.create_block();
+                            builder.seal_block(cont);
+                            builder.switch_to_block(cont);
+                            break; // Don't compile further in this block
+                        } else {
+                            panic!("No snapshot found for unhandled instruction {insn_id}: {other}");
+                        }
+                    }
                 }
             }
         }
 
-        // Compile all instructions
-        for &insn_id in block.insns() {
-            let insn = function.find(insn_id);
-            match insn {
-                Insn::IfFalse { val, target } => {
-                    let val_opnd = jit.get_opnd(val);
-
-                    let lir_target = hir_to_lir[target.target.0].unwrap();
-
-                    let fall_through_target = asm.new_block(block_id, false, rpo_idx);
-
-                    let branch_edge = lir::BranchEdge {
-                        target: lir_target,
-                        args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
-                    };
-
-                    let fall_through_edge = lir::BranchEdge {
-                        target: fall_through_target,
-                        args: vec![]
-                    };
-
-                    gen_if_false(&mut asm, val_opnd, branch_edge, fall_through_edge);
-                    assert!(asm.current_block().insns.last().unwrap().is_terminator());
-
-                    asm.set_current_block(fall_through_target);
-
-                    let label = jit.get_label(&mut asm, fall_through_target, block_id);
-                    asm.write_label(label);
-                },
-                Insn::IfTrue { val, target } => {
-                    let val_opnd = jit.get_opnd(val);
-
-                    let lir_target = hir_to_lir[target.target.0].unwrap();
-
-                    let fall_through_target = asm.new_block(block_id, false, rpo_idx);
-
-                    let branch_edge = lir::BranchEdge {
-                        target: lir_target,
-                        args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
-                    };
-
-                    let fall_through_edge = lir::BranchEdge {
-                        target: fall_through_target,
-                        args: vec![]
-                    };
-
-                    gen_if_true(&mut asm, val_opnd, branch_edge, fall_through_edge);
-                    assert!(asm.current_block().insns.last().unwrap().is_terminator());
-
-                    asm.set_current_block(fall_through_target);
-
-                    let label = jit.get_label(&mut asm, fall_through_target, block_id);
-                    asm.write_label(label);
-                }
-                Insn::Jump(target) => {
-                    let lir_target = hir_to_lir[target.target.0].unwrap();
-                    let branch_edge = lir::BranchEdge {
-                        target: lir_target,
-                        args: target.args.iter().map(|insn_id| jit.get_opnd(*insn_id)).collect()
-                    };
-                    gen_jump(&mut asm, branch_edge);
-                    assert!(asm.current_block().insns.last().unwrap().is_terminator());
-
-                },
-                _ => {
-                    if let Err(last_snapshot) = gen_insn(cb, &mut jit, &mut asm, function, insn_id, &insn) {
-                        debug!("ZJIT: gen_function: Failed to compile insn: {insn_id} {insn}. Generating side-exit.");
-                        gen_incr_counter(&mut asm, exit_counter_for_unhandled_hir_insn(&insn));
-                        gen_side_exit(&mut jit, &mut asm, &SideExitReason::UnhandledHIRInsn(insn_id), &function.frame_state(last_snapshot));
-                        // Don't bother generating code after a side-exit. We won't run it.
-                        // TODO(max): Generate ud2 or equivalent.
-                        break;
-                    };
-                    // It's fine; we generated the instruction
-                }
+        // Seal all HIR blocks (they have all predecessors known)
+        for &block_id in reverse_post_order.iter() {
+            if block_id == function.entries_block { continue; }
+            if let Some(cl_block) = hir_to_cl[block_id.0] {
+                builder.seal_block(cl_block);
             }
         }
-        // Blocks should always end with control flow
-        assert!(asm.current_block().insns.last().unwrap().is_terminator());
+
+        // Emit side exit blocks
+        for info in side_exit_blocks.iter() {
+            emit_side_exit_block(builder, info, cfp_var, sp_var);
+        }
+    });
+
+    // Compile and copy to CodeBlock
+    let (start_ptr, gc_offsets) = cl.compile(cb)?;
+
+    if get_option!(perf) {
+        let start_usize = start_ptr.raw_addr(cb);
+        let end_usize = cb.get_write_ptr().raw_addr(cb);
+        let code_size = end_usize - start_usize;
+        let iseq_name = iseq_get_location(iseq, 0);
+        register_with_perf(iseq_name, start_usize, code_size);
+    }
+    if ZJITState::should_log_compiled_iseqs() {
+        let iseq_name = iseq_get_location(iseq, 0);
+        ZJITState::log_compile(iseq_name);
     }
 
-    // Generate code if everything can be compiled
-    let result = asm.compile(cb);
-    if let Ok((start_ptr, _)) = result {
-        if get_option!(perf) {
-            let start_usize = start_ptr.raw_addr(cb);
-            let end_usize = cb.get_write_ptr().raw_addr(cb);
-            let code_size = end_usize - start_usize;
-            let iseq_name = iseq_get_location(iseq, 0);
-            register_with_perf(iseq_name, start_usize, code_size);
-        }
-        if ZJITState::should_log_compiled_iseqs() {
-            let iseq_name = iseq_get_location(iseq, 0);
-            ZJITState::log_compile(iseq_name);
-        }
-    }
-    result.map(|(start_ptr, gc_offsets)| {
-        // Make sure jit_entry_ptrs can be used as a parallel vector to jit_entry_insns()
-        jit.jit_entries.sort_by_key(|jit_entry| jit_entry.borrow().jit_entry_idx);
+    // TODO: support jit_entry_ptrs for JIT-to-JIT calls
+    Ok((IseqCodePtrs { start_ptr, jit_entry_ptrs: vec![] }, gc_offsets, iseq_calls))
+}
 
-        let jit_entry_ptrs = jit.jit_entries.iter().map(|jit_entry|
-            jit_entry.borrow().start_addr.get().expect("start_addr should have been set by pos_marker in gen_entry_point")
-        ).collect();
-        (IseqCodePtrs { start_ptr, jit_entry_ptrs }, gc_offsets, jit.iseq_calls)
-    })
+/// Save SP to CFP for Cranelift builder
+fn cl_save_sp(builder: &mut FunctionBuilder, cfp_var: Variable, sp_var: Variable, stack_size: usize) {
+    let sp = builder.use_var(sp_var);
+    let cfp = builder.use_var(cfp_var);
+    let offset = builder.ins().iconst(cl_types::I64, (stack_size * SIZEOF_VALUE) as i64);
+    let sp_addr = builder.ins().iadd(sp, offset);
+    builder.ins().store(MemFlags::trusted(), sp_addr, cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+}
+
+/// Save PC to CFP for Cranelift builder
+fn cl_save_pc(_builder: &mut FunctionBuilder, _cfp_var: Variable, _state: &FrameState) {
+    // TODO: properly save PC from frame state
 }
 
 /// Compile an instruction
