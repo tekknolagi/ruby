@@ -801,8 +801,10 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         call_c_function_void(builder, isa, rb_zjit_writebarrier_check_immediate as *const u8, &[r, v]);
                     }
 
-                    // === SendDirect: JIT-to-JIT call ===
-                    Insn::SendDirect { cme, iseq: callee_iseq, recv, args, kw_bits, blockiseq, state, .. } => {
+                    // === SendDirect: JIT-to-JIT call (no block, no bmethod) ===
+                    Insn::SendDirect { cme, iseq: callee_iseq, recv, args, kw_bits, blockiseq: None, state, .. }
+                        if VM_METHOD_TYPE_BMETHOD != unsafe { get_cme_def_type(cme) } =>
+                    {
                         let state = &function.frame_state(state);
                         let callee_iseq = callee_iseq;
                         let local_size = unsafe { get_iseq_body_local_table_size(callee_iseq) }.to_usize();
@@ -840,17 +842,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         // ep[-2]: CME
                         let cme_val = builder.ins().iconst(cl_types::I64, VALUE::from(cme).as_i64());
                         builder.ins().store(MemFlags::trusted(), cme_val, sp, Offset32::new((ep_offset - 2) * SIZEOF_VALUE_I32));
-                        // ep[-1]: specval (block handler)
-                        let specval = if let Some(biseq) = blockiseq {
-                            // cfp_self | 1 as block handler — simplified
-                            let biseq_val = builder.ins().iconst(cl_types::I64, VALUE::from(biseq).as_i64());
-                            let self_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
-                            let self_addr = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
-                            // Store blockiseq to callee CFP block_code later; use VM_BLOCK_HANDLER_NONE for now
-                            builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64)
-                        } else {
-                            builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64)
-                        };
+                        // ep[-1]: specval (block handler = none, we matched blockiseq: None)
+                        let specval = builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64);
                         builder.ins().store(MemFlags::trusted(), specval, sp, Offset32::new((ep_offset - 1) * SIZEOF_VALUE_I32));
                         // ep[0]: frame type
                         let frame_type = builder.ins().iconst(cl_types::I64, (VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL) as i64);
