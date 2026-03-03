@@ -297,6 +297,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
     let iseq_calls: Vec<IseqCallRef> = Vec::new();
     // Patch points to emit after Cranelift compilation
     let mut patch_points: Vec<CLPatchPointInfo> = Vec::new();
+    // Call target cells for lazy JIT-to-JIT stubs: (cell_ptr, num_jit_args)
+    let mut cl_call_cells: Vec<(*const CLCallTargetCell, usize)> = Vec::new();
 
     cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, next_var| {
         // Map HIR blocks → Cranelift blocks
@@ -799,6 +801,167 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         call_c_function_void(builder, isa, rb_zjit_writebarrier_check_immediate as *const u8, &[r, v]);
                     }
 
+                    // === SendDirect: JIT-to-JIT call ===
+                    Insn::SendDirect { cme, iseq: callee_iseq, recv, args, kw_bits, blockiseq, state, .. } => {
+                        let state = &function.frame_state(state);
+                        let callee_iseq = callee_iseq;
+                        let local_size = unsafe { get_iseq_body_local_table_size(callee_iseq) }.to_usize();
+                        let argc = args.len();
+
+                        let sp = builder.use_var(sp_var);
+                        let cfp = builder.use_var(cfp_var);
+                        let ec = builder.use_var(ec_var);
+
+                        // Save caller PC and SP
+                        let pc_val = builder.ins().iconst(cl_types::I64, state.pc as i64);
+                        builder.ins().store(MemFlags::trusted(), pc_val, cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+                        let caller_sp_offset = ((state.stack().count() - argc - 1) * SIZEOF_VALUE) as i64;
+                        let caller_sp = builder.ins().iadd_imm(sp, caller_sp_offset);
+                        builder.ins().store(MemFlags::trusted(), caller_sp, cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+
+                        // Spill locals
+                        for (idx, &lid) in state.locals().enumerate() {
+                            if let Some(val) = cl_opnds[lid.0] {
+                                let ep_offset = local_idx_to_ep_offset(iseq, idx);
+                                let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(byte_offset));
+                            }
+                        }
+                        // Spill stack
+                        for (idx, &sid) in state.stack().enumerate() {
+                            if let Some(val) = cl_opnds[sid.0] {
+                                let offset = (idx as i32) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(offset));
+                            }
+                        }
+
+                        // Push frame: write EP metadata to the stack
+                        let ep_offset = state.stack().count() as i32 + local_size as i32 - argc as i32 + VM_ENV_DATA_SIZE as i32 - 1;
+                        // ep[-2]: CME
+                        let cme_val = builder.ins().iconst(cl_types::I64, VALUE::from(cme).as_i64());
+                        builder.ins().store(MemFlags::trusted(), cme_val, sp, Offset32::new((ep_offset - 2) * SIZEOF_VALUE_I32));
+                        // ep[-1]: specval (block handler)
+                        let specval = if let Some(biseq) = blockiseq {
+                            // cfp_self | 1 as block handler — simplified
+                            let biseq_val = builder.ins().iconst(cl_types::I64, VALUE::from(biseq).as_i64());
+                            let self_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
+                            let self_addr = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
+                            // Store blockiseq to callee CFP block_code later; use VM_BLOCK_HANDLER_NONE for now
+                            builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64)
+                        } else {
+                            builder.ins().iconst(cl_types::I64, VM_BLOCK_HANDLER_NONE as i64)
+                        };
+                        builder.ins().store(MemFlags::trusted(), specval, sp, Offset32::new((ep_offset - 1) * SIZEOF_VALUE_I32));
+                        // ep[0]: frame type
+                        let frame_type = builder.ins().iconst(cl_types::I64, (VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL) as i64);
+                        builder.ins().store(MemFlags::trusted(), frame_type, sp, Offset32::new(ep_offset * SIZEOF_VALUE_I32));
+
+                        // Write callee CFP (CFP - sizeof(control_frame))
+                        let cfp_size = builder.ins().iconst(cl_types::I64, RUBY_SIZEOF_CONTROL_FRAME as i64);
+                        let callee_cfp = builder.ins().isub(cfp, cfp_size);
+                        // callee cfp->iseq
+                        let iseq_val = builder.ins().iconst(cl_types::I64, VALUE::from(callee_iseq).as_i64());
+                        builder.ins().store(MemFlags::trusted(), iseq_val, callee_cfp, Offset32::new(RUBY_OFFSET_CFP_ISEQ));
+                        // callee cfp->self
+                        let recv_val = cl_opnd!(recv);
+                        builder.ins().store(MemFlags::trusted(), recv_val, callee_cfp, Offset32::new(RUBY_OFFSET_CFP_SELF));
+                        // callee cfp->ep
+                        let ep_addr = builder.ins().iadd_imm(sp, (ep_offset * SIZEOF_VALUE_I32) as i64);
+                        builder.ins().store(MemFlags::trusted(), ep_addr, callee_cfp, Offset32::new(RUBY_OFFSET_CFP_EP));
+                        // callee cfp->block_code = 0
+                        let zero = builder.ins().iconst(cl_types::I64, 0);
+                        builder.ins().store(MemFlags::trusted(), zero, callee_cfp, Offset32::new(RUBY_OFFSET_CFP_BLOCK_CODE));
+
+                        // Write keyword bits if needed
+                        if unsafe { rb_get_iseq_flags_has_kw(callee_iseq) } {
+                            let keyword = unsafe { rb_get_iseq_body_param_keyword(callee_iseq) };
+                            let bits_start = unsafe { (*keyword).bits_start } as usize;
+                            let unspecified_bits = VALUE::fixnum_from_usize(kw_bits as usize);
+                            let bits_offset = (state.stack().count() - argc + bits_start) * SIZEOF_VALUE;
+                            let bits_val = builder.ins().iconst(cl_types::I64, unspecified_bits.as_i64());
+                            builder.ins().store(MemFlags::trusted(), bits_val, sp, Offset32::new(bits_offset as i32));
+                        }
+
+                        // Switch to callee SP
+                        let sp_offset_bytes = ((state.stack().count() + local_size - argc + VM_ENV_DATA_SIZE.to_usize()) * SIZEOF_VALUE) as i64;
+                        let callee_sp = builder.ins().iadd_imm(sp, sp_offset_bytes);
+                        builder.def_var(sp_var, callee_sp);
+                        // Write callee cfp->sp so the callee entry block can load it
+                        builder.ins().store(MemFlags::trusted(), callee_sp, callee_cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+                        // Switch to callee CFP
+                        builder.def_var(cfp_var, callee_cfp);
+                        builder.ins().store(MemFlags::trusted(), callee_cfp, ec, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
+
+                        // Fill non-parameter locals with nil
+                        let num_params = unsafe { callee_iseq.params() }.size.to_usize();
+                        if local_size > num_params {
+                            let qnil_val = builder.ins().iconst(cl_types::I64, Qnil.as_i64());
+                            for local_idx in num_params..local_size {
+                                let offset = local_size_and_idx_to_bp_offset(local_size, local_idx);
+                                builder.ins().store(MemFlags::trusted(), qnil_val, callee_sp, Offset32::new(-offset * SIZEOF_VALUE_I32));
+                            }
+                        }
+
+                        // Build argument list for the callee: (EC, CFP, recv, args...)
+                        let callee_ec = builder.use_var(ec_var);
+                        let callee_cfp_val = builder.use_var(cfp_var);
+                        let mut c_args = vec![callee_ec, callee_cfp_val, recv_val];
+                        for &arg in args.iter() {
+                            c_args.push(cl_opnd!(arg));
+                        }
+
+                        // Compute the optional entry point index
+                        let params = unsafe { callee_iseq.params() };
+                        let num_optionals_passed = if params.flags.has_opt() != 0 {
+                            let lead_num = params.lead_num as u32;
+                            let opt_num = params.opt_num as u32;
+                            let keyword = params.keyword;
+                            let kw_total_num = if keyword.is_null() { 0 } else { unsafe { (*keyword).num } } as u32;
+                            let positional_argc = argc as u32 - kw_total_num;
+                            positional_argc.saturating_sub(lead_num)
+                        } else {
+                            0
+                        };
+
+                        // Create a call target cell for lazy compilation.
+                        // The cell initially holds 0 (will be set to lazy stub addr after Cranelift compile).
+                        let cell = Box::leak(Box::new(CLCallTargetCell {
+                            target: std::sync::atomic::AtomicU64::new(0),
+                            iseq: callee_iseq,
+                            jit_entry_idx: num_optionals_passed,
+                        }));
+                        // Record the cell so we can generate the lazy stub after Cranelift compilation
+                        cl_call_cells.push((cell as *const CLCallTargetCell, c_args.len() - 2)); // -2 for EC, CFP
+
+                        // Load target address from the cell and call_indirect
+                        let cell_addr = builder.ins().iconst(cl_types::I64, cell as *const CLCallTargetCell as i64);
+                        let target_addr = builder.ins().load(cl_types::I64, MemFlags::trusted(), cell_addr, Offset32::new(0));
+                        let callee_sig = crate::backend::cranelift_backend::make_ccall_sig(isa.default_call_conv(), c_args.len());
+                        let sig_ref = builder.import_signature(callee_sig);
+                        let call = builder.ins().call_indirect(sig_ref, target_addr, &c_args);
+                        let ret = builder.inst_results(call)[0];
+
+                        // Check if callee returned Qundef (side-exit propagation)
+                        let qundef = builder.ins().iconst(cl_types::I64, Qundef.as_i64());
+                        let is_qundef = builder.ins().icmp(IntCC::Equal, ret, qundef);
+                        let exit_block = builder.create_block();
+                        let cont_block = builder.create_block();
+                        builder.ins().brif(is_qundef, exit_block, &[], cont_block, &[]);
+
+                        // Exit block: propagate Qundef
+                        builder.seal_block(exit_block);
+                        builder.switch_to_block(exit_block);
+                        builder.ins().return_(&[qundef]);
+
+                        // Continue block: restore SP
+                        builder.seal_block(cont_block);
+                        builder.switch_to_block(cont_block);
+                        let restored_sp = builder.ins().iadd_imm(callee_sp, -(sp_offset_bytes));
+                        builder.def_var(sp_var, restored_sp);
+
+                        cl_opnds[insn_id.0] = Some(ret);
+                    }
+
                     // Send/InvokeSuper/etc. are complex — handled by fallback side-exit for now
 
                     // === GetEP ===
@@ -1069,6 +1232,13 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
     // Compile and copy to CodeBlock
     let (start_ptr, gc_offsets) = cl.compile(cb)?;
+
+    // Generate lazy compile stubs for SendDirect call cells
+    for &(cell_ptr, num_args) in cl_call_cells.iter() {
+        let stub_ptr = gen_cl_lazy_stub(cb, cell_ptr, num_args)?;
+        let cell = unsafe { &*cell_ptr };
+        cell.target.store(stub_ptr.raw_ptr(cb) as u64, std::sync::atomic::Ordering::Release);
+    }
 
     if get_option!(perf) {
         let start_usize = start_ptr.raw_addr(cb);
@@ -3528,6 +3698,130 @@ fn function_stub_hit_body(cb: &mut CodeBlock, iseq_call: &IseqCallRef) -> Result
     });
 
     Ok(jit_entry_ptr)
+}
+
+/// A Cranelift call target cell: holds a function pointer that can be lazily updated.
+/// The Cranelift-compiled caller loads from this cell and does call_indirect.
+/// Initially points to a lazy compile stub; after compilation, points to the real code.
+pub struct CLCallTargetCell {
+    /// The function pointer (atomic so it can be updated after the caller is compiled)
+    pub target: std::sync::atomic::AtomicU64,
+    /// The callee ISEQ to compile
+    pub iseq: IseqPtr,
+    /// JIT entry index for optional parameter entry points
+    pub jit_entry_idx: u32,
+}
+// Safety: we only access CLCallTargetCell while holding the VM lock
+unsafe impl Send for CLCallTargetCell {}
+unsafe impl Sync for CLCallTargetCell {}
+
+c_callable! {
+    /// Called by the Cranelift lazy compile stub when a SendDirect target hasn't been compiled yet.
+    /// Compiles the callee ISEQ and updates the call target cell to point to the compiled code.
+    /// Returns the compiled code address (or exit trampoline on failure).
+    fn cl_lazy_compile(cell_ptr: *const CLCallTargetCell, cfp: CfpPtr, sp: *mut VALUE) -> *const u8 {
+        with_vm_lock(src_loc!(), || {
+            let cell = unsafe { &*cell_ptr };
+            let iseq = cell.iseq;
+            let jit_entry_idx = cell.jit_entry_idx;
+
+            // Set PC before potential allocation/GC
+            let entry_insn_idxs = crate::hir::jit_entry_insns(iseq);
+            let pc = unsafe { rb_iseq_pc_at_idx(iseq, entry_insn_idxs[jit_entry_idx.to_usize()]) };
+            unsafe { rb_set_cfp_pc(cfp, pc) };
+
+            let cb = ZJITState::get_code_block();
+
+            // Compile the callee
+            let result = with_time_stat(compile_time_ns, || gen_iseq(cb, iseq, None));
+            let code_ptr = match result {
+                Ok(code_ptrs) => {
+                    let entry = if (jit_entry_idx as usize) < code_ptrs.jit_entry_ptrs.len() {
+                        code_ptrs.jit_entry_ptrs[jit_entry_idx as usize]
+                    } else if !code_ptrs.jit_entry_ptrs.is_empty() {
+                        code_ptrs.jit_entry_ptrs[0]
+                    } else {
+                        code_ptrs.start_ptr
+                    };
+                    // Update the cell so future calls go directly to compiled code
+                    cell.target.store(entry.raw_ptr(cb) as u64, std::sync::atomic::Ordering::Release);
+                    entry
+                }
+                Err(err) => {
+                    debug!("{err:?}: cl_lazy_compile failed: {}", iseq_get_location(iseq, 0));
+                    // Fill nils in non-parameter locals for clean interpreter exit
+                    unsafe {
+                        rb_set_cfp_sp(cfp, sp);
+                        let local_size = get_iseq_body_local_table_size(iseq).to_usize();
+                        let num_params = iseq.params().size.to_usize();
+                        let base = sp.offset(-local_size_and_idx_to_bp_offset(local_size, num_params) as isize);
+                        slice::from_raw_parts_mut(base, local_size - num_params).fill(Qnil);
+                    }
+                    ZJITState::get_exit_trampoline_with_counter()
+                }
+            };
+
+            cb.mark_all_executable();
+            code_ptr.raw_ptr(cb)
+        })
+    }
+}
+
+/// Generate a Cranelift-compatible lazy compile stub for a given number of args.
+/// The stub has the same ABI as the callee: `(EC, CFP, arg0..argN) -> VALUE`.
+/// On first call it compiles the callee, updates the cell, and calls the compiled code.
+fn gen_cl_lazy_stub(cb: &mut CodeBlock, cell_ptr: *const CLCallTargetCell, num_args: usize) -> Result<CodePtr, CompileError> {
+    use crate::backend::cranelift_backend::CraneliftBuilder;
+
+    // Build a tiny Cranelift function: (EC, CFP, args...) -> VALUE
+    // that calls cl_lazy_compile, then call_indirects to the result with the same args.
+    let total_params = 2 + num_args; // EC, CFP, args...
+    let mut cl = CraneliftBuilder::new(num_args);
+
+    cl.build(|builder, isa, _side_exit_blocks, _value_pool, ec_var, cfp_var, sp_var, _next_var| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+
+        let params: Vec<CLValue> = builder.block_params(entry).to_vec();
+        let ec_val = params[0];
+        let cfp_val = params[1];
+        builder.def_var(ec_var, ec_val);
+        builder.def_var(cfp_var, cfp_val);
+        // Load SP for cl_lazy_compile
+        let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
+        builder.def_var(sp_var, sp_val);
+
+        // Call cl_lazy_compile(cell_ptr, CFP, SP) -> compiled code address
+        let cell_arg = builder.ins().iconst(cl_types::I64, cell_ptr as i64);
+        let compiled_addr = call_c_function(builder, isa, cl_lazy_compile as *const u8, &[cell_arg, cfp_val, sp_val]);
+
+        // Check if compilation failed (returned exit trampoline which returns Qundef)
+        let zero = builder.ins().iconst(cl_types::I64, 0);
+        let failed = builder.ins().icmp(IntCC::Equal, compiled_addr, zero);
+        let fail_block = builder.create_block();
+        let ok_block = builder.create_block();
+        builder.ins().brif(failed, fail_block, &[], ok_block, &[]);
+
+        // Failure: return Qundef
+        builder.seal_block(fail_block);
+        builder.switch_to_block(fail_block);
+        let qundef = builder.ins().iconst(cl_types::I64, Qundef.as_i64());
+        builder.ins().return_(&[qundef]);
+
+        // Success: call_indirect to the compiled code with the original args
+        builder.seal_block(ok_block);
+        builder.switch_to_block(ok_block);
+        let callee_sig = crate::backend::cranelift_backend::make_ccall_sig(isa.default_call_conv(), total_params);
+        let sig_ref = builder.import_signature(callee_sig);
+        let call = builder.ins().call_indirect(sig_ref, compiled_addr, &params);
+        let ret = builder.inst_results(call)[0];
+        builder.ins().return_(&[ret]);
+
+        builder.seal_block(entry);
+    });
+
+    cl.compile(cb).map(|(ptr, _)| ptr)
 }
 
 /// Compile a stub for an ISEQ called by SendDirect
