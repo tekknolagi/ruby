@@ -278,8 +278,16 @@ fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, mut version: IseqVersionRef,
     Ok(iseq_code_ptrs)
 }
 
+/// Info collected during Cranelift lowering for each PatchPoint instruction.
+/// After Cranelift compilation, we emit side exit stubs and NOP sleds using the
+/// LIR Assembler and register them with the invariant system.
+struct CLPatchPointInfo {
+    invariant: Invariant,
+    state: FrameState,
+}
+
 /// Compile a function using the Cranelift backend
-fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
+fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
     // Count max params across all blocks to determine function ABI params
     let num_jit_args = max_num_params(function);
     let mut cl = CraneliftBuilder::new(num_jit_args);
@@ -287,6 +295,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
     // Cranelift operands indexed by HIR InsnId
     let mut cl_opnds: Vec<Option<CLValue>> = vec![None; function.num_insns()];
     let iseq_calls: Vec<IseqCallRef> = Vec::new();
+    // Patch points to emit after Cranelift compilation
+    let mut patch_points: Vec<CLPatchPointInfo> = Vec::new();
 
     cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, next_var| {
         // Map HIR blocks → Cranelift blocks
@@ -766,9 +776,12 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
                     }
 
                     // === Patch points ===
-                    Insn::PatchPoint { invariant: _, state: _ } => {
-                        // TODO: implement proper patch point support with NOPs
-                        // For now, patch points are no-ops (the invariant is assumed to hold)
+                    Insn::PatchPoint { invariant, state } => {
+                        // Collect info — actual NOP sled + side exit stub emitted after Cranelift compilation
+                        patch_points.push(CLPatchPointInfo {
+                            invariant,
+                            state: function.frame_state(state).clone(),
+                        });
                     }
 
                     // === Counter increment (stats) ===
@@ -1067,6 +1080,60 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, _version: IseqVersionRef, fun
     if ZJITState::should_log_compiled_iseqs() {
         let iseq_name = iseq_get_location(iseq, 0);
         ZJITState::log_compile(iseq_name);
+    }
+
+    // Emit patch point stubs using the LIR Assembler after the Cranelift code.
+    // Each patch point gets a NOP sled (which can be overwritten with a jump)
+    // and a side exit stub.
+    for pp_info in patch_points.iter() {
+        // Emit side exit stub
+        let mut exit_asm = Assembler::new();
+        exit_asm.new_block_without_id();
+        // Save VM state for the side exit
+        let exit_state = &pp_info.state;
+        asm_comment!(exit_asm, "patch point side exit");
+        exit_asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(exit_state.pc));
+        exit_asm.lea_into(
+            Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP),
+            Opnd::mem(64, SP, exit_state.stack().count() as i32 * SIZEOF_VALUE_I32),
+        );
+        exit_asm.frame_teardown(&[]);
+        exit_asm.cret(Opnd::UImm(Qundef.as_u64()));
+        let (side_exit_ptr, _) = exit_asm.compile(cb)?;
+
+        // Emit NOP sled at the current write position — this is the patch point
+        let mut nop_asm = Assembler::new();
+        nop_asm.new_block_without_id();
+        nop_asm.pad_patch_point();
+        let (patch_point_ptr, _) = nop_asm.compile(cb)?;
+
+        // Register with the invariant system
+        match pp_info.invariant {
+            Invariant::BOPRedefined { klass, bop } => {
+                track_bop_assumption(klass, bop, patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::MethodRedefined { klass: _, method: _, cme } => {
+                track_cme_assumption(cme, patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::StableConstantNames { idlist } => {
+                track_stable_constant_names_assumption(idlist, patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::NoTracePoint => {
+                track_no_trace_point_assumption(patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::NoEPEscape(iseq_ptr) => {
+                track_no_ep_escape_assumption(iseq_ptr, patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::SingleRactorMode => {
+                track_single_ractor_assumption(patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::NoSingletonClass { klass } => {
+                track_no_singleton_class_assumption(klass, patch_point_ptr, side_exit_ptr, version);
+            }
+            Invariant::RootBoxOnly => {
+                track_root_box_assumption(patch_point_ptr, side_exit_ptr, version);
+            }
+        }
     }
 
     // TODO: support jit_entry_ptrs for JIT-to-JIT calls
