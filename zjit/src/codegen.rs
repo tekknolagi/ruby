@@ -312,24 +312,26 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         !block.insns().any(|&id| matches!(function.find(id), Insn::IfTrue { .. } | Insn::IfFalse { .. }))
     });
 
-    // When we can't split entries, fall back to the old approach:
-    // all blocks in one function with num_jit_args extra ABI params for LoadArgs.
-    let num_jit_args = max_num_params(function);
+    // When we can't split entries, include everything in one function.
+    // ABI is just (EC, CFP) — no extra SP param. SP is loaded from CFP internally.
     let (merge_block_id, num_merge_params) = if can_split_entries {
         (merge_block_id, num_merge_params)
     } else {
-        // First entry block becomes the body entry. Extra ABI params for LoadArgs.
         let first_entry = reverse_post_order.iter().copied()
             .find(|&bid| bid != function.entries_block && function.is_entry_block(bid))
             .unwrap_or(merge_block_id);
-        // Use num_jit_args as merge params so LoadArg can read from ABI
-        (first_entry, num_jit_args)
+        // -1 to cancel the +1 for SP in body_extra_args, since we load SP from CFP
+        // Actually, body_extra_args = 1 + num_merge_params, and we want 0 extra args.
+        // So num_merge_params must be -1 to get body_extra_args = 0.
+        // Instead, let's handle this differently below.
+        (first_entry, 0)
     };
 
     // === Step 1: Compile the body function ===
     // Signature: (EC, CFP, SP, merge_param0..N) -> VALUE, tail calling convention
-    // num_args = extra params beyond EC, CFP = SP + merge_params
-    let body_extra_args = 1 + num_merge_params; // SP, then merge params
+    // When can_split_entries: extra params = SP + merge_params
+    // When !can_split_entries: no extra params (SP loaded from CFP)
+    let body_extra_args = if can_split_entries { 1 + num_merge_params } else { 0 };
     let mut cl = CraneliftBuilder::new(body_extra_args);
 
     // Cranelift operands indexed by HIR InsnId
@@ -377,27 +379,30 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
             let block = function.block(block_id);
 
-            // The merge block (first body block) gets its params from function ABI
+            // The first body block gets its params from function ABI
             if is_first_body_block {
                 builder.append_block_params_for_function_params(cl_block);
                 let all_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
-                // ABI layout: (EC, CFP, SP, merge_param_0, merge_param_1, ...)
-                let ec_val = all_params[0];
-                let cfp_val = all_params[1];
-                let sp_val = all_params[2];
-                builder.def_var(ec_var, ec_val);
-                builder.def_var(cfp_var, cfp_val);
-                builder.def_var(sp_var, sp_val);
 
-                // Map block params from ABI params [3..]
-                for (idx, &insn_id) in block.params().enumerate() {
-                    cl_opnds[insn_id.0] = Some(all_params[3 + idx]);
-                }
-                // When !can_split_entries, store arg ABI values for LoadArg
-                if !can_split_entries {
-                    for i in 0..num_merge_params {
-                        arg_abi_values.push(all_params[3 + i]);
+                if can_split_entries {
+                    // Split path: ABI layout = (EC, CFP, SP, merge_param_0, ...)
+                    let ec_val = all_params[0];
+                    let cfp_val = all_params[1];
+                    let sp_val = all_params[2];
+                    builder.def_var(ec_var, ec_val);
+                    builder.def_var(cfp_var, cfp_val);
+                    builder.def_var(sp_var, sp_val);
+                    for (idx, &insn_id) in block.params().enumerate() {
+                        cl_opnds[insn_id.0] = Some(all_params[3 + idx]);
                     }
+                } else {
+                    // Non-split path: ABI layout = (EC, CFP). Load SP from CFP.
+                    let ec_val = all_params[0];
+                    let cfp_val = all_params[1];
+                    builder.def_var(ec_var, ec_val);
+                    builder.def_var(cfp_var, cfp_val);
+                    let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
+                    builder.def_var(sp_var, sp_val);
                 }
 
                 is_first_body_block = false;
@@ -465,10 +470,17 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                     // === Parameters ===
                     Insn::Param => {} // handled above via block params
                     Insn::LoadArg { idx, .. } => {
-                        // When entries are split, LoadArg is handled in entry functions.
-                        // When entries are NOT split, LoadArg reads from ABI params.
-                        if !can_split_entries && (idx as usize) < arg_abi_values.len() {
-                            cl_opnds[insn_id.0] = Some(arg_abi_values[idx as usize]);
+                        if can_split_entries {
+                            // Handled in entry point functions — shouldn't appear in body
+                        } else {
+                            // Non-split path: LoadArg reads from the interpreter stack.
+                            // This mirrors what the interpreter entry does with LoadField.
+                            let sp = builder.use_var(sp_var);
+                            let local_size = unsafe { get_iseq_body_local_table_size(iseq) } as i32;
+                            let ep_offset = local_size - idx as i32 - 1 + VM_ENV_DATA_SIZE as i32;
+                            let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+                            let val = builder.ins().load(cl_types::I64, MemFlags::trusted(), sp, Offset32::new(byte_offset));
+                            cl_opnds[insn_id.0] = Some(val);
                         }
                     }
 
