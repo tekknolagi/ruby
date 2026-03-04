@@ -946,9 +946,14 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         builder.switch_to_block(exit_block);
                         builder.ins().return_(&[qundef]);
 
-                        // Continue block: restore SP
+                        // Continue block: restore CFP and SP
                         builder.seal_block(cont_block);
                         builder.switch_to_block(cont_block);
+                        // Reload CFP from EC (callee popped its frame)
+                        let ec_after = builder.use_var(ec_var);
+                        let restored_cfp = builder.ins().load(cl_types::I64, MemFlags::trusted(), ec_after, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
+                        builder.def_var(cfp_var, restored_cfp);
+                        // Restore SP
                         let restored_sp = builder.ins().iadd_imm(callee_sp, -(sp_offset_bytes));
                         builder.def_var(sp_var, restored_sp);
 
@@ -3577,7 +3582,16 @@ fn max_num_params(function: &Function) -> usize {
     let reverse_post_order = function.rpo();
     reverse_post_order.iter().map(|&block_id| {
         let block = function.block(block_id);
-        block.params().len()
+        // Count block params AND LoadArg slots (they share the same ABI param space)
+        let block_param_count = block.params().len();
+        let max_load_arg = block.insns().filter_map(|&insn_id| {
+            if let Insn::LoadArg { idx, .. } = function.find(insn_id) {
+                Some(idx as usize + 1)
+            } else {
+                None
+            }
+        }).max().unwrap_or(0);
+        block_param_count.max(max_load_arg)
     }).max().unwrap_or(0)
 }
 

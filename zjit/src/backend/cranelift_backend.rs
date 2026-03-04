@@ -154,6 +154,13 @@ impl CraneliftBuilder {
     /// Compile the built function and copy the machine code into the CodeBlock.
     /// Returns the start CodePtr and GC offsets (empty since we use value pool).
     pub fn compile(self, cb: &mut CodeBlock) -> Result<(CodePtr, Vec<CodePtr>), CompileError> {
+        // Dump Cranelift IR if --zjit-dump-lir is set
+        if crate::options::get_option!(dump_lir).is_some() {
+            eprintln!("=== Cranelift IR ===");
+            eprintln!("{}", self.func.display());
+            eprintln!("===================");
+        }
+
         let mut ctx = Context::for_function(self.func);
 
         ctx.compile(&*self.isa, &mut Default::default())
