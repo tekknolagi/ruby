@@ -941,9 +941,45 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         let cont_block = builder.create_block();
                         builder.ins().brif(is_qundef, exit_block, &[], cont_block, &[]);
 
-                        // Exit block: propagate Qundef
+                        // Exit block: callee returned Qundef (side-exit or compilation failure).
+                        // Pop the callee frame, restore caller CFP/SP, and side-exit to the interpreter
+                        // using the caller's frame state so the interpreter can resume correctly.
                         builder.seal_block(exit_block);
                         builder.switch_to_block(exit_block);
+                        // Restore ec->cfp to caller frame (pop callee CFP)
+                        let exit_ec = builder.use_var(ec_var);
+                        let caller_cfp_size = builder.ins().iconst(cl_types::I64, RUBY_SIZEOF_CONTROL_FRAME as i64);
+                        let exit_callee_cfp = builder.use_var(cfp_var);
+                        let exit_caller_cfp = builder.ins().iadd(exit_callee_cfp, caller_cfp_size);
+                        builder.def_var(cfp_var, exit_caller_cfp);
+                        builder.ins().store(MemFlags::trusted(), exit_caller_cfp, exit_ec, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
+                        // Restore caller SP
+                        let exit_sp = builder.ins().iadd_imm(callee_sp, -(sp_offset_bytes));
+                        builder.def_var(sp_var, exit_sp);
+                        // Side-exit with caller's state
+                        let exit_cfp = builder.use_var(cfp_var);
+                        let exit_sp_val = builder.use_var(sp_var);
+                        // Save caller PC
+                        builder.ins().store(MemFlags::trusted(), pc_val, exit_cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+                        // Save caller SP
+                        let sp_for_interp = builder.ins().iadd_imm(exit_sp_val, (state.stack().count() * SIZEOF_VALUE) as i64);
+                        builder.ins().store(MemFlags::trusted(), sp_for_interp, exit_cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+                        // Spill caller stack
+                        for (idx, &sid) in state.stack().enumerate() {
+                            if let Some(val) = cl_opnds[sid.0] {
+                                let offset = (idx as i32) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, exit_sp_val, Offset32::new(offset));
+                            }
+                        }
+                        // Spill caller locals
+                        for (idx, &lid) in state.locals().enumerate() {
+                            if let Some(val) = cl_opnds[lid.0] {
+                                let ep_offset = local_idx_to_ep_offset(iseq, idx);
+                                let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, exit_sp_val, Offset32::new(byte_offset));
+                            }
+                        }
+                        // Return Qundef to bail to interpreter
                         builder.ins().return_(&[qundef]);
 
                         // Continue block: restore CFP and SP
