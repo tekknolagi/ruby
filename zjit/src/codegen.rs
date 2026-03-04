@@ -872,7 +872,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         let cfp = builder.use_var(cfp_var);
                         let ec = builder.use_var(ec_var);
 
-                        // Save caller PC and SP
+                        // Save caller PC and SP.
+                        // Match the LIR: save SP below the recv+args that will be consumed.
                         let pc_val = builder.ins().iconst(cl_types::I64, state.pc as i64);
                         builder.ins().store(MemFlags::trusted(), pc_val, cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
                         let caller_sp_offset = ((state.stack().count() - argc - 1) * SIZEOF_VALUE) as i64;
@@ -1004,11 +1005,36 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         builder.ins().brif(is_qundef, exit_block, &[], cont_block, &[]);
 
                         // Exit block: callee returned Qundef (side-exit or compilation failure).
-                        // ec->cfp still points to the callee frame. The callee's cfp->pc was set
-                        // during frame setup, so the interpreter can resume from there.
-                        // Just return Qundef to propagate the bail all the way up.
+                        // Pop the callee frame and restore the caller's state so the
+                        // interpreter can re-execute the Send instruction correctly.
                         builder.seal_block(exit_block);
                         builder.switch_to_block(exit_block);
+                        // Pop callee frame: ec->cfp = callee_cfp + SIZEOF_CONTROL_FRAME
+                        let exit_ec = builder.use_var(ec_var);
+                        let frame_sz = builder.ins().iconst(cl_types::I64, RUBY_SIZEOF_CONTROL_FRAME as i64);
+                        let exit_callee_cfp = builder.use_var(cfp_var);
+                        let exit_caller_cfp = builder.ins().iadd(exit_callee_cfp, frame_sz);
+                        builder.ins().store(MemFlags::trusted(), exit_caller_cfp, exit_ec, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
+                        // Save caller PC (the Send instruction)
+                        builder.ins().store(MemFlags::trusted(), pc_val, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+                        // Save caller SP at full stack size so the interpreter sees recv+args
+                        let full_sp = builder.ins().iadd_imm(sp, (state.stack().count() * SIZEOF_VALUE) as i64);
+                        builder.ins().store(MemFlags::trusted(), full_sp, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+                        // Spill caller stack (recv + args)
+                        for (idx, &sid) in state.stack().enumerate() {
+                            if let Some(val) = cl_opnds[sid.0] {
+                                let offset = (idx as i32) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(offset));
+                            }
+                        }
+                        // Spill caller locals
+                        for (idx, &lid) in state.locals().enumerate() {
+                            if let Some(val) = cl_opnds[lid.0] {
+                                let ep_offset = local_idx_to_ep_offset(iseq, idx);
+                                let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(byte_offset));
+                            }
+                        }
                         builder.ins().return_(&[qundef]);
 
                         // Continue block: restore CFP and SP
