@@ -286,85 +286,88 @@ struct CLPatchPointInfo {
     state: FrameState,
 }
 
-/// Compile a function using the Cranelift backend
+/// Compile a function using the Cranelift backend.
+///
+/// Each HIR function has entry blocks (interpreter entry, JIT entries) that Jump
+/// to a merge block. We compile:
+///   - The **body** (merge block + everything after) as one Cranelift function with
+///     signature `(EC, CFP, SP, merge_param0..N) -> VALUE` using the `tail` calling convention.
+///   - Each **entry point** as a separate tiny Cranelift function that materializes
+///     the merge params and `return_call_indirect`s the body.
 fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, function: &Function) -> Result<(IseqCodePtrs, Vec<CodePtr>, Vec<IseqCallRef>), CompileError> {
-    // Count max params across all blocks to determine function ABI params
-    let num_jit_args = max_num_params(function);
-    let mut cl = CraneliftBuilder::new(num_jit_args);
+    let reverse_post_order = function.rpo();
+
+    // Find the merge block — first non-entry, non-entries_super block in RPO
+    let merge_block_id = reverse_post_order.iter().copied()
+        .find(|&bid| bid != function.entries_block && !function.is_entry_block(bid))
+        .expect("Function must have a merge block");
+    let num_merge_params = function.block(merge_block_id).params().count();
+
+    // === Step 1: Compile the body function ===
+    // Signature: (EC, CFP, SP, merge_param0..N) -> VALUE, tail calling convention
+    // num_args = extra params beyond EC, CFP = SP + merge_params
+    let body_extra_args = 1 + num_merge_params; // SP, then merge params
+    let mut cl = CraneliftBuilder::new(body_extra_args);
 
     // Cranelift operands indexed by HIR InsnId
     let mut cl_opnds: Vec<Option<CLValue>> = vec![None; function.num_insns()];
     let iseq_calls: Vec<IseqCallRef> = Vec::new();
-    // Patch points to emit after Cranelift compilation
     let mut patch_points: Vec<CLPatchPointInfo> = Vec::new();
-    // Call target cells for lazy JIT-to-JIT stubs: (cell_ptr, num_jit_args)
     let mut cl_call_cells: Vec<(*const CLCallTargetCell, usize)> = Vec::new();
 
-    cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, next_var| {
-        // Map HIR blocks → Cranelift blocks
-        let reverse_post_order = function.rpo();
+    cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, _next_var| {
         let mut hir_to_cl: Vec<Option<CLBlock>> = vec![None; function.num_blocks()];
 
-        // Create Cranelift Variables for each ABI arg so LoadArg can use them
-        // from any block (not just the entry block).
-        let arg_vars: Vec<Variable> = (0..num_jit_args).map(|i| {
-            let var = Variable::from_u32((*next_var + i) as u32);
-            builder.declare_var(var, cl_types::I64);
-            var
-        }).collect();
-        *next_var += num_jit_args;
-
-        // Create all Cranelift blocks for HIR blocks
+        // Create Cranelift blocks for non-entry HIR blocks (skip entries_block and entry blocks)
         for &block_id in reverse_post_order.iter() {
-            if block_id == function.entries_block { continue; }
+            if block_id == function.entries_block || function.is_entry_block(block_id) { continue; }
             let cl_block = builder.create_block();
             hir_to_cl[block_id.0] = Some(cl_block);
 
-            // Add block parameters for HIR block params (SSA phi values)
-            let block = function.block(block_id);
-            for _ in block.params() {
-                builder.append_block_param(cl_block, cl_types::I64);
+            // For the merge block, don't add block params — its params come from ABI.
+            // For other blocks, add block params as SSA phi values.
+            if block_id != merge_block_id {
+                let block = function.block(block_id);
+                for _ in block.params() {
+                    builder.append_block_param(cl_block, cl_types::I64);
+                }
             }
         }
 
-        // Emit each HIR block
-        let mut is_first_block = true;
+        // Emit each non-entry HIR block
+        let mut is_first_body_block = true;
         for &block_id in reverse_post_order.iter() {
-            if block_id == function.entries_block { continue; }
+            if block_id == function.entries_block || function.is_entry_block(block_id) { continue; }
 
             let cl_block = hir_to_cl[block_id.0].unwrap();
             builder.switch_to_block(cl_block);
 
             let block = function.block(block_id);
 
-            // On the first block (function entry), append the ABI params
-            // and store EC, CFP, SP, and arg values into Variables.
-            if is_first_block {
+            // The merge block (first body block) gets its params from function ABI
+            if is_first_body_block {
                 builder.append_block_params_for_function_params(cl_block);
                 let all_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
-                // Layout: [block_param_0..N, EC, CFP, arg0, arg1, ...]
-                let num_block_params = block.params().count();
-                let ec_val = all_params[num_block_params];
-                let cfp_val = all_params[num_block_params + 1];
+                // ABI layout: (EC, CFP, SP, merge_param_0, merge_param_1, ...)
+                let ec_val = all_params[0];
+                let cfp_val = all_params[1];
+                let sp_val = all_params[2];
                 builder.def_var(ec_var, ec_val);
                 builder.def_var(cfp_var, cfp_val);
-
-                // Load SP from [CFP + RUBY_OFFSET_CFP_SP]
-                let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
                 builder.def_var(sp_var, sp_val);
 
-                // Store ABI args into Variables so any block can access them
-                for (i, &var) in arg_vars.iter().enumerate() {
-                    builder.def_var(var, all_params[num_block_params + 2 + i]);
+                // Map merge block params from ABI params [3..]
+                for (idx, &insn_id) in block.params().enumerate() {
+                    cl_opnds[insn_id.0] = Some(all_params[3 + idx]);
                 }
 
-                is_first_block = false;
-            }
-
-            // Map block parameters (SSA phi values)
-            let block_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
-            for (idx, &insn_id) in block.params().enumerate() {
-                cl_opnds[insn_id.0] = Some(block_params[idx]);
+                is_first_body_block = false;
+            } else {
+                // Non-merge blocks: map block params from Cranelift block params
+                let block_params: Vec<CLValue> = builder.block_params(cl_block).to_vec();
+                for (idx, &insn_id) in block.params().enumerate() {
+                    cl_opnds[insn_id.0] = Some(block_params[idx]);
+                }
             }
 
             // Compile all instructions in this block
@@ -422,9 +425,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
                     // === Parameters ===
                     Insn::Param => {} // handled above via block params
-                    Insn::LoadArg { idx, .. } => {
-                        cl_opnds[insn_id.0] = Some(builder.use_var(arg_vars[idx as usize]));
-                    }
+                    Insn::LoadArg { .. } => {} // handled in entry point functions
 
                     // === Snapshots (no-op) ===
                     Insn::Snapshot { .. } => {}
@@ -1264,8 +1265,137 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         }
     });
 
-    // Compile and copy to CodeBlock
-    let (start_ptr, gc_offsets) = cl.compile(cb)?;
+    // Compile body and copy to CodeBlock
+    let (body_ptr, gc_offsets) = cl.compile(cb)?;
+    let body_addr = body_ptr.raw_ptr(cb) as u64;
+
+    // === Step 2: Compile entry point functions ===
+    // Each entry block becomes a tiny function that materializes params and
+    // return_call_indirect's the body function.
+    let mut jit_entry_ptrs: Vec<CodePtr> = Vec::new();
+    let mut interpreter_entry_ptr: Option<CodePtr> = None;
+
+    for &block_id in reverse_post_order.iter() {
+        if block_id == function.entries_block { continue; }
+        if !function.is_entry_block(block_id) { continue; }
+
+        let block = function.block(block_id);
+        let is_interpreter_entry = !block.insns().any(|&id| matches!(function.find(id), Insn::LoadArg { .. }));
+
+        // Count the number of ABI args this entry expects (for JIT entries: LoadArg count)
+        let entry_num_args = block.insns().filter(|&&id| matches!(function.find(id), Insn::LoadArg { .. })).count();
+
+        // Entry function signature: (EC, CFP, args...) -> VALUE
+        // Use the default calling convention so the entry trampoline can call us.
+        let mut entry_cl = CraneliftBuilder::new(entry_num_args);
+
+        entry_cl.build(|builder, isa, _side_exit_blocks, _value_pool, ec_var, cfp_var, sp_var, _next_var| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+
+            let params: Vec<CLValue> = builder.block_params(entry).to_vec();
+            let ec_val = params[0];
+            let cfp_val = params[1];
+            builder.def_var(ec_var, ec_val);
+            builder.def_var(cfp_var, cfp_val);
+
+            // Load SP from CFP
+            let sp_val = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SP));
+            builder.def_var(sp_var, sp_val);
+
+            // Build the merge params by executing this entry block's instructions
+            let mut entry_opnds: Vec<Option<CLValue>> = vec![None; function.num_insns()];
+
+            for &insn_id in block.insns() {
+                match function.find(insn_id) {
+                    Insn::LoadArg { idx, .. } => {
+                        // JIT entry: arg comes from ABI param at position 2+idx
+                        entry_opnds[insn_id.0] = Some(params[2 + idx as usize]);
+                    }
+                    Insn::LoadSelf => {
+                        let v = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_SELF));
+                        entry_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::LoadSP => {
+                        entry_opnds[insn_id.0] = Some(sp_val);
+                    }
+                    Insn::LoadEC => {
+                        entry_opnds[insn_id.0] = Some(ec_val);
+                    }
+                    Insn::Const { val: Const::Value(val) } => {
+                        entry_opnds[insn_id.0] = Some(builder.ins().iconst(cl_types::I64, val.as_i64()));
+                    }
+                    Insn::Const { val: Const::CPtr(ptr) } => {
+                        entry_opnds[insn_id.0] = Some(builder.ins().iconst(cl_types::I64, ptr as i64));
+                    }
+                    Insn::LoadField { recv, id: _, offset, .. } => {
+                        let base = entry_opnds[recv.0].unwrap();
+                        let v = builder.ins().load(cl_types::I64, MemFlags::trusted(), base, Offset32::new(offset));
+                        entry_opnds[insn_id.0] = Some(v);
+                    }
+                    Insn::GetEP { level } => {
+                        let mut ep = builder.ins().load(cl_types::I64, MemFlags::trusted(), cfp_val, Offset32::new(RUBY_OFFSET_CFP_EP));
+                        for _ in 0..level {
+                            let specval_offset = SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL;
+                            ep = builder.ins().load(cl_types::I64, MemFlags::trusted(), ep, Offset32::new(specval_offset));
+                            let mask = builder.ins().iconst(cl_types::I64, !0x03i64);
+                            ep = builder.ins().band(ep, mask);
+                        }
+                        entry_opnds[insn_id.0] = Some(ep);
+                    }
+                    Insn::EntryPoint { .. } => {} // no-op
+                    Insn::Snapshot { .. } => {} // no-op
+                    Insn::Jump(target) => {
+                        // This is the jump to the merge block — build the tail call
+                        let mut body_args = vec![ec_val, cfp_val, sp_val];
+                        for &arg_id in target.args.iter() {
+                            body_args.push(entry_opnds[arg_id.0].unwrap_or_else(|| {
+                                panic!("Missing entry opnd for {arg_id} in entry block {block_id}")
+                            }));
+                        }
+
+                        // Call the body function and return its result
+                        let body_sig_params = 3 + num_merge_params; // EC, CFP, SP, merge_params
+                        let mut sig = cranelift_codegen::ir::Signature::new(isa.default_call_conv());
+                        for _ in 0..body_sig_params {
+                            sig.params.push(cranelift_codegen::ir::AbiParam::new(cl_types::I64));
+                        }
+                        sig.returns.push(cranelift_codegen::ir::AbiParam::new(cl_types::I64));
+                        let sig_ref = builder.import_signature(sig);
+                        let body_addr_val = builder.ins().iconst(cl_types::I64, body_addr as i64);
+                        let call = builder.ins().call_indirect(sig_ref, body_addr_val, &body_args);
+                        let ret = builder.inst_results(call)[0];
+                        builder.ins().return_(&[ret]);
+                    }
+                    other => {
+                        // Skip unknown instructions in entry blocks
+                    }
+                }
+            }
+
+            builder.seal_block(entry);
+        });
+
+        let (entry_ptr, _) = entry_cl.compile(cb)?;
+
+        if is_interpreter_entry {
+            interpreter_entry_ptr = Some(entry_ptr);
+        }
+
+        // JIT entries: record the pointer
+        // The jit_entry_idx is determined by the EntryPoint instruction
+        for &insn_id in block.insns() {
+            if let Insn::EntryPoint { jit_entry_idx: Some(idx) } = function.find(insn_id) {
+                while jit_entry_ptrs.len() <= idx {
+                    jit_entry_ptrs.push(entry_ptr);
+                }
+                jit_entry_ptrs[idx] = entry_ptr;
+            }
+        }
+    }
+
+    let start_ptr = interpreter_entry_ptr.unwrap_or(body_ptr);
 
     // Generate lazy compile stubs for SendDirect call cells
     for &(cell_ptr, num_args) in cl_call_cells.iter() {
@@ -1340,8 +1470,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         }
     }
 
-    // TODO: support jit_entry_ptrs for JIT-to-JIT calls
-    Ok((IseqCodePtrs { start_ptr, jit_entry_ptrs: vec![] }, gc_offsets, iseq_calls))
+    // Entry points compiled above, jit_entry_ptrs populated
+    Ok((IseqCodePtrs { start_ptr, jit_entry_ptrs }, gc_offsets, iseq_calls))
 }
 
 /// Save SP to CFP for Cranelift builder

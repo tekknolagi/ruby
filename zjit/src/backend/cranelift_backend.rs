@@ -77,11 +77,23 @@ pub struct CraneliftBuilder {
 }
 
 impl CraneliftBuilder {
-    /// Create a new CraneliftBuilder for a function with the ZJIT calling convention:
-    /// `(EC: i64, CFP: i64, arg0: i64, arg1: i64, ...) -> i64`
-    ///
-    /// `num_args` is the number of JIT entry arguments (LoadArg/Param in entry blocks).
+    /// Create a new CraneliftBuilder with the default calling convention.
+    /// Signature: `(EC, CFP, arg0..argN) -> VALUE`
     pub fn new(num_args: usize) -> Self {
+        Self::new_with_calling_conv(num_args, {
+            let shared_builder = settings::builder();
+            let shared_flags = settings::Flags::new(shared_builder);
+            isa::lookup(target_lexicon::Triple::host())
+                .expect("Failed to look up target ISA")
+                .finish(shared_flags)
+                .expect("Failed to finish ISA")
+                .default_call_conv()
+        })
+    }
+
+    /// Create a new CraneliftBuilder with a specific calling convention.
+    /// Signature: `(EC, CFP, arg0..argN) -> VALUE`
+    pub fn new_with_calling_conv(num_args: usize, call_conv: CallConv) -> Self {
         let shared_builder = settings::builder();
         let shared_flags = settings::Flags::new(shared_builder);
         let isa = isa::lookup(target_lexicon::Triple::host())
@@ -89,12 +101,11 @@ impl CraneliftBuilder {
             .finish(shared_flags)
             .expect("Failed to finish ISA");
 
-        let call_conv = isa.default_call_conv();
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(types::I64)); // EC
         sig.params.push(AbiParam::new(types::I64)); // CFP
         for _ in 0..num_args {
-            sig.params.push(AbiParam::new(types::I64)); // JIT entry args
+            sig.params.push(AbiParam::new(types::I64)); // extra args
         }
         sig.returns.push(AbiParam::new(types::I64)); // VALUE return
 
