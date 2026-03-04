@@ -414,9 +414,17 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                 }
             }
 
+            // Track the last snapshot for each block — used for SendDirect exit
+            let mut last_snapshot_id: Option<InsnId> = None;
+
             // Compile all instructions in this block
             for &insn_id in block.insns() {
                 let insn = function.find(insn_id);
+
+                // Track snapshots for SendDirect exit
+                if matches!(insn, Insn::Snapshot { .. }) {
+                    last_snapshot_id = Some(insn_id);
+                }
 
                 // Helper to get a previously compiled operand
                 macro_rules! cl_opnd {
@@ -1005,35 +1013,43 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                         builder.ins().brif(is_qundef, exit_block, &[], cont_block, &[]);
 
                         // Exit block: callee returned Qundef (side-exit or compilation failure).
-                        // Pop the callee frame and restore the caller's state so the
-                        // interpreter can re-execute the Send instruction correctly.
+                        // Pop callee frame and use the LAST SNAPSHOT state (not the Send's
+                        // synthesized state which includes kwargs the interpreter doesn't expect).
                         builder.seal_block(exit_block);
                         builder.switch_to_block(exit_block);
+
                         // Pop callee frame: ec->cfp = callee_cfp + SIZEOF_CONTROL_FRAME
                         let exit_ec = builder.use_var(ec_var);
                         let frame_sz = builder.ins().iconst(cl_types::I64, RUBY_SIZEOF_CONTROL_FRAME as i64);
                         let exit_callee_cfp = builder.use_var(cfp_var);
                         let exit_caller_cfp = builder.ins().iadd(exit_callee_cfp, frame_sz);
                         builder.ins().store(MemFlags::trusted(), exit_caller_cfp, exit_ec, Offset32::new(RUBY_OFFSET_EC_CFP as i32));
-                        // Save caller PC (the Send instruction)
-                        builder.ins().store(MemFlags::trusted(), pc_val, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
-                        // Save caller SP at full stack size so the interpreter sees recv+args
-                        let full_sp = builder.ins().iadd_imm(sp, (state.stack().count() * SIZEOF_VALUE) as i64);
-                        builder.ins().store(MemFlags::trusted(), full_sp, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
-                        // Spill caller stack (recv + args)
-                        for (idx, &sid) in state.stack().enumerate() {
-                            if let Some(val) = cl_opnds[sid.0] {
-                                let offset = (idx as i32) * SIZEOF_VALUE_I32;
-                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(offset));
+
+                        // Use the last snapshot's state for the side exit — this has the
+                        // original stack before kwargs were synthesized by SendDirect
+                        if let Some(snap_id) = last_snapshot_id {
+                            if let Insn::Snapshot { state: snap_state } = function.find(snap_id) {
+                                let snap_pc = builder.ins().iconst(cl_types::I64, snap_state.pc as i64);
+                                builder.ins().store(MemFlags::trusted(), snap_pc, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
+                                let snap_sp = builder.ins().iadd_imm(sp, (snap_state.stack().count() * SIZEOF_VALUE) as i64);
+                                builder.ins().store(MemFlags::trusted(), snap_sp, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_SP));
+                                for (idx, &sid) in snap_state.stack().enumerate() {
+                                    if let Some(val) = cl_opnds[sid.0] {
+                                        let offset = (idx as i32) * SIZEOF_VALUE_I32;
+                                        builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(offset));
+                                    }
+                                }
+                                for (idx, &lid) in snap_state.locals().enumerate() {
+                                    if let Some(val) = cl_opnds[lid.0] {
+                                        let ep_offset = local_idx_to_ep_offset(iseq, idx);
+                                        let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
+                                        builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(byte_offset));
+                                    }
+                                }
                             }
-                        }
-                        // Spill caller locals
-                        for (idx, &lid) in state.locals().enumerate() {
-                            if let Some(val) = cl_opnds[lid.0] {
-                                let ep_offset = local_idx_to_ep_offset(iseq, idx);
-                                let byte_offset = -(ep_offset + 1) * SIZEOF_VALUE_I32;
-                                builder.ins().store(MemFlags::trusted(), val, sp, Offset32::new(byte_offset));
-                            }
+                        } else {
+                            // No snapshot — just save PC
+                            builder.ins().store(MemFlags::trusted(), pc_val, exit_caller_cfp, Offset32::new(RUBY_OFFSET_CFP_PC));
                         }
                         builder.ins().return_(&[qundef]);
 
