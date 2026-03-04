@@ -303,6 +303,29 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         .expect("Function must have a merge block");
     let num_merge_params = function.block(merge_block_id).params().count();
 
+    // Check if all entry blocks have simple structure (just LoadArg/Const/Load + Jump).
+    // If any entry block has conditionals (IfTrue/IfFalse), we can't split entries into
+    // separate functions — they need to be part of the body.
+    let can_split_entries = reverse_post_order.iter().all(|&bid| {
+        if bid == function.entries_block || !function.is_entry_block(bid) { return true; }
+        let block = function.block(bid);
+        !block.insns().any(|&id| matches!(function.find(id), Insn::IfTrue { .. } | Insn::IfFalse { .. }))
+    });
+
+    // When we can't split entries, fall back to the old approach:
+    // all blocks in one function with num_jit_args extra ABI params for LoadArgs.
+    let num_jit_args = max_num_params(function);
+    let (merge_block_id, num_merge_params) = if can_split_entries {
+        (merge_block_id, num_merge_params)
+    } else {
+        // First entry block becomes the body entry. Extra ABI params for LoadArgs.
+        let first_entry = reverse_post_order.iter().copied()
+            .find(|&bid| bid != function.entries_block && function.is_entry_block(bid))
+            .unwrap_or(merge_block_id);
+        // Use num_jit_args as merge params so LoadArg can read from ABI
+        (first_entry, num_jit_args)
+    };
+
     // === Step 1: Compile the body function ===
     // Signature: (EC, CFP, SP, merge_param0..N) -> VALUE, tail calling convention
     // num_args = extra params beyond EC, CFP = SP + merge_params
@@ -317,14 +340,24 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
     cl.build(|builder, isa, side_exit_blocks, value_pool, ec_var, cfp_var, sp_var, _next_var| {
         let mut hir_to_cl: Vec<Option<CLBlock>> = vec![None; function.num_blocks()];
+        // When !can_split_entries, stores the ABI arg values for LoadArg
+        let mut arg_abi_values: Vec<CLValue> = Vec::new();
 
-        // Create Cranelift blocks for non-entry HIR blocks (skip entries_block and entry blocks)
+        // Determine which blocks to skip. Always skip entries_block.
+        // When can_split_entries, also skip entry blocks (they become separate functions).
+        let should_skip = |bid: BlockId| -> bool {
+            if bid == function.entries_block { return true; }
+            if can_split_entries && function.is_entry_block(bid) { return true; }
+            false
+        };
+
+        // Create Cranelift blocks
         for &block_id in reverse_post_order.iter() {
-            if block_id == function.entries_block || function.is_entry_block(block_id) { continue; }
+            if should_skip(block_id) { continue; }
             let cl_block = builder.create_block();
             hir_to_cl[block_id.0] = Some(cl_block);
 
-            // For the merge block, don't add block params — its params come from ABI.
+            // For the merge/entry block (first body block), params come from ABI.
             // For other blocks, add block params as SSA phi values.
             if block_id != merge_block_id {
                 let block = function.block(block_id);
@@ -334,10 +367,10 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
             }
         }
 
-        // Emit each non-entry HIR block
+        // Emit body blocks
         let mut is_first_body_block = true;
         for &block_id in reverse_post_order.iter() {
-            if block_id == function.entries_block || function.is_entry_block(block_id) { continue; }
+            if should_skip(block_id) { continue; }
 
             let cl_block = hir_to_cl[block_id.0].unwrap();
             builder.switch_to_block(cl_block);
@@ -356,9 +389,15 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                 builder.def_var(cfp_var, cfp_val);
                 builder.def_var(sp_var, sp_val);
 
-                // Map merge block params from ABI params [3..]
+                // Map block params from ABI params [3..]
                 for (idx, &insn_id) in block.params().enumerate() {
                     cl_opnds[insn_id.0] = Some(all_params[3 + idx]);
+                }
+                // When !can_split_entries, store arg ABI values for LoadArg
+                if !can_split_entries {
+                    for i in 0..num_merge_params {
+                        arg_abi_values.push(all_params[3 + i]);
+                    }
                 }
 
                 is_first_body_block = false;
@@ -425,7 +464,13 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
                     // === Parameters ===
                     Insn::Param => {} // handled above via block params
-                    Insn::LoadArg { .. } => {} // handled in entry point functions
+                    Insn::LoadArg { idx, .. } => {
+                        // When entries are split, LoadArg is handled in entry functions.
+                        // When entries are NOT split, LoadArg reads from ABI params.
+                        if !can_split_entries && (idx as usize) < arg_abi_values.len() {
+                            cl_opnds[insn_id.0] = Some(arg_abi_values[idx as usize]);
+                        }
+                    }
 
                     // === Snapshots (no-op) ===
                     Insn::Snapshot { .. } => {}
@@ -1241,14 +1286,20 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
     let body_addr = body_ptr.raw_ptr(cb) as u64;
 
     // === Step 2: Compile entry point functions ===
-    // Each entry block becomes a tiny function that materializes params and
-    // return_call_indirect's the body function.
+    // Only when can_split_entries: each entry block becomes a tiny function.
     let mut jit_entry_ptrs: Vec<CodePtr> = Vec::new();
     let mut interpreter_entry_ptr: Option<CodePtr> = None;
+
+    if !can_split_entries {
+        // Entry blocks are part of the body — no separate entry functions needed.
+        // start_ptr is the body function itself.
+        interpreter_entry_ptr = Some(body_ptr);
+    }
 
     for &block_id in reverse_post_order.iter() {
         if block_id == function.entries_block { continue; }
         if !function.is_entry_block(block_id) { continue; }
+        if !can_split_entries { continue; } // entries are in the body
 
         let block = function.block(block_id);
         let is_interpreter_entry = !block.insns().any(|&id| matches!(function.find(id), Insn::LoadArg { .. }));
