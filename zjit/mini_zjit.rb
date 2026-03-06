@@ -1172,7 +1172,9 @@ if $0 == __FILE__
       assert_equal expected, actual, "HIR mismatch for: #{code}"
     end
 
-    # ── Unoptimized snapshots ──────────────────────────────────────
+    # ── Unoptimized snapshots (before any passes) ──────────────────
+    # The compiler emits generic Send instructions for arithmetic.
+    # type_specialize lowers them to GuardType + Fixnum ops.
 
     def test_constant_unoptimized
       assert_hir "42", <<~HIR, optimize: false
@@ -1195,16 +1197,15 @@ if $0 == __FILE__
     end
 
     def test_addition_unoptimized
+      # Compiler emits Send — type_specialize hasn't run yet
       assert_hir "1 + 2", <<~HIR, optimize: false
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
           v1:Fixnum[1] = Const 1
           v2:Fixnum[2] = Const 2
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:Fixnum = FixnumAdd v4, v5
-          Return v6
+          v4:BasicObject = Send v1, :+, v2
+          Return v4
       HIR
     end
 
@@ -1215,10 +1216,8 @@ if $0 == __FILE__
           v0:BasicObject = PutSelf
           v1:Fixnum[5] = Const 5
           v2:Fixnum[3] = Const 3
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:Fixnum = FixnumSub v4, v5
-          Return v6
+          v4:BasicObject = Send v1, :-, v2
+          Return v4
       HIR
     end
 
@@ -1229,10 +1228,8 @@ if $0 == __FILE__
           v0:BasicObject = PutSelf
           v1:Fixnum[1] = Const 1
           v2:Fixnum[2] = Const 2
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:CBool = FixnumLt v4, v5
-          Return v6
+          v4:BasicObject = Send v1, :<, v2
+          Return v4
       HIR
     end
 
@@ -1264,10 +1261,8 @@ if $0 == __FILE__
           v0:BasicObject = PutSelf
           v1:Fixnum[1] = Const 1
           v2:Fixnum[2] = Const 2
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:Fixnum = FixnumAdd v4, v5
-          Return v6
+          v4:BasicObject = Send v1, :+, v2
+          Return v4
       HIR
     end
 
@@ -1278,36 +1273,31 @@ if $0 == __FILE__
           v0:BasicObject = PutSelf
           v1:Fixnum[1] = Const 1
           v2:Fixnum[0] = Const 0
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:CBool = FixnumGt v4, v5
-          v7:CBool = Test v6
-          IfFalse v7, bb1(v0, v1)
+          v4:BasicObject = Send v1, :>, v2
+          v5:CBool = Test v4
+          IfFalse v5, bb1(v0, v1)
           Jump bb2(v0, v1)
-        bb1(v18:BasicObject, v19:Fixnum[1]):
-          v20:Fixnum[1] = Const 1
-          v22:Fixnum = GuardType v19, Fixnum
-          v23:Fixnum = GuardType v20, Fixnum
-          v24:Fixnum = FixnumSub v22, v23
-          Return v24
-        bb2(v10:BasicObject, v11:Fixnum[1]):
-          v12:Fixnum[1] = Const 1
-          v14:Fixnum = GuardType v11, Fixnum
-          v15:Fixnum = GuardType v12, Fixnum
-          v16:Fixnum = FixnumAdd v14, v15
-          Return v16
+        bb1(v14:BasicObject, v15:Fixnum[1]):
+          v16:Fixnum[1] = Const 1
+          v18:BasicObject = Send v15, :-, v16
+          Return v18
+        bb2(v8:BasicObject, v9:Fixnum[1]):
+          v10:Fixnum[1] = Const 1
+          v12:BasicObject = Send v9, :+, v10
+          Return v12
       HIR
     end
 
     # ── Optimized snapshots ────────────────────────────────────────
+    # After: type_specialize → fold_constants → clean_cfg → eliminate_dead_code
 
     def test_fold_addition
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[3] = Const 3
-          Return v6
+          v9:Fixnum[3] = Const 3
+          Return v9
       HIR
     end
 
@@ -1316,8 +1306,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[2] = Const 2
-          Return v6
+          v9:Fixnum[2] = Const 2
+          Return v9
       HIR
     end
 
@@ -1326,8 +1316,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[12] = Const 12
-          Return v6
+          v9:Fixnum[12] = Const 12
+          Return v9
       HIR
     end
 
@@ -1336,8 +1326,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:TrueClass = Const true
-          Return v6
+          v9:TrueClass = Const true
+          Return v9
       HIR
     end
 
@@ -1346,8 +1336,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:FalseClass = Const false
-          Return v6
+          v9:FalseClass = Const false
+          Return v9
       HIR
     end
 
@@ -1356,8 +1346,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v11:Fixnum[10] = Const 10
-          Return v11
+          v16:Fixnum[10] = Const 10
+          Return v16
       HIR
     end
 
@@ -1366,8 +1356,8 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v16:Fixnum[21] = Const 21
-          Return v16
+          v23:Fixnum[21] = Const 21
+          Return v23
       HIR
     end
 
@@ -1376,32 +1366,65 @@ if $0 == __FILE__
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[3] = Const 3
-          Return v6
+          v9:Fixnum[3] = Const 3
+          Return v9
       HIR
     end
 
-    def test_branch_optimized
+    def test_branch_fully_folded
+      # type_specialize lowers Send to Fixnum ops, fold_constants folds
+      # the comparison to true, simplifies IfFalse (never taken) + Jump
+      # (always taken) into a single Jump, and clean_cfg absorbs the
+      # target block. The whole thing collapses to a single block.
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v1:Fixnum[1] = Const 1
-          v6:TrueClass = Const true
-          v7:CBool = Test v6
-          IfFalse v7, bb1(v0, v1)
-          Jump bb2(v0, v1)
-        bb1(v18:BasicObject, v19:Fixnum[1]):
-          v24:Fixnum[0] = Const 0
-          Return v24
-        bb2(v10:BasicObject, v11:Fixnum[1]):
-          v16:Fixnum[2] = Const 2
-          Return v16
+          v32:Fixnum[2] = Const 2
+          Return v32
       HIR
     end
   end
 
-  class GuardEliminationTest < Minitest::Test
+  # ── type_specialize tests ────────────────────────────────────────
+
+  class TypeSpecializeTest < Minitest::Test
+    def assert_hir(code, expected, optimize: true)
+      actual = MiniZJIT.hir(code, optimize: optimize).strip
+      expected = expected.gsub(/^ {8}/, "").strip
+      assert_equal expected, actual, "HIR mismatch for: #{code}"
+    end
+
+    def test_send_lowered_to_fixnum_add
+      # After full optimization, Send(:+) on Fixnum constants becomes
+      # a folded Const. But we can see the strength reduction worked
+      # because the result is correct (only possible via FixnumAdd).
+      assert_hir "1 + 2", <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v9:Fixnum[3] = Const 3
+          Return v9
+      HIR
+    end
+
+    def test_send_not_lowered_for_strings
+      # String receiver — type_specialize can't lower to Fixnum ops,
+      # so Send survives.
+      assert_hir '"hello".length', <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v1:String = Const "hello"
+          v3:BasicObject = Send v1, :length
+          Return v3
+      HIR
+    end
+  end
+
+  # ── fold_constants tests (guard elim + constant folding) ─────────
+
+  class FoldConstantsTest < Minitest::Test
     def assert_hir(code, expected, optimize: true)
       actual = MiniZJIT.hir(code, optimize: optimize).strip
       expected = expected.gsub(/^ {8}/, "").strip
@@ -1409,72 +1432,32 @@ if $0 == __FILE__
     end
 
     def test_guards_on_known_fixnums_eliminated
-      # Both operands are Fixnum constants, so GuardType is redundant.
-      # After guard elimination + constant folding + DCE, only the
-      # folded result and PutSelf remain.
+      # Both operands are Fixnum constants. fold_constants sees
+      # GuardType on a value that is_a?(Fixnum) and drops it via
+      # make_equal_to. Then folds the arithmetic. DCE cleans up.
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[3] = Const 3
-          Return v6
+          v9:Fixnum[3] = Const 3
+          Return v9
       HIR
     end
 
-    def test_guards_on_params_kept
-      # Branch body params have BasicObject type — guards must survive.
-      # x = 1; if x > 0 then x + 1 else ... end
-      # In the true branch (bb2), x has Fixnum[1] from the param type,
-      # so guards get eliminated there too. But the structure of the
-      # unoptimized branch shows guards are present before the pass.
-      assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR, optimize: false
-        fn <compiled>:
-        bb0:
-          v0:BasicObject = PutSelf
-          v1:Fixnum[1] = Const 1
-          v2:Fixnum[0] = Const 0
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:CBool = FixnumGt v4, v5
-          v7:CBool = Test v6
-          IfFalse v7, bb1(v0, v1)
-          Jump bb2(v0, v1)
-        bb1(v18:BasicObject, v19:Fixnum[1]):
-          v20:Fixnum[1] = Const 1
-          v22:Fixnum = GuardType v19, Fixnum
-          v23:Fixnum = GuardType v20, Fixnum
-          v24:Fixnum = FixnumSub v22, v23
-          Return v24
-        bb2(v10:BasicObject, v11:Fixnum[1]):
-          v12:Fixnum[1] = Const 1
-          v14:Fixnum = GuardType v11, Fixnum
-          v15:Fixnum = GuardType v12, Fixnum
-          v16:Fixnum = FixnumAdd v14, v15
-          Return v16
-      HIR
-    end
-
-    def test_branch_guards_eliminated_after_optimization
-      # After optimization, the guards in branch bodies are eliminated
-      # because block params carry Fixnum[1] type from the edge.
+    def test_branch_condition_folded
+      # x = 1; x > 0 folds to Const(true). IfFalse on true is dropped,
+      # Jump on true becomes unconditional. clean_cfg merges the blocks.
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v1:Fixnum[1] = Const 1
-          v6:TrueClass = Const true
-          v7:CBool = Test v6
-          IfFalse v7, bb1(v0, v1)
-          Jump bb2(v0, v1)
-        bb1(v18:BasicObject, v19:Fixnum[1]):
-          v24:Fixnum[0] = Const 0
-          Return v24
-        bb2(v10:BasicObject, v11:Fixnum[1]):
-          v16:Fixnum[2] = Const 2
-          Return v16
+          v32:Fixnum[2] = Const 2
+          Return v32
       HIR
     end
   end
+
+  # ── eliminate_dead_code tests ────────────────────────────────────
 
   class DCETest < Minitest::Test
     def assert_hir(code, expected, optimize: true)
@@ -1484,41 +1467,60 @@ if $0 == __FILE__
     end
 
     def test_dead_consts_and_guards_removed
-      # Before: 7 body insns (2 Const, 2 GuardType, 1 FixnumAdd, 1 PutSelf, 1 Return)
-      # After constant folding, the original Const 1, Const 2, and GuardTypes
-      # become dead. DCE removes them, leaving only PutSelf, the folded Const, and Return.
+      # Before optimization: compiler emits Send (no guards yet)
       assert_hir "1 + 2", <<~HIR, optimize: false
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
           v1:Fixnum[1] = Const 1
           v2:Fixnum[2] = Const 2
-          v4:Fixnum = GuardType v1, Fixnum
-          v5:Fixnum = GuardType v2, Fixnum
-          v6:Fixnum = FixnumAdd v4, v5
-          Return v6
+          v4:BasicObject = Send v1, :+, v2
+          Return v4
       HIR
 
+      # After: type_specialize adds GuardType + FixnumAdd, fold_constants
+      # folds everything, DCE sweeps dead Const/GuardType instructions.
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
-          v6:Fixnum[3] = Const 3
-          Return v6
+          v9:Fixnum[3] = Const 3
+          Return v9
       HIR
     end
 
-    def test_unused_send_not_removed
-      # Send has Any effects, so it must survive even if its result is unused.
-      # (In this case the result IS used by Return, but the key property is
-      # that Send is never a DCE candidate.)
-      assert_hir '"hello".length', <<~HIR, optimize: false
+    def test_send_not_removed_by_dce
+      # Send has Any effects, so it is never a DCE candidate.
+      assert_hir '"hello".length', <<~HIR
         fn <compiled>:
         bb0:
           v0:BasicObject = PutSelf
           v1:String = Const "hello"
           v3:BasicObject = Send v1, :length
           Return v3
+      HIR
+    end
+  end
+
+  # ── clean_cfg tests ─────────────────────────────────────────────
+
+  class CleanCFGTest < Minitest::Test
+    def assert_hir(code, expected, optimize: true)
+      actual = MiniZJIT.hir(code, optimize: optimize).strip
+      expected = expected.gsub(/^ {8}/, "").strip
+      assert_equal expected, actual, "HIR mismatch for: #{code}"
+    end
+
+    def test_branch_blocks_absorbed
+      # When the branch condition is folded to a constant, the dead
+      # branch is dropped and the live branch is absorbed via clean_cfg,
+      # collapsing 3 blocks into 1.
+      assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v32:Fixnum[2] = Const 2
+          Return v32
       HIR
     end
   end
