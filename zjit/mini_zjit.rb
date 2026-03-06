@@ -366,6 +366,7 @@ module MiniZJIT
       @name = name
       @blocks = []
       @next_id = 0
+      @forwarding = {}  # union-find: object_id -> canonical Insn
     end
 
     def new_block
@@ -385,13 +386,64 @@ module MiniZJIT
       insn
     end
 
-    # Replace all uses of `old_insn` with `new_insn` across the entire function
-    def replace_uses(old_insn, new_insn)
-      @blocks.each do |block|
-        (block.params + block.insns).each do |insn|
-          replace_operands(insn, old_insn, new_insn)
-        end
+    # Create a new instruction (not yet pushed to any block) — used by fold_constants
+    def new_insn(insn)
+      insn.id = @next_id
+      @next_id += 1
+      insn
+    end
+
+    # ─── Union-Find for value forwarding ───────────────────────────
+    # Like real ZJIT: make_equal_to(old, new) means "old" forwards to "new".
+    # find(insn) follows the chain to the canonical representative.
+
+    def make_equal_to(old_insn, new_insn)
+      @forwarding[old_insn.object_id] = new_insn
+    end
+
+    def find(insn)
+      # Follow the forwarding chain to the canonical representative
+      current = insn
+      while @forwarding.key?(current.object_id)
+        current = @forwarding[current.object_id]
       end
+      current
+    end
+
+    # Type of the canonical representative
+    def type_of(insn) = find(insn).type
+
+    # Check if insn's type is a subtype of target_type
+    def is_a?(insn, target_type) = type_of(insn) <= target_type
+
+    # Infer the type of a newly created instruction
+    def infer_type(insn)
+      case insn
+      when Const
+        insn.type  # already set at creation
+      when FixnumAdd, FixnumSub, FixnumMult
+        lt = type_of(insn.left)
+        rt = type_of(insn.right)
+        if lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
+          result = case insn
+                   when FixnumAdd  then lt.const_val + rt.const_val
+                   when FixnumSub  then lt.const_val - rt.const_val
+                   when FixnumMult then lt.const_val * rt.const_val
+                   end
+          Types::Fixnum.with_const(result)
+        else
+          Types::Fixnum
+        end
+      when FixnumLt, FixnumEq, FixnumGt then Types::CBool
+      when GuardType then type_of(insn.val) & insn.guard_type
+      when Test then Types::CBool
+      else insn.type
+      end
+    end
+
+    # Return reachable blocks in RPO-ish order (array)
+    def rpo
+      each_block_rpo.to_a
     end
 
     # Walk all reachable blocks in RPO-ish order starting from bb0
@@ -436,6 +488,9 @@ module MiniZJIT
 
     private
 
+    # Resolve an operand through the union-find for display
+    def r(insn) = find(insn)
+
     def format_insn(insn)
       prefix = "#{insn}:#{insn.type} = "
 
@@ -443,53 +498,31 @@ module MiniZJIT
       when Param      then "#{prefix}Param[#{insn.idx}]"
       when Const      then "#{prefix}Const #{insn.val.inspect}"
       when PutSelf    then "#{prefix}PutSelf"
-      when GuardType  then "#{prefix}GuardType #{insn.val}, #{insn.guard_type}"
-      when RefineType then "#{prefix}RefineType #{insn.val}, #{insn.new_type}"
-      when Test       then "#{prefix}Test #{insn.val}"
-      when FixnumAdd  then "#{prefix}FixnumAdd #{insn.left}, #{insn.right}"
-      when FixnumSub  then "#{prefix}FixnumSub #{insn.left}, #{insn.right}"
-      when FixnumMult then "#{prefix}FixnumMult #{insn.left}, #{insn.right}"
-      when FixnumLt   then "#{prefix}FixnumLt #{insn.left}, #{insn.right}"
-      when FixnumEq   then "#{prefix}FixnumEq #{insn.left}, #{insn.right}"
-      when FixnumGt   then "#{prefix}FixnumGt #{insn.left}, #{insn.right}"
+      when GuardType  then "#{prefix}GuardType #{r(insn.val)}, #{insn.guard_type}"
+      when RefineType then "#{prefix}RefineType #{r(insn.val)}, #{insn.new_type}"
+      when Test       then "#{prefix}Test #{r(insn.val)}"
+      when FixnumAdd  then "#{prefix}FixnumAdd #{r(insn.left)}, #{r(insn.right)}"
+      when FixnumSub  then "#{prefix}FixnumSub #{r(insn.left)}, #{r(insn.right)}"
+      when FixnumMult then "#{prefix}FixnumMult #{r(insn.left)}, #{r(insn.right)}"
+      when FixnumLt   then "#{prefix}FixnumLt #{r(insn.left)}, #{r(insn.right)}"
+      when FixnumEq   then "#{prefix}FixnumEq #{r(insn.left)}, #{r(insn.right)}"
+      when FixnumGt   then "#{prefix}FixnumGt #{r(insn.left)}, #{r(insn.right)}"
       when Send
-        args_s = insn.args.map(&:to_s).join(", ")
-        "#{prefix}Send #{insn.recv}, :#{insn.method_name}#{args_s.empty? ? "" : ", #{args_s}"}"
-      when Return  then "Return #{insn.val}"
-      when Jump    then "Jump #{insn.target}"
-      when IfTrue  then "IfTrue #{insn.val}, #{insn.target}"
-      when IfFalse then "IfFalse #{insn.val}, #{insn.target}"
+        args_s = insn.args.map { |a| r(a).to_s }.join(", ")
+        "#{prefix}Send #{r(insn.recv)}, :#{insn.method_name}#{args_s.empty? ? "" : ", #{args_s}"}"
+      when Return  then "Return #{r(insn.val)}"
+      when Jump    then "Jump #{format_edge(insn.target)}"
+      when IfTrue  then "IfTrue #{r(insn.val)}, #{format_edge(insn.target)}"
+      when IfFalse then "IfFalse #{r(insn.val)}, #{format_edge(insn.target)}"
       else "#{prefix}Unknown"
       end
     end
 
-    def replace_operands(insn, old_insn, new_insn)
-      case insn
-      when GuardType
-        insn.val = new_insn if insn.val.equal?(old_insn)
-        insn.state = new_insn if insn.state.equal?(old_insn)
-      when RefineType
-        insn.val = new_insn if insn.val.equal?(old_insn)
-      when Test
-        insn.val = new_insn if insn.val.equal?(old_insn)
-      when FixnumAdd, FixnumSub, FixnumMult
-        insn.left = new_insn if insn.left.equal?(old_insn)
-        insn.right = new_insn if insn.right.equal?(old_insn)
-        insn.state = new_insn if insn.state.equal?(old_insn)
-      when FixnumLt, FixnumEq, FixnumGt
-        insn.left = new_insn if insn.left.equal?(old_insn)
-        insn.right = new_insn if insn.right.equal?(old_insn)
-      when Send
-        insn.recv = new_insn if insn.recv.equal?(old_insn)
-        insn.args.map! { |a| a.equal?(old_insn) ? new_insn : a }
-        insn.state = new_insn if insn.state.equal?(old_insn)
-      when Return
-        insn.val = new_insn if insn.val.equal?(old_insn)
-      when Jump
-        insn.target.args.map! { |a| a.equal?(old_insn) ? new_insn : a }
-      when IfTrue, IfFalse
-        insn.val = new_insn if insn.val.equal?(old_insn)
-        insn.target.args.map! { |a| a.equal?(old_insn) ? new_insn : a }
+    def format_edge(edge)
+      if edge.args.empty?
+        edge.target.to_s
+      else
+        "#{edge.target}(#{edge.args.map { |a| r(a).to_s }.join(", ")})"
       end
     end
   end
@@ -769,145 +802,271 @@ module MiniZJIT
   # Optimization Passes
   # ═══════════════════════════════════════════════════════════════════
 
-  module Passes
+  # ═══════════════════════════════════════════════════════════════════
+  # Optimization — structured like real ZJIT:
+  #   type_specialize → fold_constants → clean_cfg → eliminate_dead_code
+  # No fixpoint. Each pass runs once. Uses union-find (make_equal_to)
+  # for value forwarding instead of rewriting operands in place.
+  # ═══════════════════════════════════════════════════════════════════
 
-    # ── Constant Folding ─────────────────────────────────────────────
+  class Function
 
-    def self.fold_constants(fun)
-      changed = false
-      fun.each_block_rpo do |block|
-        block.insns.each do |insn|
-          case insn
-          when FixnumAdd, FixnumSub, FixnumMult
-            lt = insn.left.type
-            rt = insn.right.type
-            if lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
-              result = case insn
-                       when FixnumAdd  then lt.const_val + rt.const_val
-                       when FixnumSub  then lt.const_val - rt.const_val
-                       when FixnumMult then lt.const_val * rt.const_val
-                       end
-              # Mutate in-place: turn into a Const-like node
-              # We cheat by changing the type and swapping the class
-              insn.type = Types::Fixnum.with_const(result)
-              # Replace the insn in the block's list with a fresh Const
-              new_const = Const.new(result, Types::Fixnum.with_const(result))
-              new_const.id = insn.id
-              new_const.block = block
-              idx = block.insns.index(insn)
-              block.insns[idx] = new_const
-              fun.replace_uses(insn, new_const)
-              changed = true
-            end
-          when FixnumLt, FixnumEq, FixnumGt
-            lt = insn.left.type
-            rt = insn.right.type
-            if lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
-              result = case insn
-                       when FixnumLt then lt.const_val < rt.const_val
-                       when FixnumEq then lt.const_val == rt.const_val
-                       when FixnumGt then lt.const_val > rt.const_val
-                       end
-              type = result ? Types::TrueClass : Types::FalseClass
-              new_const = Const.new(result, type)
-              new_const.id = insn.id
-              new_const.block = block
-              idx = block.insns.index(insn)
-              block.insns[idx] = new_const
-              fun.replace_uses(insn, new_const)
-              changed = true
-            end
+    # ── type_specialize (strength reduction) ─────────────────────────
+    # Lower Send instructions on known-Fixnum receivers into specialized
+    # Fixnum operations with GuardType side-exits. In real ZJIT this also
+    # handles inline, getivar, c_calls, etc.
+
+    FIXNUM_SEND_MAP = {
+      :+  => :FixnumAdd,  :-  => :FixnumSub,  :*  => :FixnumMult,
+      :<  => :FixnumLt,   :== => :FixnumEq,   :>  => :FixnumGt,
+    }.freeze
+
+    def type_specialize
+      rpo.each do |block|
+        old_insns = block.insns.dup
+        block.insns.clear
+        old_insns.each do |insn|
+          insn = find(insn)
+          next push_insn_id(block, insn) unless insn.is_a?(Send)
+          next push_insn_id(block, insn) unless FIXNUM_SEND_MAP.key?(insn.method_name)
+
+          recv_type = type_of(insn.recv)
+          arg_type  = insn.args[0] ? type_of(insn.args[0]) : nil
+
+          unless recv_type.fixnum? && arg_type&.fixnum?
+            push_insn_id(block, insn); next
           end
+
+          # Guard both operands
+          gl = push_insn(block, GuardType.new(find(insn.recv), Types::Fixnum, insn.state))
+          gl.type = type_of(insn.recv) & Types::Fixnum
+          gr = push_insn(block, GuardType.new(find(insn.args[0]), Types::Fixnum, insn.state))
+          gr.type = type_of(insn.args[0]) & Types::Fixnum
+
+          # Emit specialized op
+          specialized = case FIXNUM_SEND_MAP[insn.method_name]
+            when :FixnumAdd  then FixnumAdd.new(gl, gr, insn.state)
+            when :FixnumSub  then FixnumSub.new(gl, gr, insn.state)
+            when :FixnumMult then FixnumMult.new(gl, gr, insn.state)
+            when :FixnumLt   then FixnumLt.new(gl, gr)
+            when :FixnumEq   then FixnumEq.new(gl, gr)
+            when :FixnumGt   then FixnumGt.new(gl, gr)
+            end
+          result = push_insn(block, specialized)
+          result.type = infer_type(result)
+          make_equal_to(insn, result)
         end
       end
-      changed
     end
 
-    # ── Type Propagation ─────────────────────────────────────────────
+    # ── fold_constants ───────────────────────────────────────────────
+    # Single-pass over RPO. Handles:
+    #   - Redundant guard elimination (GuardType on known type)
+    #   - Fixnum arithmetic/comparison folding
+    #   - Test folding on known truthy/falsy
+    #   - Branch simplification (IfTrue/IfFalse on known condition)
+    # Uses make_equal_to + continue (skip) to drop replaced insns,
+    # just like real ZJIT.
 
-    def self.propagate_types(fun)
-      changed = false
-      fun.each_block_rpo do |block|
-        block.insns.each do |insn|
-          case insn
+    def fold_constants
+      rpo.each do |block|
+        old_insns = block.insns.dup
+        block.insns.clear
+        old_insns.each do |insn_id|
+          insn = find(insn_id)
+          replacement = case insn
+
+          # Guard elimination: if val already has the guarded type, forward
           when GuardType
-            narrowed = insn.val.type & insn.guard_type
-            if insn.type != narrowed
-              insn.type = narrowed
-              changed = true
+            if is_a?(insn.val, insn.guard_type)
+              make_equal_to(insn, find(insn.val))
+              next  # drop from block
             end
-          when RefineType
-            narrowed = insn.val.type & insn.new_type
-            if insn.type != narrowed
-              insn.type = narrowed
-              changed = true
+            insn
+
+          # Fixnum arithmetic folding
+          when FixnumAdd, FixnumSub, FixnumMult
+            fold_fixnum_bop(insn) || insn
+
+          # Fixnum comparison folding
+          when FixnumLt, FixnumEq, FixnumGt
+            fold_fixnum_pred(insn) || insn
+
+          # Test folding on known truthy/falsy values
+          when Test
+            val_type = type_of(insn.val)
+            if val_type <= Types::NilClass || val_type <= Types::FalseClass
+              new_insn(Const.new(false, Types::FalseClass))
+            elsif val_type <= Types::Fixnum || val_type <= Types::TrueClass || val_type <= Types::String
+              new_insn(Const.new(true, Types::TrueClass))
+            else
+              insn
             end
-          end
-        end
-      end
-      changed
-    end
 
-    # ── Eliminate Redundant Guards ───────────────────────────────────
+          # Branch simplification: fold IfTrue/IfFalse on known booleans
+          when IfTrue
+            val_type = type_of(insn.val)
+            if val_type <= Types::TrueClass
+              # Always taken → replace with Jump
+              new_insn(Jump.new(insn.target))
+            elsif val_type <= Types::FalseClass
+              next  # never taken → drop
+            else
+              insn
+            end
 
-    def self.eliminate_redundant_guards(fun)
-      changed = false
-      fun.each_block_rpo do |block|
-        block.insns.each_with_index do |insn, idx|
-          next unless insn.is_a?(GuardType)
-          if insn.val.type <= insn.guard_type
-            # Guard is redundant — forward all uses to the input
-            fun.replace_uses(insn, insn.val)
-            # Replace with a RefineType for bookkeeping
-            refined = RefineType.new(insn.val, insn.guard_type)
-            refined.id = insn.id
-            refined.type = insn.val.type
-            refined.block = block
-            block.insns[idx] = refined
-            changed = true
-          end
-        end
-      end
-      changed
-    end
+          when IfFalse
+            val_type = type_of(insn.val)
+            if val_type <= Types::FalseClass
+              # Always taken → replace with Jump
+              new_insn(Jump.new(insn.target))
+            elsif val_type <= Types::TrueClass
+              next  # never taken → drop
+            else
+              insn
+            end
 
-    # ── Dead Code Elimination ────────────────────────────────────────
-
-    def self.eliminate_dead_code(fun)
-      # Build use counts via object identity
-      used = Hash.new(0)
-      fun.blocks.each do |block|
-        (block.params + block.insns).each do |insn|
-          insn.operands.each { |op| used[op.object_id] += 1 if op.is_a?(Insn) }
-        end
-      end
-
-      changed = false
-      fun.blocks.each do |block|
-        block.insns.reject! do |insn|
-          if used[insn.object_id] == 0 && insn.effects.elidable?
-            changed = true
-            true
           else
-            false
+            insn
+          end
+
+          # If we created a new instruction, link old→new in union-find and infer type
+          if !replacement.equal?(insn) && replacement.type != Types::Empty
+            make_equal_to(insn, replacement)
+            replacement.type = infer_type(replacement)
+          end
+          push_insn_id(block, replacement)
+
+          # If we just emitted a terminator (e.g. folded IfTrue→Jump), stop
+          break if replacement.is_a?(Jump) && !insn.is_a?(Jump)
+        end
+      end
+    end
+
+    # ── clean_cfg ────────────────────────────────────────────────────
+    # Absorb single-predecessor blocks: if A jumps to B and B has only
+    # one incoming edge, merge B's instructions into A.
+
+    def clean_cfg
+      # Count incoming edges per block
+      num_in_edges = ::Array.new(@blocks.size, 0)
+      rpo.each do |block|
+        block.insns.each do |insn|
+          insn = find(insn)
+          case insn
+          when Jump    then num_in_edges[insn.target.target.id] += 1
+          when IfTrue  then num_in_edges[insn.target.target.id] += 1
+          when IfFalse then num_in_edges[insn.target.target.id] += 1
           end
         end
       end
-      changed
+
+      changed = true
+      while changed
+        changed = false
+        rpo.each do |block|
+          changed |= absorb_dst_block(num_in_edges, block)
+        end
+      end
     end
 
-    # ── Run All Passes (fixpoint) ────────────────────────────────────
+    # ── eliminate_dead_code ──────────────────────────────────────────
+    # Mark-sweep from non-elidable roots, like real ZJIT.
+    # 1. Seed worklist with all non-elidable instructions
+    # 2. Recursively mark their operands as necessary
+    # 3. Remove everything not marked
 
-    def self.optimize!(fun)
-      10.times do
-        changed = false
-        changed |= propagate_types(fun)
-        changed |= fold_constants(fun)
-        changed |= eliminate_redundant_guards(fun)
-        changed |= eliminate_dead_code(fun)
-        break unless changed
+    def eliminate_dead_code
+      worklist = []
+      rpo.each do |block|
+        block.insns.each do |insn|
+          worklist << insn unless insn.effects.elidable?
+        end
       end
-      fun
+
+      necessary = Set.new
+      while (insn = worklist.shift)
+        next if necessary.include?(insn.object_id)
+        necessary << insn.object_id
+        # Follow union-find to canonical insn and mark its operands
+        canonical = find(insn)
+        necessary << canonical.object_id
+        canonical.operands.each do |op|
+          next unless op.is_a?(Insn)
+          worklist << find(op)
+        end
+      end
+
+      rpo.each do |block|
+        block.insns.select! { |insn| necessary.include?(insn.object_id) }
+      end
+    end
+
+    # ── optimize (the pipeline) ──────────────────────────────────────
+    # Runs each pass once, sequentially, just like real ZJIT.
+
+    def optimize
+      type_specialize
+      fold_constants
+      clean_cfg
+      eliminate_dead_code
+    end
+
+    private
+
+    # Push an existing insn into a block (without allocating a new id)
+    def push_insn_id(block, insn)
+      block.push(insn)
+      insn.block = block
+      insn
+    end
+
+    def absorb_dst_block(num_in_edges, block)
+      last = block.insns.last
+      return false unless last
+      last = find(last)
+      return false unless last.is_a?(Jump)
+
+      target = last.target.target
+      return false if target.equal?(block)          # can't absorb self
+      return false if num_in_edges[target.id] != 1  # must be sole predecessor
+
+      # Link block params → jump args via union-find
+      target.params.each_with_index do |param, i|
+        make_equal_to(param, find(last.target.args[i]))
+      end
+
+      # Remove the Jump, append target's insns
+      block.insns.pop
+      target.insns.each { |insn| push_insn_id(block, insn) }
+      target.insns.clear
+      target.params.clear
+      true
+    end
+
+    def fold_fixnum_bop(insn)
+      lt = type_of(insn.left)
+      rt = type_of(insn.right)
+      return nil unless lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
+      result = case insn
+               when FixnumAdd  then lt.const_val + rt.const_val
+               when FixnumSub  then lt.const_val - rt.const_val
+               when FixnumMult then lt.const_val * rt.const_val
+               end
+      new_insn(Const.new(result, Types::Fixnum.with_const(result)))
+    end
+
+    def fold_fixnum_pred(insn)
+      lt = type_of(insn.left)
+      rt = type_of(insn.right)
+      return nil unless lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
+      result = case insn
+               when FixnumLt then lt.const_val < rt.const_val
+               when FixnumEq then lt.const_val == rt.const_val
+               when FixnumGt then lt.const_val > rt.const_val
+               end
+      type = result ? Types::TrueClass : Types::FalseClass
+      new_insn(Const.new(result, type))
     end
   end
 
@@ -921,14 +1080,14 @@ module MiniZJIT
 
   def self.compile_and_optimize(iseq)
     fun = compile(iseq)
-    Passes.optimize!(fun)
+    fun.optimize
     fun
   end
 
   def self.hir(code, optimize: true)
     iseq = RubyVM::InstructionSequence.compile(code)
     fun = compile(iseq)
-    Passes.optimize!(fun) if optimize
+    fun.optimize if optimize
     fun.to_s
   end
 end
