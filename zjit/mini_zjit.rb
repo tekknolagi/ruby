@@ -279,6 +279,11 @@ module MiniZJIT
     # Override in subclasses
     def operands = []
     def effects  = Effects.new(Eff::Empty, Eff::Empty)
+
+    # GVN key: [class, *canonical_operand_ids]. Two instructions with the
+    # same key compute the same value. Returns nil if not numberable
+    # (side-effecting, control, etc). Subclasses override as needed.
+    def value_key(fun) = nil
   end
 
   class Param < Insn
@@ -295,6 +300,7 @@ module MiniZJIT
       super(type)
       @val = val
     end
+    def value_key(_fun) = [:Const, @val]
   end
 
   class Snapshot < Insn
@@ -340,6 +346,7 @@ module MiniZJIT
       @val = val
     end
     def operands = [val]
+    def value_key(fun) = [:Test, fun.find(val).id]
   end
 
   class FixnumAdd < Insn
@@ -350,6 +357,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
+    def value_key(fun) = [:FixnumAdd, fun.find(left).id, fun.find(right).id]
   end
 
   class FixnumSub < Insn
@@ -360,6 +368,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
+    def value_key(fun) = [:FixnumSub, fun.find(left).id, fun.find(right).id]
   end
 
   class FixnumMult < Insn
@@ -370,6 +379,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
+    def value_key(fun) = [:FixnumMult, fun.find(left).id, fun.find(right).id]
   end
 
   class FixnumLt < Insn
@@ -379,6 +389,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
+    def value_key(fun) = [:FixnumLt, fun.find(left).id, fun.find(right).id]
   end
 
   class FixnumEq < Insn
@@ -388,6 +399,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
+    def value_key(fun) = [:FixnumEq, fun.find(left).id, fun.find(right).id]
   end
 
   class FixnumGt < Insn
@@ -397,6 +409,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
+    def value_key(fun) = [:FixnumGt, fun.find(left).id, fun.find(right).id]
   end
 
   class Send < Insn
@@ -488,6 +501,100 @@ module MiniZJIT
     end
 
     def to_s = "bb#{@id}"
+  end
+
+  # ─── Dominators (Cooper/Harvey/Kennedy) ─────────────────────────────
+  # Computes the immediate dominator (idom) of each block using the
+  # "engineered algorithm" from:
+  #   Cooper, Harvey & Kennedy, "A Simple, Fast Dominance Algorithm", 2001
+  #   https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf
+
+  class Dominators
+    def initialize(fun)
+      @blocks = fun.rpo
+      return if @blocks.empty?
+
+      # Map block → RPO index for fast comparison
+      @rpo_index = {}
+      @blocks.each_with_index { |b, i| @rpo_index[b.id] = i }
+
+      # Build predecessor lists
+      @preds = Hash.new { |h, k| h[k] = [] }
+      @blocks.each do |block|
+        block.insns.each do |insn|
+          insn = fun.find(insn)
+          case insn
+          when Jump    then @preds[insn.target.target.id] << block
+          when IfTrue  then @preds[insn.target.target.id] << block
+          when IfFalse then @preds[insn.target.target.id] << block
+          end
+        end
+      end
+
+      # idom[block_id] = Block (immediate dominator)
+      @idoms = {}
+      root = @blocks[0]
+      @idoms[root.id] = root  # root dominates itself (sentinel)
+
+      # Iterate until convergence
+      changed = true
+      while changed
+        changed = false
+        @blocks.each do |block|
+          next if block.equal?(root)
+          preds = @preds[block.id]
+          next if preds.empty?
+
+          # Pick first processed predecessor
+          new_idom = preds.find { |p| @idoms.key?(p.id) }
+          next unless new_idom
+
+          # Intersect with remaining processed predecessors
+          preds.each do |p|
+            next if p.equal?(new_idom)
+            next unless @idoms.key?(p.id)
+            new_idom = intersect(new_idom, p)
+          end
+
+          if @idoms[block.id] != new_idom
+            @idoms[block.id] = new_idom
+            changed = true
+          end
+        end
+      end
+    end
+
+    # Return the immediate dominator of a block (nil for root)
+    def idom(block)
+      d = @idoms[block.id]
+      (d && !d.equal?(block)) ? d : nil
+    end
+
+    # Does `a` dominate `b`? Walk idom chain from b upward.
+    def dominates?(a, b)
+      current = b
+      while current
+        return true if current.equal?(a)
+        current = idom(current)
+      end
+      false
+    end
+
+    private
+
+    def intersect(b1, b2)
+      finger1 = b1
+      finger2 = b2
+      while !finger1.equal?(finger2)
+        while @rpo_index[finger1.id] > @rpo_index[finger2.id]
+          finger1 = @idoms[finger1.id]
+        end
+        while @rpo_index[finger2.id] > @rpo_index[finger1.id]
+          finger2 = @idoms[finger2.id]
+        end
+      end
+      finger1
+    end
   end
 
   # ─── Function (the whole HIR graph) ────────────────────────────────
@@ -1124,12 +1231,52 @@ module MiniZJIT
       end
     end
 
+    # ── global_value_numbering ─────────────────────────────────────
+    # Dominator-tree-based GVN, following the Maxine-VM C1X approach:
+    #   1. Compute dominators (Cooper/Harvey/Kennedy)
+    #   2. Walk blocks in RPO; each block inherits its dominator's value map
+    #   3. For each numberable instruction, findInsert in scoped map
+    #   4. If found, make_equal_to the duplicate → the original
+
+    def global_value_numbering
+      doms = Dominators.new(self)
+      value_maps = {}  # Block -> Hash { value_key => Insn }
+
+      rpo.each do |block|
+        # Inherit dominator's value map (scoped — copy on write via dup)
+        idom = doms.idom(block)
+        parent_map = (idom && idom != block) ? value_maps[idom.id] : nil
+        current_map = parent_map ? parent_map.dup : {}
+
+        # Rebuild insn list, dropping duplicates (like fold_constants)
+        old_insns = block.insns.dup
+        block.insns.clear
+        old_insns.each do |insn|
+          canonical = find(insn)
+          key = canonical.value_key(self)
+          if key
+            existing = current_map[key]
+            if existing && !existing.equal?(canonical)
+              make_equal_to(canonical, existing)
+              next  # drop duplicate from block
+            else
+              current_map[key] = canonical
+            end
+          end
+          block.insns << insn
+        end
+
+        value_maps[block.id] = current_map
+      end
+    end
+
     # ── optimize (the pipeline) ──────────────────────────────────────
     # Runs each pass once, sequentially, just like real ZJIT.
 
     def optimize
       type_specialize
       fold_constants
+      global_value_numbering
       clean_cfg
       eliminate_dead_code
     end
@@ -1714,6 +1861,166 @@ if $0 == __FILE__
           v3:BasicObject = Send v1, :length
           Return v3
       HIR
+    end
+  end
+
+  # ── dominators tests ──────────────────────────────────────────────
+
+  class DominatorsTest < Minitest::Test
+    include MiniZJIT
+
+    def test_single_block_dominates_itself
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      fun.push_insn(bb0, Return.new(fun.push_insn(bb0, Const.new(1, Types::Fixnum))))
+      doms = Dominators.new(fun)
+      assert_nil doms.idom(bb0), "root has no idom"
+      assert doms.dominates?(bb0, bb0), "root dominates itself"
+    end
+
+    def test_linear_chain
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb1)))
+      fun.push_insn(bb1, Return.new(fun.push_insn(bb1, Const.new(1, Types::Fixnum))))
+      doms = Dominators.new(fun)
+      assert_equal bb0, doms.idom(bb1)
+      assert doms.dominates?(bb0, bb1)
+      refute doms.dominates?(bb1, bb0)
+    end
+
+    def test_diamond
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      bb2 = fun.new_block
+      bb3 = fun.new_block
+      cond = fun.push_insn(bb0, Const.new(true, Types::TrueClass))
+      test = fun.push_insn(bb0, Test.new(cond))
+      fun.push_insn(bb0, IfTrue.new(test, BranchEdge.new(bb1)))
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb2)))
+      fun.push_insn(bb1, Jump.new(BranchEdge.new(bb3)))
+      fun.push_insn(bb2, Jump.new(BranchEdge.new(bb3)))
+      fun.push_insn(bb3, Return.new(fun.push_insn(bb3, Const.new(1, Types::Fixnum))))
+      doms = Dominators.new(fun)
+      # bb0 dominates everything
+      assert doms.dominates?(bb0, bb1)
+      assert doms.dominates?(bb0, bb2)
+      assert doms.dominates?(bb0, bb3)
+      # bb1 and bb2 don't dominate bb3 (both paths lead there)
+      refute doms.dominates?(bb1, bb3)
+      refute doms.dominates?(bb2, bb3)
+      # bb3's idom is bb0
+      assert_equal bb0, doms.idom(bb3)
+    end
+  end
+
+  # ── GVN tests ────────────────────────────────────────────────────
+
+  class GVNTest < Minitest::Test
+    include MiniZJIT
+
+    def test_duplicate_fixnum_add_eliminated
+      # Build: bb0(a:Fixnum, b:Fixnum)
+      #   v2 = FixnumAdd a, b
+      #   v3 = FixnumAdd a, b   ← duplicate, GVN should unify with v2
+      #   v4 = FixnumAdd v2, v3
+      #   Return v4
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      a = fun.push_insn(bb0, Param.new(0, Types::Fixnum))
+      b = fun.push_insn(bb0, Param.new(1, Types::Fixnum))
+      snap = fun.push_insn(bb0, Snapshot.new({}, []))
+      add1 = fun.push_insn(bb0, FixnumAdd.new(a, b, snap))
+      add2 = fun.push_insn(bb0, FixnumAdd.new(a, b, snap))
+      sum  = fun.push_insn(bb0, FixnumAdd.new(add1, add2, snap))
+      fun.push_insn(bb0, Return.new(sum))
+
+      fun.global_value_numbering
+      fun.eliminate_dead_code
+
+      hir = fun.to_s.strip
+      # add2 should be eliminated — only one FixnumAdd of a,b remains
+      add_count = hir.scan("FixnumAdd").size
+      assert_equal 2, add_count,
+        "Expected 2 FixnumAdd (a+b and result+result), got #{add_count}:\n#{hir}"
+    end
+
+    def test_duplicate_const_eliminated
+      # Two identical Const(42) in the same block — GVN deduplicates
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      c1 = fun.push_insn(bb0, Const.new(42, Types::Fixnum.with_const(42)))
+      c2 = fun.push_insn(bb0, Const.new(42, Types::Fixnum.with_const(42)))
+      snap = fun.push_insn(bb0, Snapshot.new({}, []))
+      add = fun.push_insn(bb0, FixnumAdd.new(c1, c2, snap))
+      fun.push_insn(bb0, Return.new(add))
+
+      fun.global_value_numbering
+      fun.eliminate_dead_code
+
+      hir = fun.to_s.strip
+      const_count = hir.scan("Const 42").size
+      assert_equal 1, const_count,
+        "Expected 1 Const 42 after GVN, got #{const_count}:\n#{hir}"
+    end
+
+    def test_gvn_across_dominator
+      # bb0: v0 = Const 42, Jump bb1
+      # bb1: v1 = Const 42, Return v1
+      # GVN should unify v1 with v0 since bb0 dominates bb1
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      c0 = fun.push_insn(bb0, Const.new(42, Types::Fixnum.with_const(42)))
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb1)))
+      c1 = fun.push_insn(bb1, Const.new(42, Types::Fixnum.with_const(42)))
+      fun.push_insn(bb1, Return.new(c1))
+
+      fun.global_value_numbering
+      fun.eliminate_dead_code
+
+      hir = fun.to_s.strip
+      const_count = hir.scan("Const 42").size
+      assert_equal 1, const_count,
+        "Expected 1 Const 42 after GVN across dominator:\n#{hir}"
+    end
+
+    def test_gvn_does_not_unify_across_non_dominator
+      # Diamond: bb0 → bb1, bb0 → bb2, bb1 → bb3, bb2 → bb3
+      # bb1 and bb2 each have FixnumAdd(a,b) — neither dominates the other
+      # so GVN should NOT unify them
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      bb2 = fun.new_block
+      bb3 = fun.new_block
+      a = fun.push_insn(bb0, Param.new(0, Types::Fixnum))
+      b = fun.push_insn(bb0, Param.new(1, Types::Fixnum))
+      cond = fun.push_insn(bb0, Const.new(true, Types::TrueClass))
+      test = fun.push_insn(bb0, Test.new(cond))
+      fun.push_insn(bb0, IfTrue.new(test, BranchEdge.new(bb1)))
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb2)))
+
+      snap1 = fun.push_insn(bb1, Snapshot.new({}, []))
+      add1 = fun.push_insn(bb1, FixnumAdd.new(a, b, snap1))
+      fun.push_insn(bb1, Jump.new(BranchEdge.new(bb3, [add1])))
+
+      snap2 = fun.push_insn(bb2, Snapshot.new({}, []))
+      add2 = fun.push_insn(bb2, FixnumAdd.new(a, b, snap2))
+      fun.push_insn(bb2, Jump.new(BranchEdge.new(bb3, [add2])))
+
+      p0 = fun.push_insn(bb3, Param.new(:result, Types::Fixnum))
+      fun.push_insn(bb3, Return.new(p0))
+
+      fun.global_value_numbering
+
+      # Both adds should survive — neither dominates the other
+      hir = fun.to_s.strip
+      add_count = hir.scan("FixnumAdd").size
+      assert_equal 2, add_count,
+        "Expected 2 FixnumAdd (non-dominating branches), got #{add_count}:\n#{hir}"
     end
   end
 
