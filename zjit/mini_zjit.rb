@@ -15,79 +15,213 @@ require "set"
 module MiniZJIT
 
   # ═══════════════════════════════════════════════════════════════════
-  # Type Lattice
+  # Type Lattice — bitset-based, like real ZJIT
   #
-  #   Any (top)
-  #   ├── BasicObject
-  #   │   ├── Fixnum  (may carry a constant: Fixnum[3])
-  #   │   ├── Float
-  #   │   ├── String
-  #   │   ├── Array
-  #   │   ├── NilClass
-  #   │   ├── TrueClass
-  #   │   ├── FalseClass
-  #   │   └── Object
-  #   ├── CBool   (internal C boolean from Test/IsNil)
-  #   └── Empty   (bottom — unreachable)
+  # Each leaf type gets one bit. Composite types are bitwise OR of their
+  # children. Subtype check is (a.bits & b.bits) == a.bits. Intersection
+  # is bitwise AND. An optional Specialization carries constant info.
+  #
+  # Bit layout (leaf types):
+  #   0: Fixnum    4: NilClass    8:  Array     12: CBool
+  #   1: Flonum    5: TrueClass   9:  Hash
+  #   2: Bignum    6: FalseClass  10: Symbol
+  #   3: String    7: Object      11: Undef
+  #
+  # Composite types (bitwise OR):
+  #   Integer      = Fixnum | Bignum
+  #   Float        = Flonum
+  #   Numeric      = Integer | Float
+  #   Immediate    = Fixnum | Flonum | NilClass | TrueClass | FalseClass | Symbol
+  #   Falsy        = NilClass | FalseClass
+  #   BasicObject  = Fixnum | Flonum | Bignum | String | NilClass | TrueClass
+  #                  | FalseClass | Object | Array | Hash | Symbol | Undef
+  #   CValue       = CBool
+  #   RubyValue    = BasicObject | Undef
+  #   Any          = RubyValue | CValue
+  #   Empty        = 0 (bottom)
   # ═══════════════════════════════════════════════════════════════════
 
-  RUBY_TYPES = %i[Fixnum Float String Array NilClass TrueClass FalseClass Object].freeze
+  module Bits
+    Fixnum    = 1 << 0
+    Flonum    = 1 << 1
+    Bignum    = 1 << 2
+    String    = 1 << 3
+    NilClass  = 1 << 4
+    TrueClass = 1 << 5
+    FalseClass= 1 << 6
+    Object    = 1 << 7
+    Array     = 1 << 8
+    Hash      = 1 << 9
+    Symbol    = 1 << 10
+    Undef     = 1 << 11
+    CBool     = 1 << 12
+
+    Integer     = Fixnum | Bignum
+    Float       = Flonum
+    Numeric     = Integer | Float
+    Immediate   = Fixnum | Flonum | NilClass | TrueClass | FalseClass | Symbol
+    Falsy       = NilClass | FalseClass
+    BasicObject = Fixnum | Flonum | Bignum | String | NilClass | TrueClass |
+                  FalseClass | Object | Array | Hash | Symbol | Undef
+    CValue      = CBool
+    RubyValue   = BasicObject | Undef
+    Any         = RubyValue | CValue
+    Empty       = 0
+
+    # Map from single-bit leaf → display name (sorted by bit position)
+    LEAF_NAMES = {
+      Fixnum => "Fixnum", Flonum => "Flonum", Bignum => "Bignum",
+      String => "String", NilClass => "NilClass", TrueClass => "TrueClass",
+      FalseClass => "FalseClass", Object => "Object", Array => "Array",
+      Hash => "Hash", Symbol => "Symbol", Undef => "Undef", CBool => "CBool",
+    }.freeze
+
+    # Named composite patterns for display (checked in order, most specific first)
+    NAMED_COMPOSITES = [
+      [Integer, "Integer"], [Float, "Float"], [Numeric, "Numeric"],
+      [Immediate, "Immediate"], [Falsy, "Falsy"],
+      [BasicObject, "BasicObject"], [CValue, "CValue"],
+      [RubyValue, "RubyValue"], [Any, "Any"],
+    ].freeze
+  end
+
+  # Specialization — optional constant/object info attached to a Type.
+  # Like real ZJIT: bits tell you the set of possible types, spec tells
+  # you "we know exactly this value/class".
+  module Spec
+    NONE  = :none   # No specialization (like Specialization::Any)
+    # Otherwise, the spec is the Ruby constant value itself (like Specialization::Object)
+  end
 
   class Type
-    attr_reader :name, :const_val
+    attr_reader :bits, :spec
 
-    def initialize(name, const_val = :none)
-      @name = name
-      @const_val = const_val
+    def initialize(bits, spec = Spec::NONE)
+      @bits = bits
+      @spec = spec
     end
 
-    def with_const(val) = Type.new(@name, val)
-    def has_const?      = @const_val != :none
-    def fixnum?         = @name == :Fixnum
-    def nilclass?       = @name == :NilClass
-    def empty?          = @name == :Empty
-    def any?            = @name == :Any
-    def cbool?          = @name == :CBool
-    def basic_object?   = @name == :BasicObject
+    # ── Constructors ──
 
+    def with_const(val) = Type.new(@bits, val)
+
+    # ── Predicates ──
+
+    def has_const?      = @spec != Spec::NONE
+    def fixnum?         = (@bits & ~Bits::Fixnum) == 0 && @bits != 0
+    def nilclass?       = (@bits & ~Bits::NilClass) == 0 && @bits != 0
+    def empty?          = @bits == Bits::Empty
+    def any?            = @bits == Bits::Any
+    def cbool?          = (@bits & ~Bits::CBool) == 0 && @bits != 0
+    def basic_object?   = (@bits & ~Bits::BasicObject) == 0 && @bits != 0
+    def const_val       = @spec
+
+    # ── Lattice operations ──
+
+    # Subtype: self's bits are a subset of other's bits, and specs are compatible
     def <=(other)
-      return true if other.any?
-      return true if self.empty?
-      return true if @name == other.name
-      return true if other.name == :BasicObject && RUBY_TYPES.include?(@name)
+      return true if @bits == Bits::Empty
+      return true if (@bits & other.bits) == @bits && spec_compatible?(other)
       false
     end
 
+    # Intersection (meet): bitwise AND of bits, keep more specific spec
     def &(other)
-      return self  if self <= other
-      return other if other <= self
-      Types::Empty
+      new_bits = @bits & other.bits
+      return Types::Empty if new_bits == Bits::Empty
+      if self <= other
+        Type.new(new_bits, @spec)
+      elsif other <= self
+        Type.new(new_bits, other.spec)
+      else
+        Type.new(new_bits)
+      end
     end
+
+    # Union (join): bitwise OR of bits, keep spec only if identical
+    def |(other)
+      new_bits = @bits | other.bits
+      new_spec = (@spec == other.spec) ? @spec : Spec::NONE
+      Type.new(new_bits, new_spec)
+    end
+
+    # ── Display ──
 
     def to_s
-      s = @name.to_s
-      s += "[#{@const_val.inspect}]" if has_const?
-      s
+      return "Empty" if @bits == Bits::Empty
+
+      # Try exact match against leaf types first (most specific)
+      Bits::LEAF_NAMES.each do |pattern, name|
+        if @bits == pattern
+          s = name
+          s += "[#{@spec.inspect}]" if has_const?
+          return s
+        end
+      end
+
+      # Try exact match against named composites
+      Bits::NAMED_COMPOSITES.each do |pattern, name|
+        if @bits == pattern
+          s = name
+          s += "[#{@spec.inspect}]" if has_const?
+          return s
+        end
+      end
+
+      # Decompose into union of smallest named parts
+      remaining = @bits
+      parts = []
+      Bits::LEAF_NAMES.each do |pattern, name|
+        if @bits == pattern
+          s = name
+          s += "[#{@spec.inspect}]" if has_const?
+          return s
+        end
+      end
+
+      # Decompose into union of smallest named parts
+      remaining = @bits
+      parts = []
+      Bits::LEAF_NAMES.each do |pattern, name|
+        if (remaining & pattern) == pattern
+          parts << name
+          remaining &= ~pattern
+        end
+      end
+      parts.join("|")
     end
 
-    def ==(other) = other.is_a?(Type) && @name == other.name && @const_val == other.const_val
+    def ==(other) = other.is_a?(Type) && @bits == other.bits && @spec == other.spec
     def eql?(other) = self == other
-    def hash = [@name, @const_val].hash
+    def hash = [@bits, @spec].hash
+
+    private
+
+    def spec_compatible?(other)
+      return true if other.spec == Spec::NONE   # other is unspecialized (Any)
+      return true if @spec == Spec::NONE && @bits == Bits::Empty  # self is Empty
+      @spec == other.spec || @spec == Spec::NONE
+    end
   end
 
   module Types
-    Any         = Type.new(:Any)
-    BasicObject = Type.new(:BasicObject)
-    Fixnum      = Type.new(:Fixnum)
-    Float       = Type.new(:Float)
-    String      = Type.new(:String)
-    Array       = Type.new(:Array)
-    NilClass    = Type.new(:NilClass)
-    TrueClass   = Type.new(:TrueClass)
-    FalseClass  = Type.new(:FalseClass)
-    Object      = Type.new(:Object)
-    CBool       = Type.new(:CBool)
-    Empty       = Type.new(:Empty)
+    Any         = Type.new(Bits::Any)
+    BasicObject = Type.new(Bits::BasicObject)
+    Fixnum      = Type.new(Bits::Fixnum)
+    Float       = Type.new(Bits::Float)
+    Integer     = Type.new(Bits::Integer)
+    Numeric     = Type.new(Bits::Numeric)
+    String      = Type.new(Bits::String)
+    Array       = Type.new(Bits::Array)
+    Hash        = Type.new(Bits::Hash)
+    Symbol      = Type.new(Bits::Symbol)
+    NilClass    = Type.new(Bits::NilClass)
+    TrueClass   = Type.new(Bits::TrueClass)
+    FalseClass  = Type.new(Bits::FalseClass)
+    Falsy       = Type.new(Bits::Falsy)
+    Object      = Type.new(Bits::Object)
+    CBool       = Type.new(Bits::CBool)
+    Empty       = Type.new(Bits::Empty)
   end
 
   # ═══════════════════════════════════════════════════════════════════
@@ -1108,6 +1242,8 @@ if $0 == __FILE__
   class TypeTest < Minitest::Test
     include MiniZJIT
 
+    # ── Bitset subtype checks ──
+
     def test_subtype_fixnum_under_basic_object
       assert Types::Fixnum <= Types::BasicObject
     end
@@ -1125,9 +1261,78 @@ if $0 == __FILE__
       refute Types::BasicObject <= Types::Fixnum
     end
 
+    def test_fixnum_subtype_of_integer
+      assert Types::Fixnum <= Types::Integer
+    end
+
+    def test_integer_not_subtype_of_fixnum
+      refute Types::Integer <= Types::Fixnum
+    end
+
+    def test_integer_subtype_of_numeric
+      assert Types::Integer <= Types::Numeric
+    end
+
+    def test_cbool_subtype_of_any
+      assert Types::CBool <= Types::Any
+    end
+
+    def test_cbool_not_subtype_of_basic_object
+      refute Types::CBool <= Types::BasicObject
+    end
+
+    def test_nilclass_subtype_of_falsy
+      assert Types::NilClass <= Types::Falsy
+    end
+
+    def test_falseclass_subtype_of_falsy
+      assert Types::FalseClass <= Types::Falsy
+    end
+
+    def test_fixnum_not_subtype_of_falsy
+      refute Types::Fixnum <= Types::Falsy
+    end
+
+    # ── Intersection (meet) via bitwise AND ──
+
     def test_meet_narrows
       assert_equal Types::Fixnum, (Types::Fixnum & Types::BasicObject)
     end
+
+    def test_meet_integer_and_fixnum
+      assert_equal Types::Fixnum, (Types::Integer & Types::Fixnum)
+    end
+
+    def test_meet_disjoint_is_empty
+      assert_equal Types::Empty, (Types::Fixnum & Types::String)
+    end
+
+    def test_meet_cbool_and_basic_object_is_empty
+      assert_equal Types::Empty, (Types::CBool & Types::BasicObject)
+    end
+
+    # ── Union (join) via bitwise OR ──
+
+    def test_union_fixnum_and_nilclass
+      union = Types::Fixnum | Types::NilClass
+      assert Types::Fixnum <= union
+      assert Types::NilClass <= union
+      refute Types::String <= union
+    end
+
+    def test_union_preserves_const_if_same
+      a = Types::Fixnum.with_const(1)
+      b = Types::Fixnum.with_const(1)
+      assert (a | b).has_const?
+    end
+
+    def test_union_drops_const_if_different
+      a = Types::Fixnum.with_const(1)
+      b = Types::Fixnum.with_const(2)
+      refute (a | b).has_const?
+    end
+
+    # ── Specialization (constant info) ──
 
     def test_type_display_with_const
       assert_equal "Fixnum[42]", Types::Fixnum.with_const(42).to_s
@@ -1135,6 +1340,32 @@ if $0 == __FILE__
 
     def test_type_display_without_const
       assert_equal "Fixnum", Types::Fixnum.to_s
+    end
+
+    def test_const_type_subtype_of_unspecialized
+      assert Types::Fixnum.with_const(42) <= Types::Fixnum
+    end
+
+    def test_unspecialized_subtype_of_const
+      # Fixnum (unspecialized) <= Fixnum[42] is true because bits match
+      # and spec_compatible allows NONE <= specific
+      assert Types::Fixnum <= Types::Fixnum.with_const(42)
+    end
+
+    # ── Display ──
+
+    def test_display_composite_types
+      assert_equal "BasicObject", Types::BasicObject.to_s
+      assert_equal "Any", Types::Any.to_s
+      assert_equal "Empty", Types::Empty.to_s
+      assert_equal "Integer", Types::Integer.to_s
+      assert_equal "Falsy", Types::Falsy.to_s
+    end
+
+    def test_display_union_decomposition
+      # A non-named union shows as pipe-separated leaves
+      union = Types::Fixnum | Types::String
+      assert_equal "Fixnum|String", union.to_s
     end
   end
 
