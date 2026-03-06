@@ -198,9 +198,9 @@ module MiniZJIT
     private
 
     def spec_compatible?(other)
-      return true if other.spec == Spec::NONE   # other is unspecialized (Any)
-      return true if @spec == Spec::NONE && @bits == Bits::Empty  # self is Empty
-      @spec == other.spec || @spec == Spec::NONE
+      return true if other.spec == Spec::NONE   # other is unspecialized — supertype of all specs
+      return true if @spec == other.spec         # identical specialization
+      false                                      # unspecialized self is NOT subtype of specialized other
     end
   end
 
@@ -1343,13 +1343,13 @@ if $0 == __FILE__
     end
 
     def test_const_type_subtype_of_unspecialized
+      # Fixnum[42] is more specific → it IS a subtype of plain Fixnum
       assert Types::Fixnum.with_const(42) <= Types::Fixnum
     end
 
-    def test_unspecialized_subtype_of_const
-      # Fixnum (unspecialized) <= Fixnum[42] is true because bits match
-      # and spec_compatible allows NONE <= specific
-      assert Types::Fixnum <= Types::Fixnum.with_const(42)
+    def test_unspecialized_not_subtype_of_const
+      # Plain Fixnum is NOT a subtype of Fixnum[42] — it could be any fixnum
+      refute Types::Fixnum <= Types::Fixnum.with_const(42)
     end
 
     # ── Display ──
