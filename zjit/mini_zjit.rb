@@ -695,10 +695,11 @@ module MiniZJIT
         visited << block
         order << block
         block.insns.each do |insn|
-          case insn
-          when Jump    then worklist << insn.target.target
-          when IfTrue  then worklist << insn.target.target
-          when IfFalse then worklist << insn.target.target
+          resolved = insn.find
+          case resolved
+          when Jump    then worklist << resolved.target.target
+          when IfTrue  then worklist << resolved.target.target
+          when IfFalse then worklist << resolved.target.target
           end
         end
       end
