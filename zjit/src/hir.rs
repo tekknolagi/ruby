@@ -1493,9 +1493,9 @@ impl Insn {
             Insn::IsBlockParamModified { .. } => effects::Any,
             Insn::GetBlockParam { .. } => effects::Any,
             Insn::Snapshot { .. } => effects::Empty,
-            Insn::Jump(_) => effects::Any,
-            Insn::IfTrue { .. } => effects::Any,
-            Insn::IfFalse { .. } => effects::Any,
+            Insn::Jump(_) => effects::Control,
+            Insn::IfTrue { .. } => effects::Control,
+            Insn::IfFalse { .. } => effects::Control,
             Insn::CCall { elidable, .. } => {
                 if *elidable {
                     Effect::write(abstract_heaps::Allocator)
@@ -8919,10 +8919,7 @@ mod graphviz_tests {
         <TR><TD ALIGN="left" PORT="v16">v16:CBool = Test v10&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v17">v17:Falsy = RefineType v10, Falsy&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v18">IfFalse v16, bb4(v9, v17)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v19">v19:Truthy = RefineType v10, Truthy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v22">v22:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v25">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v26">Return v22&nbsp;</TD></TR>
         </TABLE>>];
           bb3:v18 -> bb4:params:n;
