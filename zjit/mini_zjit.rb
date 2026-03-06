@@ -266,7 +266,7 @@ module MiniZJIT
   # ═══════════════════════════════════════════════════════════════════
 
   class Insn
-    attr_accessor :id, :type, :block
+    attr_accessor :id, :type, :block, :forwarded
 
     def initialize(type = Types::Any)
       @id = nil       # assigned by Function#push_insn
@@ -279,24 +279,26 @@ module MiniZJIT
 
     # ── Union-Find (per-instruction) ──
     # Each insn carries its own forwarding pointer. find() follows the
-    # chain with path compression. Fixpoint: insn.@forwarded == insn.
+    # chain with path compression. Fixpoint: insn.forwarded == insn.
 
     def find
-      # Path compression: flatten chain as we walk
+      # Walk to root
       root = self
-      root = root.instance_variable_get(:@forwarded) until root.instance_variable_get(:@forwarded).equal?(root)
-      # Compress
+      while !root.forwarded.equal?(root)
+        root = root.forwarded
+      end
+      # Path compression
       current = self
-      until current.equal?(root)
-        nxt = current.instance_variable_get(:@forwarded)
-        current.instance_variable_set(:@forwarded, root)
+      while !current.equal?(root)
+        nxt = current.forwarded
+        current.forwarded = root
         current = nxt
       end
       root
     end
 
     def make_equal_to(other)
-      find.instance_variable_set(:@forwarded, other.find)
+      find.forwarded = other.find
     end
 
     # Override in subclasses
