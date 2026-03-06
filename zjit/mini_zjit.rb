@@ -175,7 +175,6 @@ module MiniZJIT
 
   class PutSelf < Insn
     def initialize() = super(Types::BasicObject)
-    def effects = Effects.new(Eff::Empty, Eff::Control)
   end
 
   class GuardType < Insn
@@ -1295,7 +1294,6 @@ if $0 == __FILE__
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[3] = Const 3
           Return v9
       HIR
@@ -1305,7 +1303,6 @@ if $0 == __FILE__
       assert_hir "5 - 3", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[2] = Const 2
           Return v9
       HIR
@@ -1315,7 +1312,6 @@ if $0 == __FILE__
       assert_hir "3 * 4", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[12] = Const 12
           Return v9
       HIR
@@ -1325,7 +1321,6 @@ if $0 == __FILE__
       assert_hir "1 < 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:TrueClass = Const true
           Return v9
       HIR
@@ -1335,7 +1330,6 @@ if $0 == __FILE__
       assert_hir "3 < 1", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:FalseClass = Const false
           Return v9
       HIR
@@ -1345,7 +1339,6 @@ if $0 == __FILE__
       assert_hir "2 * 3 + 4", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v16:Fixnum[10] = Const 10
           Return v16
       HIR
@@ -1355,7 +1348,6 @@ if $0 == __FILE__
       assert_hir "(1 + 2) * (3 + 4)", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v23:Fixnum[21] = Const 21
           Return v23
       HIR
@@ -1365,7 +1357,6 @@ if $0 == __FILE__
       assert_hir "x = 1; x + 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[3] = Const 3
           Return v9
       HIR
@@ -1379,7 +1370,6 @@ if $0 == __FILE__
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v32:Fixnum[2] = Const 2
           Return v32
       HIR
@@ -1402,7 +1392,6 @@ if $0 == __FILE__
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[3] = Const 3
           Return v9
       HIR
@@ -1414,7 +1403,6 @@ if $0 == __FILE__
       assert_hir '"hello".length', <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v1:String = Const "hello"
           v3:BasicObject = Send v1, :length
           Return v3
@@ -1438,7 +1426,6 @@ if $0 == __FILE__
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[3] = Const 3
           Return v9
       HIR
@@ -1450,7 +1437,6 @@ if $0 == __FILE__
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v32:Fixnum[2] = Const 2
           Return v32
       HIR
@@ -1483,7 +1469,6 @@ if $0 == __FILE__
       assert_hir "1 + 2", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v9:Fixnum[3] = Const 3
           Return v9
       HIR
@@ -1494,7 +1479,6 @@ if $0 == __FILE__
       assert_hir '"hello".length', <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v1:String = Const "hello"
           v3:BasicObject = Send v1, :length
           Return v3
@@ -1518,7 +1502,6 @@ if $0 == __FILE__
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
         fn <compiled>:
         bb0:
-          v0:BasicObject = PutSelf
           v32:Fixnum[2] = Const 2
           Return v32
       HIR
