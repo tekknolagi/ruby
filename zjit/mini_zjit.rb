@@ -68,7 +68,7 @@ module MiniZJIT
 
     def to_s
       s = @name.to_s
-      s += "[#{@const_val}]" if has_const?
+      s += "[#{@const_val.inspect}]" if has_const?
       s
     end
 
@@ -254,7 +254,7 @@ module MiniZJIT
 
     PutSelf = Struct.new(:placeholder) do
       def operands = []
-      def effects  = Effects.new(Eff::Empty, Eff::Empty)
+      def effects  = Effects.new(Eff::Empty, Eff::Control)
     end
   end
 
@@ -626,6 +626,14 @@ module MiniZJIT
           end
           stack.push(result)
 
+        when :opt_length, :opt_size, :opt_not, :opt_succ, :opt_empty_p
+          recv = stack.pop
+          next unless recv
+          mid_map = { opt_length: :length, opt_size: :size, opt_not: :!, opt_succ: :succ, opt_empty_p: :empty? }
+          snap = fun.push_insn(current_block, Insn::Snapshot.new(locals.dup, stack.dup), Types::Any)
+          result = fun.push_insn(current_block, Insn::Send.new(recv, mid_map[op], [], snap), Types::BasicObject)
+          stack.push(result)
+
         when :opt_send_without_block
           ci = raw[1]
           mid = ci[:mid]
@@ -703,7 +711,8 @@ module MiniZJIT
 
     def build_args(fun, stack, locals, local_table, self_val)
       args = [self_val]
-      local_table.size.times { |i| args << locals[i] if locals[i] }
+      # Pass all live locals sorted by key for deterministic ordering
+      locals.keys.sort.each { |k| args << locals[k] if locals[k] }
       args.concat(stack)
       args.compact
     end
@@ -716,9 +725,9 @@ module MiniZJIT
         new_self = params[0]
         new_locals = {}
         pi = 1
-        local_table.size.times do |i|
-          if locals[i] && pi < params.size
-            new_locals[i] = params[pi]
+        locals.keys.sort.each do |k|
+          if locals[k] && pi < params.size
+            new_locals[k] = params[pi]
             pi += 1
           end
         end
@@ -733,9 +742,9 @@ module MiniZJIT
       # Create fresh params
       new_self = fun.push_insn(block, Insn::Param.new(:self), Types::BasicObject)
       new_locals = {}
-      local_table.size.times do |i|
-        if locals[i]
-          new_locals[i] = fun.push_insn(block, Insn::Param.new(i), fun.type_of(locals[i]))
+      locals.keys.sort.each do |k|
+        if locals[k]
+          new_locals[k] = fun.push_insn(block, Insn::Param.new(k), fun.type_of(locals[k]))
         end
       end
       new_stack = stack.map.with_index do |s, idx|
