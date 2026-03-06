@@ -1254,22 +1254,124 @@ if $0 == __FILE__
   end
 
   class GuardEliminationTest < Minitest::Test
-    def test_guards_eliminated_for_known_types
-      hir = MiniZJIT.hir("1 + 2")
-      refute_includes hir, "GuardType"
+    def assert_hir(code, expected, optimize: true)
+      actual = MiniZJIT.hir(code, optimize: optimize).strip
+      expected = expected.gsub(/^ {8}/, "").strip
+      assert_equal expected, actual, "HIR mismatch for: #{code}"
     end
 
-    def test_guards_present_before_optimization
-      hir = MiniZJIT.hir("1 + 2", optimize: false)
-      assert_includes hir, "GuardType"
+    def test_guards_on_known_fixnums_eliminated
+      # Both operands are Fixnum constants, so GuardType is redundant.
+      # After guard elimination + constant folding + DCE, only the
+      # folded result and PutSelf remain.
+      assert_hir "1 + 2", <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v6:Fixnum[3] = Const 3
+          Return v6
+      HIR
+    end
+
+    def test_guards_on_params_kept
+      # Branch body params have BasicObject type — guards must survive.
+      # x = 1; if x > 0 then x + 1 else ... end
+      # In the true branch (bb2), x has Fixnum[1] from the param type,
+      # so guards get eliminated there too. But the structure of the
+      # unoptimized branch shows guards are present before the pass.
+      assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR, optimize: false
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v1:Fixnum[1] = Const 1
+          v2:Fixnum[0] = Const 0
+          v4:Fixnum = GuardType v1, Fixnum
+          v5:Fixnum = GuardType v2, Fixnum
+          v6:CBool = FixnumGt v4, v5
+          v7:CBool = Test v6
+          IfFalse v7, bb1(v0, v1)
+          Jump bb2(v0, v1)
+        bb1(v18:BasicObject, v19:Fixnum[1]):
+          v20:Fixnum[1] = Const 1
+          v22:Fixnum = GuardType v19, Fixnum
+          v23:Fixnum = GuardType v20, Fixnum
+          v24:Fixnum = FixnumSub v22, v23
+          Return v24
+        bb2(v10:BasicObject, v11:Fixnum[1]):
+          v12:Fixnum[1] = Const 1
+          v14:Fixnum = GuardType v11, Fixnum
+          v15:Fixnum = GuardType v12, Fixnum
+          v16:Fixnum = FixnumAdd v14, v15
+          Return v16
+      HIR
+    end
+
+    def test_branch_guards_eliminated_after_optimization
+      # After optimization, the guards in branch bodies are eliminated
+      # because block params carry Fixnum[1] type from the edge.
+      assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v1:Fixnum[1] = Const 1
+          v6:TrueClass = Const true
+          v7:CBool = Test v6
+          IfFalse v7, bb1(v0, v1)
+          Jump bb2(v0, v1)
+        bb1(v18:BasicObject, v19:Fixnum[1]):
+          v24:Fixnum[0] = Const 0
+          Return v24
+        bb2(v10:BasicObject, v11:Fixnum[1]):
+          v16:Fixnum[2] = Const 2
+          Return v16
+      HIR
     end
   end
 
   class DCETest < Minitest::Test
-    def test_dead_instructions_removed
-      before = MiniZJIT.hir("1 + 2", optimize: false)
-      after  = MiniZJIT.hir("1 + 2", optimize: true)
-      assert after.lines.size < before.lines.size
+    def assert_hir(code, expected, optimize: true)
+      actual = MiniZJIT.hir(code, optimize: optimize).strip
+      expected = expected.gsub(/^ {8}/, "").strip
+      assert_equal expected, actual, "HIR mismatch for: #{code}"
+    end
+
+    def test_dead_consts_and_guards_removed
+      # Before: 7 body insns (2 Const, 2 GuardType, 1 FixnumAdd, 1 PutSelf, 1 Return)
+      # After constant folding, the original Const 1, Const 2, and GuardTypes
+      # become dead. DCE removes them, leaving only PutSelf, the folded Const, and Return.
+      assert_hir "1 + 2", <<~HIR, optimize: false
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v1:Fixnum[1] = Const 1
+          v2:Fixnum[2] = Const 2
+          v4:Fixnum = GuardType v1, Fixnum
+          v5:Fixnum = GuardType v2, Fixnum
+          v6:Fixnum = FixnumAdd v4, v5
+          Return v6
+      HIR
+
+      assert_hir "1 + 2", <<~HIR
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v6:Fixnum[3] = Const 3
+          Return v6
+      HIR
+    end
+
+    def test_unused_send_not_removed
+      # Send has Any effects, so it must survive even if its result is unused.
+      # (In this case the result IS used by Return, but the key property is
+      # that Send is never a DCE candidate.)
+      assert_hir '"hello".length', <<~HIR, optimize: false
+        fn <compiled>:
+        bb0:
+          v0:BasicObject = PutSelf
+          v1:String = Const "hello"
+          v3:BasicObject = Send v1, :length
+          Return v3
+      HIR
     end
   end
 end
