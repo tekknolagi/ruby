@@ -269,12 +269,35 @@ module MiniZJIT
     attr_accessor :id, :type, :block
 
     def initialize(type = Types::Any)
-      @id = nil     # assigned by Function#push_insn
+      @id = nil       # assigned by Function#push_insn
       @type = type
-      @block = nil  # back-pointer to owning Block
+      @block = nil    # back-pointer to owning Block
+      @forwarded = self  # union-find: points to self (fixpoint) or canonical rep
     end
 
-    def to_s = "v#{@id}"
+    def to_s = "v#{find.id}"
+
+    # ── Union-Find (per-instruction) ──
+    # Each insn carries its own forwarding pointer. find() follows the
+    # chain with path compression. Fixpoint: insn.@forwarded == insn.
+
+    def find
+      # Path compression: flatten chain as we walk
+      root = self
+      root = root.instance_variable_get(:@forwarded) until root.instance_variable_get(:@forwarded).equal?(root)
+      # Compress
+      current = self
+      until current.equal?(root)
+        nxt = current.instance_variable_get(:@forwarded)
+        current.instance_variable_set(:@forwarded, root)
+        current = nxt
+      end
+      root
+    end
+
+    def make_equal_to(other)
+      @forwarded = other
+    end
 
     # Override in subclasses
     def operands = []
@@ -283,7 +306,7 @@ module MiniZJIT
     # GVN key: [class, *canonical_operand_ids]. Two instructions with the
     # same key compute the same value. Returns nil if not numberable
     # (side-effecting, control, etc). Subclasses override as needed.
-    def value_key(fun) = nil
+    def value_key = nil
   end
 
   class Param < Insn
@@ -300,7 +323,7 @@ module MiniZJIT
       super(type)
       @val = val
     end
-    def value_key(_fun) = [:Const, @val]
+    def value_key = [:Const, @val]
   end
 
   class Snapshot < Insn
@@ -346,7 +369,7 @@ module MiniZJIT
       @val = val
     end
     def operands = [val]
-    def value_key(fun) = [:Test, fun.find(val).id]
+    def value_key = [:Test, val.find.id]
   end
 
   class FixnumAdd < Insn
@@ -357,7 +380,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
-    def value_key(fun) = [:FixnumAdd, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumAdd, left.find.id, right.find.id]
   end
 
   class FixnumSub < Insn
@@ -368,7 +391,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
-    def value_key(fun) = [:FixnumSub, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumSub, left.find.id, right.find.id]
   end
 
   class FixnumMult < Insn
@@ -379,7 +402,7 @@ module MiniZJIT
     end
     def operands = [left, right, state].compact
     def effects  = Effects.new(Eff::Empty, Eff::Control)
-    def value_key(fun) = [:FixnumMult, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumMult, left.find.id, right.find.id]
   end
 
   class FixnumLt < Insn
@@ -389,7 +412,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
-    def value_key(fun) = [:FixnumLt, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumLt, left.find.id, right.find.id]
   end
 
   class FixnumEq < Insn
@@ -399,7 +422,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
-    def value_key(fun) = [:FixnumEq, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumEq, left.find.id, right.find.id]
   end
 
   class FixnumGt < Insn
@@ -409,7 +432,7 @@ module MiniZJIT
       @left = left; @right = right
     end
     def operands = [left, right]
-    def value_key(fun) = [:FixnumGt, fun.find(left).id, fun.find(right).id]
+    def value_key = [:FixnumGt, left.find.id, right.find.id]
   end
 
   class Send < Insn
@@ -606,7 +629,6 @@ module MiniZJIT
       @name = name
       @blocks = []
       @next_id = 0
-      @forwarding = {}  # union-find: object_id -> canonical Insn
     end
 
     def new_block
@@ -633,28 +655,21 @@ module MiniZJIT
       insn
     end
 
-    # ─── Union-Find for value forwarding ───────────────────────────
-    # Like real ZJIT: make_equal_to(old, new) means "old" forwards to "new".
-    # find(insn) follows the chain to the canonical representative.
+    # ─── Union-Find (delegates to per-instruction forwarding) ──────
+    # Each Insn carries its own @forwarded pointer. These are convenience
+    # methods on Function that delegate to insn.find / insn.make_equal_to.
 
     def make_equal_to(old_insn, new_insn)
-      @forwarding[old_insn.object_id] = new_insn
+      old_insn.find.make_equal_to(new_insn)
     end
 
-    def find(insn)
-      # Follow the forwarding chain to the canonical representative
-      current = insn
-      while @forwarding.key?(current.object_id)
-        current = @forwarding[current.object_id]
-      end
-      current
-    end
+    def find(insn) = insn.find
 
     # Type of the canonical representative
-    def type_of(insn) = find(insn).type
+    def type_of(insn) = insn.find.type
 
     # Check if insn's type is a subtype of target_type
-    def is_a?(insn, target_type) = type_of(insn) <= target_type
+    def is_a?(insn, target_type) = insn.find.type <= target_type
 
     # Infer the type of a newly created instruction
     def infer_type(insn)
@@ -729,7 +744,7 @@ module MiniZJIT
     private
 
     # Resolve an operand through the union-find for display
-    def r(insn) = find(insn)
+    def r(insn) = insn.find
 
     def format_insn(insn)
       prefix = "#{insn}:#{insn.type} = "
@@ -1252,8 +1267,8 @@ module MiniZJIT
         old_insns = block.insns.dup
         block.insns.clear
         old_insns.each do |insn|
-          canonical = find(insn)
-          key = canonical.value_key(self)
+          canonical = insn.find
+          key = canonical.value_key
           if key
             existing = current_map[key]
             if existing && !existing.equal?(canonical)
