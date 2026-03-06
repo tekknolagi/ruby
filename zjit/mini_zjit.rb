@@ -665,21 +665,10 @@ module MiniZJIT
           next unless left && right
           snap = fun.push_insn(current_block, Snapshot.new(locals.dup, stack.dup))
 
-          if left.type.fixnum? && right.type.fixnum?
-            gl = fun.push_insn(current_block, GuardType.new(left, Types::Fixnum, snap))
-            gr = fun.push_insn(current_block, GuardType.new(right, Types::Fixnum, snap))
-            result = case op
-              when :opt_plus  then fun.push_insn(current_block, FixnumAdd.new(gl, gr, snap))
-              when :opt_minus then fun.push_insn(current_block, FixnumSub.new(gl, gr, snap))
-              when :opt_mult  then fun.push_insn(current_block, FixnumMult.new(gl, gr, snap))
-              when :opt_lt    then fun.push_insn(current_block, FixnumLt.new(gl, gr))
-              when :opt_eq    then fun.push_insn(current_block, FixnumEq.new(gl, gr))
-              when :opt_gt    then fun.push_insn(current_block, FixnumGt.new(gl, gr))
-              end
-          else
-            method = { opt_plus: :+, opt_minus: :-, opt_mult: :*, opt_lt: :<, opt_eq: :==, opt_gt: :> }[op]
-            result = fun.push_insn(current_block, Send.new(left, method, [right], snap))
-          end
+          # Always emit a generic Send. type_specialize will lower it to
+          # Fixnum ops if the types are known — just like real ZJIT.
+          method = { opt_plus: :+, opt_minus: :-, opt_mult: :*, opt_lt: :<, opt_eq: :==, opt_gt: :> }[op]
+          result = fun.push_insn(current_block, Send.new(left, method, [right], snap))
           stack.push(result)
 
         when :opt_length, :opt_size, :opt_not, :opt_succ, :opt_empty_p
