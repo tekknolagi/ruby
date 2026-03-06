@@ -296,7 +296,7 @@ module MiniZJIT
     end
 
     def make_equal_to(other)
-      @forwarded = other
+      find.instance_variable_set(:@forwarded, other.find)
     end
 
     # Override in subclasses
@@ -545,7 +545,7 @@ module MiniZJIT
       @preds = Hash.new { |h, k| h[k] = [] }
       @blocks.each do |block|
         block.insns.each do |insn|
-          insn = fun.find(insn)
+          insn = insn.find
           case insn
           when Jump    then @preds[insn.target.target.id] << block
           when IfTrue  then @preds[insn.target.target.id] << block
@@ -655,30 +655,14 @@ module MiniZJIT
       insn
     end
 
-    # ─── Union-Find (delegates to per-instruction forwarding) ──────
-    # Each Insn carries its own @forwarded pointer. These are convenience
-    # methods on Function that delegate to insn.find / insn.make_equal_to.
-
-    def make_equal_to(old_insn, new_insn)
-      old_insn.find.make_equal_to(new_insn)
-    end
-
-    def find(insn) = insn.find
-
-    # Type of the canonical representative
-    def type_of(insn) = insn.find.type
-
-    # Check if insn's type is a subtype of target_type
-    def is_a?(insn, target_type) = insn.find.type <= target_type
-
     # Infer the type of a newly created instruction
     def infer_type(insn)
       case insn
       when Const
         insn.type  # already set at creation
       when FixnumAdd, FixnumSub, FixnumMult
-        lt = type_of(insn.left)
-        rt = type_of(insn.right)
+        lt = insn.left.find.type
+        rt = insn.right.find.type
         if lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
           result = case insn
                    when FixnumAdd  then lt.const_val + rt.const_val
@@ -690,7 +674,7 @@ module MiniZJIT
           Types::Fixnum
         end
       when FixnumLt, FixnumEq, FixnumGt then Types::CBool
-      when GuardType then type_of(insn.val) & insn.guard_type
+      when GuardType then insn.val.find.type & insn.guard_type
       when Test then Types::CBool
       else insn.type
       end
@@ -1070,22 +1054,22 @@ module MiniZJIT
         old_insns = block.insns.dup
         block.insns.clear
         old_insns.each do |insn|
-          insn = find(insn)
+          insn = insn.find
           next push_insn_id(block, insn) unless insn.is_a?(Send)
           next push_insn_id(block, insn) unless FIXNUM_SEND_MAP.key?(insn.method_name)
 
-          recv_type = type_of(insn.recv)
-          arg_type  = insn.args[0] ? type_of(insn.args[0]) : nil
+          recv_type = insn.recv.find.type
+          arg_type  = insn.args[0] ? insn.args[0].find.type : nil
 
           unless recv_type.fixnum? && arg_type&.fixnum?
             push_insn_id(block, insn); next
           end
 
           # Guard both operands
-          gl = push_insn(block, GuardType.new(find(insn.recv), Types::Fixnum, insn.state))
-          gl.type = type_of(insn.recv) & Types::Fixnum
-          gr = push_insn(block, GuardType.new(find(insn.args[0]), Types::Fixnum, insn.state))
-          gr.type = type_of(insn.args[0]) & Types::Fixnum
+          gl = push_insn(block, GuardType.new(insn.recv.find, Types::Fixnum, insn.state))
+          gl.type = insn.recv.find.type & Types::Fixnum
+          gr = push_insn(block, GuardType.new(insn.args[0].find, Types::Fixnum, insn.state))
+          gr.type = insn.args[0].find.type & Types::Fixnum
 
           # Emit specialized op
           specialized = case FIXNUM_SEND_MAP[insn.method_name]
@@ -1098,7 +1082,7 @@ module MiniZJIT
             end
           result = push_insn(block, specialized)
           result.type = infer_type(result)
-          make_equal_to(insn, result)
+          insn.make_equal_to(result)
         end
       end
     end
@@ -1117,13 +1101,13 @@ module MiniZJIT
         old_insns = block.insns.dup
         block.insns.clear
         old_insns.each do |insn_id|
-          insn = find(insn_id)
+          insn = insn_id.find
           replacement = case insn
 
           # Guard elimination: if val already has the guarded type, forward
           when GuardType
-            if is_a?(insn.val, insn.guard_type)
-              make_equal_to(insn, find(insn.val))
+            if insn.val.find.type <= insn.guard_type
+              insn.make_equal_to(insn.val)
               next  # drop from block
             end
             insn
@@ -1138,7 +1122,7 @@ module MiniZJIT
 
           # Test folding on known truthy/falsy values
           when Test
-            val_type = type_of(insn.val)
+            val_type = insn.val.find.type
             if val_type <= Types::NilClass || val_type <= Types::FalseClass
               new_insn(Const.new(false, Types::FalseClass))
             elsif val_type <= Types::Fixnum || val_type <= Types::TrueClass || val_type <= Types::String
@@ -1149,9 +1133,8 @@ module MiniZJIT
 
           # Branch simplification: fold IfTrue/IfFalse on known booleans
           when IfTrue
-            val_type = type_of(insn.val)
+            val_type = insn.val.find.type
             if val_type <= Types::TrueClass
-              # Always taken → replace with Jump
               new_insn(Jump.new(insn.target))
             elsif val_type <= Types::FalseClass
               next  # never taken → drop
@@ -1160,9 +1143,8 @@ module MiniZJIT
             end
 
           when IfFalse
-            val_type = type_of(insn.val)
+            val_type = insn.val.find.type
             if val_type <= Types::FalseClass
-              # Always taken → replace with Jump
               new_insn(Jump.new(insn.target))
             elsif val_type <= Types::TrueClass
               next  # never taken → drop
@@ -1176,7 +1158,7 @@ module MiniZJIT
 
           # If we created a new instruction, link old→new in union-find and infer type
           if !replacement.equal?(insn) && replacement.type != Types::Empty
-            make_equal_to(insn, replacement)
+            insn.make_equal_to(replacement)
             replacement.type = infer_type(replacement)
           end
           push_insn_id(block, replacement)
@@ -1196,7 +1178,7 @@ module MiniZJIT
       num_in_edges = ::Array.new(@blocks.size, 0)
       rpo.each do |block|
         block.insns.each do |insn|
-          insn = find(insn)
+          insn = insn.find
           case insn
           when Jump    then num_in_edges[insn.target.target.id] += 1
           when IfTrue  then num_in_edges[insn.target.target.id] += 1
@@ -1233,11 +1215,11 @@ module MiniZJIT
         next if necessary.include?(insn.object_id)
         necessary << insn.object_id
         # Follow union-find to canonical insn and mark its operands
-        canonical = find(insn)
+        canonical = insn.find
         necessary << canonical.object_id
         canonical.operands.each do |op|
           next unless op.is_a?(Insn)
-          worklist << find(op)
+          worklist << op.find
         end
       end
 
@@ -1272,7 +1254,7 @@ module MiniZJIT
           if key
             existing = current_map[key]
             if existing && !existing.equal?(canonical)
-              make_equal_to(canonical, existing)
+              canonical.make_equal_to(existing)
               next  # drop duplicate from block
             else
               current_map[key] = canonical
@@ -1308,7 +1290,7 @@ module MiniZJIT
     def absorb_dst_block(num_in_edges, block)
       last = block.insns.last
       return false unless last
-      last = find(last)
+      last = last.find
       return false unless last.is_a?(Jump)
 
       target = last.target.target
@@ -1317,7 +1299,7 @@ module MiniZJIT
 
       # Link block params → jump args via union-find
       target.params.each_with_index do |param, i|
-        make_equal_to(param, find(last.target.args[i]))
+        param.make_equal_to(last.target.args[i])
       end
 
       # Remove the Jump, append target's insns
@@ -1329,8 +1311,8 @@ module MiniZJIT
     end
 
     def fold_fixnum_bop(insn)
-      lt = type_of(insn.left)
-      rt = type_of(insn.right)
+      lt = insn.left.find.type
+      rt = insn.right.find.type
       return nil unless lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
       result = case insn
                when FixnumAdd  then lt.const_val + rt.const_val
@@ -1341,8 +1323,8 @@ module MiniZJIT
     end
 
     def fold_fixnum_pred(insn)
-      lt = type_of(insn.left)
-      rt = type_of(insn.right)
+      lt = insn.left.find.type
+      rt = insn.right.find.type
       return nil unless lt.has_const? && rt.has_const? && lt.fixnum? && rt.fixnum?
       result = case insn
                when FixnumLt then lt.const_val < rt.const_val
