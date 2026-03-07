@@ -1478,6 +1478,118 @@ if $0 == __FILE__
   end
 
   require "minitest/autorun"
+  require "json"
+  require "fileutils"
+
+  module InlineSnapshotFix
+    PENDING_PATH = "tmp/inline_snapshots.pending.json"
+    @pending = []
+
+    class << self
+      attr_reader :pending
+
+      def normalize_expected(expected)
+        expected.gsub(/^ {8}/, "").strip
+      end
+
+      def record_mismatch(file:, line:, actual:)
+        @pending << { "file" => file, "line" => line, "actual" => actual }
+      end
+
+      def dump_pending!
+        return if @pending.empty?
+
+        FileUtils.mkdir_p(File.dirname(PENDING_PATH))
+        existing = File.exist?(PENDING_PATH) ? JSON.parse(File.read(PENDING_PATH)) : []
+        merged = {}
+        (existing + @pending).each do |entry|
+          merged["#{entry["file"]}:#{entry["line"]}"] = entry
+        end
+
+        rows = merged.values.sort_by { |entry| [entry["file"], entry["line"]] }
+        File.write(PENDING_PATH, JSON.pretty_generate(rows))
+        warn "\nInline snapshots pending: #{PENDING_PATH}"
+      end
+
+      def apply_pending!
+        return unless File.exist?(PENDING_PATH)
+
+        rows = JSON.parse(File.read(PENDING_PATH))
+        rows_by_file = rows.group_by { |entry| entry["file"] }
+
+        rows_by_file.each do |file, entries|
+          lines = File.readlines(file, chomp: false)
+
+          entries.sort_by { |entry| -entry["line"] }.each do |entry|
+            replace_heredoc_body!(lines, entry["line"], entry["actual"])
+          end
+
+          File.write(file, lines.join)
+          warn "Updated #{file} (#{entries.size} snapshots)"
+        end
+
+        File.delete(PENDING_PATH)
+        warn "Applied and removed #{PENDING_PATH}"
+      end
+
+      private
+
+      def replace_heredoc_body!(lines, line_no, actual)
+        call_index = line_no - 1
+        call_line = lines[call_index]
+        raise "Missing snapshot call at line #{line_no}" unless call_line
+
+        marker = call_line.match(/<<~['\"]?([A-Z_][A-Z0-9_]*)['\"]?/) or
+          raise "No heredoc marker at line #{line_no}: #{call_line.inspect}"
+        terminator = marker[1]
+
+        body_start = call_index + 1
+        body_end = body_start
+        while body_end < lines.length && lines[body_end].strip != terminator
+          body_end += 1
+        end
+        raise "No heredoc terminator #{terminator} after line #{line_no}" if body_end >= lines.length
+
+        replacement = actual.end_with?("\n") ? actual : "#{actual}\n"
+        lines[body_start...body_end] = replacement.lines
+      end
+    end
+
+    def assert_hir(code, expected, optimize: true)
+      actual = MiniZJIT.hir(code, optimize: optimize).strip
+      expected = InlineSnapshotFix.normalize_expected(expected)
+      return assert_equal(expected, actual, "HIR mismatch for: #{code}") if actual == expected
+
+      loc = caller_locations(1, 1).first
+      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, actual: actual)
+
+      if ENV["FIX"] == "1"
+        skip "Updated pending snapshot for #{loc.path}:#{loc.lineno}"
+      else
+        assert_equal expected, actual, "HIR mismatch for: #{code}"
+      end
+    end
+
+    def assert_hir_text(actual, expected, message: "HIR mismatch")
+      actual = actual.strip
+      expected = InlineSnapshotFix.normalize_expected(expected)
+      return assert_equal(expected, actual, message) if actual == expected
+
+      loc = caller_locations(1, 1).first
+      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, actual: actual)
+
+      if ENV["FIX"] == "1"
+        skip "Updated pending snapshot for #{loc.path}:#{loc.lineno}"
+      else
+        assert_equal expected, actual, message
+      end
+    end
+  end
+
+  Minitest.after_run do
+    InlineSnapshotFix.dump_pending!
+    InlineSnapshotFix.apply_pending! if ENV["FIX"] == "1"
+  end
 
   class TypeTest < Minitest::Test
     include MiniZJIT
@@ -1636,11 +1748,7 @@ if $0 == __FILE__
   # ═══════════════════════════════════════════════════════════════════
 
   class HIRSnapshotTest < Minitest::Test
-    def assert_hir(code, expected, optimize: true)
-      actual = MiniZJIT.hir(code, optimize: optimize).strip
-      expected = expected.gsub(/^ {8}/, "").strip
-      assert_equal expected, actual, "HIR mismatch for: #{code}"
-    end
+    include InlineSnapshotFix
 
     # ── Unoptimized snapshots (before any passes) ──────────────────
     # The compiler emits generic Send instructions for arithmetic.
@@ -1850,11 +1958,7 @@ if $0 == __FILE__
   # ── type_specialize tests ────────────────────────────────────────
 
   class TypeSpecializeTest < Minitest::Test
-    def assert_hir(code, expected, optimize: true)
-      actual = MiniZJIT.hir(code, optimize: optimize).strip
-      expected = expected.gsub(/^ {8}/, "").strip
-      assert_equal expected, actual, "HIR mismatch for: #{code}"
-    end
+    include InlineSnapshotFix
 
     def test_send_lowered_to_fixnum_add
       # After full optimization, Send(:+) on Fixnum constants becomes
@@ -1884,11 +1988,7 @@ if $0 == __FILE__
   # ── fold_constants tests (guard elim + constant folding) ─────────
 
   class FoldConstantsTest < Minitest::Test
-    def assert_hir(code, expected, optimize: true)
-      actual = MiniZJIT.hir(code, optimize: optimize).strip
-      expected = expected.gsub(/^ {8}/, "").strip
-      assert_equal expected, actual, "HIR mismatch for: #{code}"
-    end
+    include InlineSnapshotFix
 
     def test_guards_on_known_fixnums_eliminated
       # Both operands are Fixnum constants. fold_constants sees
@@ -1917,11 +2017,7 @@ if $0 == __FILE__
   # ── eliminate_dead_code tests ────────────────────────────────────
 
   class DCETest < Minitest::Test
-    def assert_hir(code, expected, optimize: true)
-      actual = MiniZJIT.hir(code, optimize: optimize).strip
-      expected = expected.gsub(/^ {8}/, "").strip
-      assert_equal expected, actual, "HIR mismatch for: #{code}"
-    end
+    include InlineSnapshotFix
 
     def test_dead_consts_and_guards_removed
       # Before optimization: compiler emits Send (no guards yet)
@@ -2013,6 +2109,7 @@ if $0 == __FILE__
 
   class GVNTest < Minitest::Test
     include MiniZJIT
+    include InlineSnapshotFix
 
     def test_duplicate_fixnum_add_eliminated
       fun = Function.new("test")
@@ -2026,7 +2123,7 @@ if $0 == __FILE__
       fun.push_insn(bb0, Return.new(sum))
       fun.global_value_numbering
       fun.eliminate_dead_code
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:Fixnum, v1:Fixnum):
           v3:Fixnum = FixnumAdd v0, v1
@@ -2045,7 +2142,7 @@ if $0 == __FILE__
       fun.push_insn(bb0, Return.new(add))
       fun.global_value_numbering
       fun.eliminate_dead_code
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0:
           v0:Fixnum[42] = Const 42
@@ -2064,7 +2161,7 @@ if $0 == __FILE__
       fun.push_insn(bb1, Return.new(c1))
       fun.global_value_numbering
       fun.eliminate_dead_code
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0:
           v0:Fixnum[42] = Const 42
@@ -2085,7 +2182,7 @@ if $0 == __FILE__
       fun.push_insn(bb0, Return.new(add))
       fun.global_value_numbering
       fun.eliminate_dead_code
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:BasicObject):
           v1:BasicObject = LoadField v0, :x
@@ -2106,7 +2203,7 @@ if $0 == __FILE__
       add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, snap))
       fun.push_insn(bb0, Return.new(add))
       fun.global_value_numbering
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:BasicObject):
           v1:Fixnum[99] = Const 99
@@ -2130,7 +2227,7 @@ if $0 == __FILE__
       add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, snap2))
       fun.push_insn(bb0, Return.new(add))
       fun.global_value_numbering
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:BasicObject):
           v1:BasicObject = LoadField v0, :x
@@ -2152,7 +2249,7 @@ if $0 == __FILE__
       fun.push_insn(bb1, Return.new(load2))
       fun.global_value_numbering
       fun.eliminate_dead_code
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:BasicObject):
           v1:BasicObject = LoadField v0, :x
@@ -2181,7 +2278,7 @@ if $0 == __FILE__
       load2 = fun.push_insn(bb3, LoadField.new(obj, :x))
       fun.push_insn(bb3, Return.new(load2))
       fun.global_value_numbering
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:BasicObject):
           v1:BasicObject = LoadField v0, :x
@@ -2222,7 +2319,7 @@ if $0 == __FILE__
       p0 = fun.push_insn(bb3, Param.new(:result, Types::Fixnum))
       fun.push_insn(bb3, Return.new(p0))
       fun.global_value_numbering
-      assert_equal <<~HIR.strip, fun.to_s.strip
+      assert_hir_text fun.to_s, <<~HIR
         fn test:
         bb0(v0:Fixnum, v1:Fixnum):
           v2:TrueClass = Const true
@@ -2244,21 +2341,17 @@ if $0 == __FILE__
   # ── clean_cfg tests ─────────────────────────────────────────────
 
   class CleanCFGTest < Minitest::Test
-    def assert_hir(code, expected, optimize: true)
-      actual = MiniZJIT.hir(code, optimize: optimize).strip
-      expected = expected.gsub(/^ {8}/, "").strip
-      assert_equal expected, actual, "HIR mismatch for: #{code}"
-    end
+    include InlineSnapshotFix
 
     def test_branch_blocks_absorbed
       # When the branch condition is folded to a constant, the dead
       # branch is dropped and the live branch is absorbed via clean_cfg,
       # collapsing 3 blocks into 1.
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
-        fn <compiled>:
-        bb0:
-          v32:Fixnum[2] = Const 2
-          Return v32
+fn <compiled>:
+bb0:
+  v32:Fixnum[2] = Const 2
+  Return v32
       HIR
     end
   end
