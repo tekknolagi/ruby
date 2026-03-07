@@ -1489,11 +1489,11 @@ if $0 == __FILE__
       attr_reader :pending
 
       def normalize_expected(expected)
-        expected.gsub(/^ {8}/, "").strip
+        expected.strip
       end
 
-      def record_mismatch(file:, line:, actual:)
-        @pending << { "file" => file, "line" => line, "actual" => actual }
+      def record_mismatch(file:, line:, test:, actual:)
+        @pending << { "file" => file, "line" => line, "test" => test, "actual" => actual }
       end
 
       def dump_pending!
@@ -1509,6 +1509,10 @@ if $0 == __FILE__
         rows = merged.values.sort_by { |entry| [entry["file"], entry["line"]] }
         File.write(PENDING_PATH, JSON.pretty_generate(rows))
         warn "\nInline snapshots pending: #{PENDING_PATH}"
+        rows.each do |entry|
+          label = entry["test"] || "(unknown test)"
+          warn "  - #{label} @ #{entry["file"]}:#{entry["line"]}"
+        end
       end
 
       def apply_pending!
@@ -1522,6 +1526,8 @@ if $0 == __FILE__
 
           entries.sort_by { |entry| -entry["line"] }.each do |entry|
             replace_heredoc_body!(lines, entry["line"], entry["actual"])
+            label = entry["test"] || "(unknown test)"
+            warn "  applied #{label} @ #{entry["line"]}"
           end
 
           File.write(file, lines.join)
@@ -1551,7 +1557,19 @@ if $0 == __FILE__
         raise "No heredoc terminator #{terminator} after line #{line_no}" if body_end >= lines.length
 
         replacement = actual.end_with?("\n") ? actual : "#{actual}\n"
-        lines[body_start...body_end] = replacement.lines
+
+        call_indent = call_line[/^\s*/] || ""
+        existing_indent = if body_start < body_end
+          lines[body_start][/^\s*/] || ""
+        else
+          "#{call_indent}  "
+        end
+
+        indented_lines = replacement.lines.map do |line|
+          line.strip.empty? ? line : "#{existing_indent}#{line}"
+        end
+
+        lines[body_start...body_end] = indented_lines
       end
     end
 
@@ -1561,7 +1579,8 @@ if $0 == __FILE__
       return assert_equal(expected, actual, "HIR mismatch for: #{code}") if actual == expected
 
       loc = caller_locations(1, 1).first
-      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, actual: actual)
+      test_name = "#{self.class}##{name}"
+      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, test: test_name, actual: actual)
 
       if ENV["FIX"] == "1"
         skip "Updated pending snapshot for #{loc.path}:#{loc.lineno}"
@@ -1576,7 +1595,8 @@ if $0 == __FILE__
       return assert_equal(expected, actual, message) if actual == expected
 
       loc = caller_locations(1, 1).first
-      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, actual: actual)
+      test_name = "#{self.class}##{name}"
+      InlineSnapshotFix.record_mismatch(file: loc.path, line: loc.lineno, test: test_name, actual: actual)
 
       if ENV["FIX"] == "1"
         skip "Updated pending snapshot for #{loc.path}:#{loc.lineno}"
@@ -2348,10 +2368,10 @@ if $0 == __FILE__
       # branch is dropped and the live branch is absorbed via clean_cfg,
       # collapsing 3 blocks into 1.
       assert_hir "x = 1; if x > 0 then x + 1 else x - 1 end", <<~HIR
-fn <compiled>:
-bb0:
-  v32:Fixnum[2] = Const 2
-  Return v32
+        fn <compiled>:
+        bb0:
+          v32:Fixnum[2] = Const 2
+          Return v32
       HIR
     end
   end
