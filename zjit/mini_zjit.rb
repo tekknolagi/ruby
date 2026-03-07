@@ -447,6 +447,29 @@ module MiniZJIT
     def effects  = Effects.new(Eff::Any, Eff::Any)
   end
 
+  # Read a field from an object at a given offset/name
+  class LoadField < Insn
+    attr_accessor :recv, :field_name
+    def initialize(recv, field_name, type = Types::BasicObject)
+      super(type)
+      @recv = recv; @field_name = field_name
+    end
+    def operands = [recv]
+    def effects  = Effects.new(Eff::Other, Eff::Empty)
+    def value_key = [:LoadField, recv.find.id, @field_name]
+  end
+
+  # Write a field on an object
+  class StoreField < Insn
+    attr_accessor :recv, :field_name, :val
+    def initialize(recv, field_name, val)
+      super(Types::Empty)
+      @recv = recv; @field_name = field_name; @val = val
+    end
+    def operands = [recv, val]
+    def effects  = Effects.new(Eff::Empty, Eff::Other)
+  end
+
   class Return < Insn
     attr_accessor :val
     def initialize(val)
@@ -752,6 +775,8 @@ module MiniZJIT
       when Send
         args_s = insn.args.map { |a| r(a).to_s }.join(", ")
         "#{prefix}Send #{r(insn.recv)}, :#{insn.method_name}#{args_s.empty? ? "" : ", #{args_s}"}"
+      when LoadField  then "#{prefix}LoadField #{r(insn.recv)}, :#{insn.field_name}"
+      when StoreField then "StoreField #{r(insn.recv)}, :#{insn.field_name}, #{r(insn.val)}"
       when Return  then "Return #{r(insn.val)}"
       when Jump    then "Jump #{format_edge(insn.target)}"
       when IfTrue  then "IfTrue #{r(insn.val)}, #{format_edge(insn.target)}"
@@ -1240,19 +1265,87 @@ module MiniZJIT
 
     def global_value_numbering
       doms = Dominators.new(self)
-      value_maps = {}  # Block -> Hash { value_key => Insn }
+      block_order = rpo
 
-      rpo.each do |block|
-        # Inherit dominator's value map (scoped — copy on write via dup)
+      # ── Pre-compute write effects per block ──
+      block_writes = {}  # Block.id -> write effect bits
+      block_order.each do |block|
+        writes = Eff::Empty
+        block.insns.each { |insn| writes |= insn.find.effects.write }
+        block_writes[block.id] = writes
+      end
+
+      # ── Compute accumulated write effects on all paths from idom to
+      #    each block (union over all paths). Uses a fixpoint on RPO. ──
+      #
+      # For block B with idom D:
+      #   path_writes[B] = union over predecessors P of:
+      #     if P == D: block_writes[D]      (direct edge from dominator)
+      #     else:      path_writes[P] | block_writes[P]
+      #
+      # This gives us the union of write effects along every path from
+      # D to B, which tells us which value map entries to evict.
+
+      preds = Hash.new { |h, k| h[k] = [] }
+      block_order.each do |block|
+        block.insns.each do |insn|
+          resolved = insn.find
+          case resolved
+          when Jump    then preds[resolved.target.target.id] << block
+          when IfTrue  then preds[resolved.target.target.id] << block
+          when IfFalse then preds[resolved.target.target.id] << block
+          end
+        end
+      end
+
+      path_writes = {}  # Block.id -> accumulated write effects from idom
+      block_order.each do |block|
+        idom = doms.idom(block)
+        unless idom
+          path_writes[block.id] = Eff::Empty
+          next
+        end
+        accumulated = Eff::Empty
+        preds[block.id].each do |pred|
+          if pred.equal?(idom)
+            # Direct edge from dominator — only the dominator's own writes
+            accumulated |= block_writes[idom.id]
+          else
+            # Transitive path: pred's accumulated path writes + pred's own writes
+            accumulated |= (path_writes[pred.id] || Eff::Empty) | block_writes[pred.id]
+          end
+        end
+        path_writes[block.id] = accumulated
+      end
+
+      # ── GVN walk ──
+      value_maps = {}  # Block.id -> Hash { value_key => Insn }
+
+      block_order.each do |block|
+        # Inherit dominator's value map
         idom = doms.idom(block)
         parent_map = (idom && idom != block) ? value_maps[idom.id] : nil
         current_map = parent_map ? parent_map.dup : {}
 
-        # Rebuild insn list, dropping duplicates (like fold_constants)
+        # Evict entries from inherited map that are invalidated by writes
+        # on paths from idom to this block
+        pw = path_writes[block.id] || Eff::Empty
+        if pw & Eff::Memory != 0
+          current_map.reject! { |_, insn| insn.effects.read & pw != 0 }
+        end
+
+        # Process instructions, evicting on writes and deduplicating
         old_insns = block.insns.dup
         block.insns.clear
         old_insns.each do |insn|
           canonical = insn.find
+
+          # Intra-block eviction: writes kill overlapping reads
+          write_effs = canonical.effects.write
+          if write_effs & Eff::Memory != 0
+            current_map.reject! { |_, mapped| mapped.effects.read & write_effs != 0 }
+          end
+
           key = canonical.value_key
           if key
             existing = current_map[key]
@@ -1922,11 +2015,6 @@ if $0 == __FILE__
     include MiniZJIT
 
     def test_duplicate_fixnum_add_eliminated
-      # Build: bb0(a:Fixnum, b:Fixnum)
-      #   v2 = FixnumAdd a, b
-      #   v3 = FixnumAdd a, b   ← duplicate, GVN should unify with v2
-      #   v4 = FixnumAdd v2, v3
-      #   Return v4
       fun = Function.new("test")
       bb0 = fun.new_block
       a = fun.push_insn(bb0, Param.new(0, Types::Fixnum))
@@ -1936,19 +2024,18 @@ if $0 == __FILE__
       add2 = fun.push_insn(bb0, FixnumAdd.new(a, b, snap))
       sum  = fun.push_insn(bb0, FixnumAdd.new(add1, add2, snap))
       fun.push_insn(bb0, Return.new(sum))
-
       fun.global_value_numbering
       fun.eliminate_dead_code
-
-      hir = fun.to_s.strip
-      # add2 should be eliminated — only one FixnumAdd of a,b remains
-      add_count = hir.scan("FixnumAdd").size
-      assert_equal 2, add_count,
-        "Expected 2 FixnumAdd (a+b and result+result), got #{add_count}:\n#{hir}"
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:Fixnum, v1:Fixnum):
+          v3:Fixnum = FixnumAdd v0, v1
+          v5:Fixnum = FixnumAdd v3, v3
+          Return v5
+      HIR
     end
 
     def test_duplicate_const_eliminated
-      # Two identical Const(42) in the same block — GVN deduplicates
       fun = Function.new("test")
       bb0 = fun.new_block
       c1 = fun.push_insn(bb0, Const.new(42, Types::Fixnum.with_const(42)))
@@ -1956,20 +2043,18 @@ if $0 == __FILE__
       snap = fun.push_insn(bb0, Snapshot.new({}, []))
       add = fun.push_insn(bb0, FixnumAdd.new(c1, c2, snap))
       fun.push_insn(bb0, Return.new(add))
-
       fun.global_value_numbering
       fun.eliminate_dead_code
-
-      hir = fun.to_s.strip
-      const_count = hir.scan("Const 42").size
-      assert_equal 1, const_count,
-        "Expected 1 Const 42 after GVN, got #{const_count}:\n#{hir}"
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0:
+          v0:Fixnum[42] = Const 42
+          v3:Fixnum = FixnumAdd v0, v0
+          Return v3
+      HIR
     end
 
     def test_gvn_across_dominator
-      # bb0: v0 = Const 42, Jump bb1
-      # bb1: v1 = Const 42, Return v1
-      # GVN should unify v1 with v0 since bb0 dominates bb1
       fun = Function.new("test")
       bb0 = fun.new_block
       bb1 = fun.new_block
@@ -1977,20 +2062,146 @@ if $0 == __FILE__
       fun.push_insn(bb0, Jump.new(BranchEdge.new(bb1)))
       c1 = fun.push_insn(bb1, Const.new(42, Types::Fixnum.with_const(42)))
       fun.push_insn(bb1, Return.new(c1))
-
       fun.global_value_numbering
       fun.eliminate_dead_code
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0:
+          v0:Fixnum[42] = Const 42
+          Jump bb1
+        bb1:
+          Return v0
+      HIR
+    end
 
-      hir = fun.to_s.strip
-      const_count = hir.scan("Const 42").size
-      assert_equal 1, const_count,
-        "Expected 1 Const 42 after GVN across dominator:\n#{hir}"
+    def test_duplicate_load_field_eliminated
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      snap = fun.push_insn(bb0, Snapshot.new({}, []))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, snap))
+      fun.push_insn(bb0, Return.new(add))
+      fun.global_value_numbering
+      fun.eliminate_dead_code
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:BasicObject):
+          v1:BasicObject = LoadField v0, :x
+          v4:Fixnum = FixnumAdd v1, v1
+          Return v4
+      HIR
+    end
+
+    def test_load_field_not_eliminated_across_store
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      val = fun.push_insn(bb0, Const.new(99, Types::Fixnum.with_const(99)))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      fun.push_insn(bb0, StoreField.new(obj, :x, val))
+      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      snap = fun.push_insn(bb0, Snapshot.new({}, []))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, snap))
+      fun.push_insn(bb0, Return.new(add))
+      fun.global_value_numbering
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:BasicObject):
+          v1:Fixnum[99] = Const 99
+          v2:BasicObject = LoadField v0, :x
+          StoreField v0, :x, v1
+          v4:BasicObject = LoadField v0, :x
+          v6:Fixnum = FixnumAdd v2, v4
+          Return v6
+      HIR
+    end
+
+    def test_load_field_not_eliminated_across_send
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      snap = fun.push_insn(bb0, Snapshot.new({}, []))
+      fun.push_insn(bb0, Send.new(obj, :mutate!, [], snap))
+      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      snap2 = fun.push_insn(bb0, Snapshot.new({}, []))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, snap2))
+      fun.push_insn(bb0, Return.new(add))
+      fun.global_value_numbering
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:BasicObject):
+          v1:BasicObject = LoadField v0, :x
+          v3:BasicObject = Send v0, :mutate!
+          v4:BasicObject = LoadField v0, :x
+          v6:Fixnum = FixnumAdd v1, v4
+          Return v6
+      HIR
+    end
+
+    def test_load_field_eliminated_across_dominator_no_write
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb1)))
+      load2 = fun.push_insn(bb1, LoadField.new(obj, :x))
+      fun.push_insn(bb1, Return.new(load2))
+      fun.global_value_numbering
+      fun.eliminate_dead_code
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:BasicObject):
+          v1:BasicObject = LoadField v0, :x
+          Jump bb1
+        bb1:
+          Return v1
+      HIR
+    end
+
+    def test_load_field_not_eliminated_when_path_has_write
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      bb1 = fun.new_block
+      bb2 = fun.new_block
+      bb3 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      cond = fun.push_insn(bb0, Const.new(true, Types::TrueClass))
+      test = fun.push_insn(bb0, Test.new(cond))
+      fun.push_insn(bb0, IfTrue.new(test, BranchEdge.new(bb1)))
+      fun.push_insn(bb0, Jump.new(BranchEdge.new(bb2)))
+      new_val = fun.push_insn(bb1, Const.new(42, Types::Fixnum.with_const(42)))
+      fun.push_insn(bb1, StoreField.new(obj, :x, new_val))
+      fun.push_insn(bb1, Jump.new(BranchEdge.new(bb3)))
+      fun.push_insn(bb2, Jump.new(BranchEdge.new(bb3)))
+      load2 = fun.push_insn(bb3, LoadField.new(obj, :x))
+      fun.push_insn(bb3, Return.new(load2))
+      fun.global_value_numbering
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:BasicObject):
+          v1:BasicObject = LoadField v0, :x
+          v2:TrueClass = Const true
+          v3:CBool = Test v2
+          IfTrue v3, bb1
+          Jump bb2
+        bb1:
+          v6:Fixnum[42] = Const 42
+          StoreField v0, :x, v6
+          Jump bb3
+        bb2:
+          Jump bb3
+        bb3:
+          v10:BasicObject = LoadField v0, :x
+          Return v10
+      HIR
     end
 
     def test_gvn_does_not_unify_across_non_dominator
-      # Diamond: bb0 → bb1, bb0 → bb2, bb1 → bb3, bb2 → bb3
-      # bb1 and bb2 each have FixnumAdd(a,b) — neither dominates the other
-      # so GVN should NOT unify them
       fun = Function.new("test")
       bb0 = fun.new_block
       bb1 = fun.new_block
@@ -2002,25 +2213,31 @@ if $0 == __FILE__
       test = fun.push_insn(bb0, Test.new(cond))
       fun.push_insn(bb0, IfTrue.new(test, BranchEdge.new(bb1)))
       fun.push_insn(bb0, Jump.new(BranchEdge.new(bb2)))
-
       snap1 = fun.push_insn(bb1, Snapshot.new({}, []))
       add1 = fun.push_insn(bb1, FixnumAdd.new(a, b, snap1))
       fun.push_insn(bb1, Jump.new(BranchEdge.new(bb3, [add1])))
-
       snap2 = fun.push_insn(bb2, Snapshot.new({}, []))
       add2 = fun.push_insn(bb2, FixnumAdd.new(a, b, snap2))
       fun.push_insn(bb2, Jump.new(BranchEdge.new(bb3, [add2])))
-
       p0 = fun.push_insn(bb3, Param.new(:result, Types::Fixnum))
       fun.push_insn(bb3, Return.new(p0))
-
       fun.global_value_numbering
-
-      # Both adds should survive — neither dominates the other
-      hir = fun.to_s.strip
-      add_count = hir.scan("FixnumAdd").size
-      assert_equal 2, add_count,
-        "Expected 2 FixnumAdd (non-dominating branches), got #{add_count}:\n#{hir}"
+      assert_equal <<~HIR.strip, fun.to_s.strip
+        fn test:
+        bb0(v0:Fixnum, v1:Fixnum):
+          v2:TrueClass = Const true
+          v3:CBool = Test v2
+          IfTrue v3, bb1
+          Jump bb2
+        bb1:
+          v7:Fixnum = FixnumAdd v0, v1
+          Jump bb3(v7)
+        bb2:
+          v10:Fixnum = FixnumAdd v0, v1
+          Jump bb3(v10)
+        bb3(v12:Fixnum):
+          Return v12
+      HIR
     end
   end
 
