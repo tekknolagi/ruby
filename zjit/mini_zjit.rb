@@ -2488,6 +2488,32 @@ if $0 == __FILE__
           Return v6
       HIR
     end
+
+    def test_store_to_same_slot_kills_prior_load
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      val = fun.push_insn(bb0, Const.new(5, Types::Fixnum.with_const(5)))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      fun.push_insn(bb0, StoreField.new(obj, :x, val))
+      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, nil))
+      fun.push_insn(bb0, Return.new(add))
+
+      fun.optimize_load_store_tbaa
+      fun.eliminate_dead_code
+
+      assert_hir_text fun.to_s, <<~HIR
+        fn test:
+        bb0(v0:BasicObject):
+          v1:Fixnum[5] = Const 5
+          v2:BasicObject = LoadField v0, :x
+          StoreField v0, :x, v1
+          v4:BasicObject = LoadField v0, :x
+          v5:Fixnum = FixnumAdd v2, v4
+          Return v5
+      HIR
+    end
   end
 
   # ── clean_cfg tests ─────────────────────────────────────────────
