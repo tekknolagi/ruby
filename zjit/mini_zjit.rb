@@ -1256,6 +1256,79 @@ module MiniZJIT
       end
     end
 
+    # ── optimize_load_store_tbaa ──────────────────────────────────
+    # Local load/store forwarding with simple TBAA.
+    #
+    # Tracks known values for (receiver, field) slots while scanning each
+    # block. StoreField only invalidates cached loads/stores for slots that
+    # may alias the written slot (same field + possibly-aliasing receiver).
+
+    def optimize_load_store_tbaa
+      may_alias_receivers = lambda do |left_recv, right_recv|
+        left = left_recv.find
+        right = right_recv.find
+
+        return true if left.equal?(right)
+
+        left_type = left.type
+        right_type = right.type
+        return false if (left_type & right_type).empty?
+
+        if left_type.has_const? && right_type.has_const?
+          return left_type.const_val.equal?(right_type.const_val)
+        end
+
+        true
+      end
+
+      each_block_rpo do |block|
+        heap = {} # [recv_insn, field_name] => value_insn
+        old_insns = block.insns.dup
+        block.insns.clear
+
+        old_insns.each do |insn|
+          canonical = insn.find
+
+          case canonical
+          when StoreField
+            recv = canonical.recv.find
+            val = canonical.val.find
+            key = [recv, canonical.field_name]
+
+            # Redundant store of same value to same slot.
+            if heap[key]&.equal?(val)
+              next
+            end
+
+            # TBAA invalidation: same field + receiver may alias.
+            heap.delete_if do |(cached_recv, cached_field), _|
+              cached_field == canonical.field_name &&
+                may_alias_receivers.call(cached_recv, recv)
+            end
+
+            heap[key] = val
+            block.insns << insn
+
+          when LoadField
+            recv = canonical.recv.find
+            key = [recv, canonical.field_name]
+
+            if (cached = heap[key])
+              canonical.make_equal_to(cached)
+              next
+            end
+
+            heap[key] = canonical
+            block.insns << insn
+
+          else
+            heap.clear if (canonical.effects.write & Eff::Memory) != 0
+            block.insns << insn
+          end
+        end
+      end
+    end
+
     # ── global_value_numbering ─────────────────────────────────────
     # Dominator-tree-based GVN, following the Maxine-VM C1X approach:
     #   1. Compute dominators (Cooper/Harvey/Kennedy)
@@ -1369,6 +1442,7 @@ module MiniZJIT
     def optimize
       type_specialize
       fold_constants
+      optimize_load_store_tbaa
       global_value_numbering
       clean_cfg
       eliminate_dead_code
@@ -2354,6 +2428,64 @@ if $0 == __FILE__
           Jump bb3(v10)
         bb3(v12:Fixnum):
           Return v12
+      HIR
+    end
+  end
+
+  # ── optimize_load_store_tbaa tests ─────────────────────────────
+
+  class LoadStoreTBAATest < Minitest::Test
+    include MiniZJIT
+    include InlineSnapshotFix
+
+    def test_store_to_different_field_does_not_kill_load
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      val = fun.push_insn(bb0, Const.new(99, Types::Fixnum.with_const(99)))
+      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      fun.push_insn(bb0, StoreField.new(obj, :y, val))
+      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, nil))
+      fun.push_insn(bb0, Return.new(add))
+
+      fun.optimize_load_store_tbaa
+      fun.eliminate_dead_code
+
+      assert_hir_text fun.to_s, <<~HIR
+        fn test:
+        bb0(v0:BasicObject):
+          v1:Fixnum[99] = Const 99
+          v2:BasicObject = LoadField v0, :x
+          StoreField v0, :y, v1
+          v5:Fixnum = FixnumAdd v2, v2
+          Return v5
+      HIR
+    end
+
+    def test_store_to_disjoint_receiver_does_not_kill_load
+      fun = Function.new("test")
+      bb0 = fun.new_block
+      recv_a = fun.push_insn(bb0, Param.new(0, Types::Array))
+      recv_b = fun.push_insn(bb0, Param.new(1, Types::Hash))
+      val = fun.push_insn(bb0, Const.new(7, Types::Fixnum.with_const(7)))
+      load1 = fun.push_insn(bb0, LoadField.new(recv_a, :x))
+      fun.push_insn(bb0, StoreField.new(recv_b, :x, val))
+      load2 = fun.push_insn(bb0, LoadField.new(recv_a, :x))
+      add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, nil))
+      fun.push_insn(bb0, Return.new(add))
+
+      fun.optimize_load_store_tbaa
+      fun.eliminate_dead_code
+
+      assert_hir_text fun.to_s, <<~HIR
+        fn test:
+        bb0(v0:Array, v1:Hash):
+          v2:Fixnum[7] = Const 7
+          v3:BasicObject = LoadField v0, :x
+          StoreField v1, :x, v2
+          v6:Fixnum = FixnumAdd v3, v3
+          Return v6
       HIR
     end
   end
