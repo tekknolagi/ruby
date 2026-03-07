@@ -2489,14 +2489,15 @@ if $0 == __FILE__
       HIR
     end
 
-    def test_store_to_same_slot_kills_prior_load
+    def test_store_to_maybe_aliasing_receiver_kills_prior_load
       fun = Function.new("test")
       bb0 = fun.new_block
-      obj = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      recv_a = fun.push_insn(bb0, Param.new(0, Types::BasicObject))
+      recv_b = fun.push_insn(bb0, Param.new(1, Types::BasicObject))
       val = fun.push_insn(bb0, Const.new(5, Types::Fixnum.with_const(5)))
-      load1 = fun.push_insn(bb0, LoadField.new(obj, :x))
-      fun.push_insn(bb0, StoreField.new(obj, :x, val))
-      load2 = fun.push_insn(bb0, LoadField.new(obj, :x))
+      load1 = fun.push_insn(bb0, LoadField.new(recv_a, :x))
+      fun.push_insn(bb0, StoreField.new(recv_b, :x, val))
+      load2 = fun.push_insn(bb0, LoadField.new(recv_a, :x))
       add = fun.push_insn(bb0, FixnumAdd.new(load1, load2, nil))
       fun.push_insn(bb0, Return.new(add))
 
@@ -2505,13 +2506,13 @@ if $0 == __FILE__
 
       assert_hir_text fun.to_s, <<~HIR
         fn test:
-        bb0(v0:BasicObject):
-          v1:Fixnum[5] = Const 5
-          v2:BasicObject = LoadField v0, :x
-          StoreField v0, :x, v1
-          v4:BasicObject = LoadField v0, :x
-          v5:Fixnum = FixnumAdd v2, v4
-          Return v5
+        bb0(v0:BasicObject, v1:BasicObject):
+          v2:Fixnum[5] = Const 5
+          v3:BasicObject = LoadField v0, :x
+          StoreField v1, :x, v2
+          v5:BasicObject = LoadField v0, :x
+          v6:Fixnum = FixnumAdd v3, v5
+          Return v6
       HIR
     end
   end
