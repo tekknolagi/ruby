@@ -102,7 +102,9 @@ def parse_hir_opcodes(path)
     # Extract opcode: "v42:Fixnum = FixnumAdd v28, v29" -> "FixnumAdd"
     # or "CheckInterrupts" -> "CheckInterrupts"
     # or "Return v33" -> "Return"
-    if stripped =~ /=\s+(\w+)/
+    if stripped =~ /^\(side-exits\)/
+      lines[lineno] = "(side-exits)"
+    elsif stripped =~ /=\s+(\w+)/
       lines[lineno] = $1
     elsif stripped =~ /^(\w+)/
       lines[lineno] = $1
@@ -237,7 +239,7 @@ total_samples.times do |i|
 
   entry = lookup_address(lookups, abs_addr)
   if entry
-    opcode = hir_opcodes[entry[:line]] || "unknown(line:#{entry[:line]})"
+    opcode = hir_opcodes[entry[:line]] || "(side-exits)"
     opcode_counts[opcode] += 1
     func_opcode_counts[entry[:func_name]][opcode] += 1
   else
