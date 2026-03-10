@@ -204,11 +204,6 @@ fn emit_jitdump_for_function(
     // Read the generated code bytes for the CODE_LOAD record
     let code_bytes = unsafe { std::slice::from_raw_parts(start_ptr.raw_ptr(cb), code_size) };
     let func_name = format!("zjit::{iseq_name}");
-    if let Err(e) = jitdump.write_code_load(&func_name, start_addr, &code_bytes) {
-        debug!("Failed to write jitdump code load: {e}");
-        return;
-    }
-
     // Build HIR text and line mapping for this function.
     // We write HIR as text to a single shared file, appending each method.
     // The line numbers in the debug entries reference lines in this file.
@@ -230,8 +225,13 @@ fn emit_jitdump_for_function(
         }
     }
 
+    // Write DEBUG_INFO before CODE_LOAD — samply expects this ordering
     if let Err(e) = jitdump.write_debug_info(start_addr, &debug_entries) {
         debug!("Failed to write jitdump debug info: {e}");
+    }
+
+    if let Err(e) = jitdump.write_code_load(&func_name, start_addr, &code_bytes) {
+        debug!("Failed to write jitdump code load: {e}");
     }
 }
 
