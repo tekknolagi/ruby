@@ -32,3 +32,4 @@ mod gc;
 mod payload;
 mod json;
 mod ttycolors;
+mod jitdump;

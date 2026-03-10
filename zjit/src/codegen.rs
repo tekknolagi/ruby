@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::ffi::{c_int, c_long, c_void};
 use std::slice;
+use std::sync::OnceLock;
 
 use crate::backend::current::ALLOC_REGS;
 use crate::invariants::{
@@ -25,6 +26,30 @@ use crate::hir::{Const, FrameState, Function, Insn, InsnId, SendFallbackReason};
 use crate::hir_type::{types, Type};
 use crate::options::get_option;
 use crate::cast::IntoUsize;
+use crate::jitdump::{JitdumpWriter, DebugEntry};
+
+/// Global jitdump writer, initialized on first use when --zjit-perf is set.
+static JITDUMP: OnceLock<JitdumpWriter> = OnceLock::new();
+
+/// Path to the single HIR source file for all methods.
+/// Written to /tmp/zjit-hir-{pid}.hir
+static HIR_FILE_PATH: OnceLock<String> = OnceLock::new();
+
+fn get_jitdump() -> Option<&'static JitdumpWriter> {
+    if !get_option!(perf) {
+        return None;
+    }
+    Some(JITDUMP.get_or_init(|| {
+        JitdumpWriter::open().expect("Failed to open jitdump file")
+    }))
+}
+
+fn get_hir_file_path() -> &'static str {
+    HIR_FILE_PATH.get_or_init(|| {
+        let pid = std::process::id();
+        format!("/tmp/zjit-hir-{pid}.hir")
+    })
+}
 
 /// At the moment, we support recompiling each ISEQ only once.
 pub const MAX_ISEQ_VERSIONS: usize = 2;
@@ -163,6 +188,134 @@ pub fn gen_iseq_call(cb: &mut CodeBlock, iseq_call: &IseqCallRef) -> Result<(), 
     Ok(())
 }
 
+/// Emit jitdump records with HIR source-level debug info for a compiled function.
+fn emit_jitdump_for_function(
+    cb: &CodeBlock,
+    function: &Function,
+    iseq_name: &str,
+    start_ptr: CodePtr,
+    code_size: usize,
+    pos_markers: &[(CodePtr, InsnId)],
+) {
+    let Some(jitdump) = get_jitdump() else { return };
+
+    let start_addr = start_ptr.raw_addr(cb) as u64;
+
+    // Read the generated code bytes for the CODE_LOAD record
+    let code_bytes = unsafe { std::slice::from_raw_parts(start_ptr.raw_ptr(cb), code_size) };
+    let func_name = format!("zjit::{iseq_name}");
+    if let Err(e) = jitdump.write_code_load(&func_name, start_addr, &code_bytes) {
+        debug!("Failed to write jitdump code load: {e}");
+        return;
+    }
+
+    // Build HIR text and line mapping for this function.
+    // We write HIR as text to a single shared file, appending each method.
+    // The line numbers in the debug entries reference lines in this file.
+    let hir_file_path = get_hir_file_path();
+    let (hir_text, insn_id_to_line) = format_hir_for_jitdump(function);
+
+    // Append HIR text to the shared file and get the starting line offset
+    let line_offset = append_hir_to_file(hir_file_path, &hir_text);
+
+    // Build debug entries: map each pos_marker's code offset to the HIR line
+    let mut debug_entries: Vec<DebugEntry> = Vec::new();
+    for &(code_ptr, insn_id) in pos_markers {
+        if let Some(&line) = insn_id_to_line.get(&insn_id) {
+            debug_entries.push(DebugEntry {
+                code_addr: code_ptr.raw_addr(cb) as u64 - start_addr,
+                line: line_offset + line,
+                filename: hir_file_path,
+            });
+        }
+    }
+
+    if let Err(e) = jitdump.write_debug_info(start_addr, &debug_entries) {
+        debug!("Failed to write jitdump debug info: {e}");
+    }
+}
+
+/// Format a function's HIR as text for the jitdump source file.
+/// Returns (text, map from InsnId to 1-based line number within the text).
+fn format_hir_for_jitdump(function: &Function) -> (String, std::collections::HashMap<InsnId, u32>) {
+    use std::fmt::Write;
+    use crate::hir::PtrPrintMap;
+    let mut text = String::new();
+    let mut insn_id_to_line: std::collections::HashMap<InsnId, u32> = std::collections::HashMap::new();
+    let mut line: u32 = 1;
+
+    let iseq = function.iseq();
+    let iseq_name = if iseq.is_null() {
+        String::from("<manual>")
+    } else {
+        iseq_get_location(iseq, 0)
+    };
+    writeln!(text, "fn {iseq_name}:").unwrap();
+    line += 1;
+
+    let ptr_map = PtrPrintMap::identity();
+
+    for block_id in function.rpo() {
+        let block = function.block(block_id);
+        write!(text, "{block_id}(").unwrap();
+        let mut sep = "";
+        for &param in block.params() {
+            let insn_type = function.type_of(param);
+            if insn_type.is_subtype(types::Empty) {
+                write!(text, "{sep}{param}").unwrap();
+            } else {
+                write!(text, "{sep}{param}:{}", insn_type.print(&ptr_map)).unwrap();
+            }
+            sep = ", ";
+        }
+        writeln!(text, "):").unwrap();
+        line += 1;
+
+        for &insn_id in block.insns() {
+            let insn = function.find(insn_id);
+            if matches!(insn, Insn::Snapshot { .. }) {
+                continue;
+            }
+
+            insn_id_to_line.insert(insn_id, line);
+
+            write!(text, "  ").unwrap();
+            if insn.has_output() {
+                let insn_type = function.type_of(insn_id);
+                if insn_type.is_subtype(types::Empty) {
+                    write!(text, "{insn_id} = ").unwrap();
+                } else {
+                    write!(text, "{insn_id}:{} = ", insn_type.print(&ptr_map)).unwrap();
+                }
+            }
+            writeln!(text, "{}", insn.print(&ptr_map, Some(iseq))).unwrap();
+            line += 1;
+        }
+    }
+
+    (text, insn_id_to_line)
+}
+
+/// Append HIR text to the shared file and return the 1-based line offset
+/// (i.e., how many lines were in the file before this append).
+fn append_hir_to_file(path: &str, text: &str) -> u32 {
+    use std::io::{Write, BufRead};
+
+    // Count existing lines
+    let existing_lines = if let Ok(file) = std::fs::File::open(path) {
+        std::io::BufReader::new(file).lines().count() as u32
+    } else {
+        0
+    };
+
+    // Append the new text
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(text.as_bytes());
+    }
+
+    existing_lines
+}
+
 /// Write an entry to the perf map in /tmp
 fn register_with_perf(iseq_name: String, start_ptr: usize, code_size: usize) {
     use std::io::Write;
@@ -272,6 +425,9 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
     let mut jit = JITState::new(iseq, version, function.num_insns(), function.num_blocks());
     let mut asm = Assembler::new_with_stack_slots(num_spilled_params);
 
+    // Collect (CodePtr, InsnId) pairs for jitdump debug info
+    let hir_pos_markers: Rc<RefCell<Vec<(CodePtr, InsnId)>>> = Rc::new(RefCell::new(Vec::new()));
+
     // Mapping from HIR block IDs to LIR block IDs.
     // This is is a one-to-one mapping from HIR to LIR blocks used for finding
     // jump targets in LIR (LIR should always jump to the head of an HIR block)
@@ -330,6 +486,15 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         // Compile all instructions
         for &insn_id in block.insns() {
             let insn = function.find(insn_id);
+
+            // Record code position for each non-snapshot HIR instruction (for jitdump)
+            if get_option!(perf) && !matches!(insn, Insn::Snapshot { .. }) {
+                let markers = Rc::clone(&hir_pos_markers);
+                asm.pos_marker(move |code_ptr, _cb| {
+                    markers.borrow_mut().push((code_ptr, insn_id));
+                });
+            }
+
             match insn {
                 Insn::IfFalse { val, target } => {
                     let val_opnd = jit.get_opnd(val);
@@ -411,15 +576,17 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
     // Generate code if everything can be compiled
     let result = asm.compile(cb);
     if let Ok((start_ptr, _)) = result {
+        let iseq_name = iseq_get_location(iseq, 0);
         if get_option!(perf) {
             let start_usize = start_ptr.raw_addr(cb);
             let end_usize = cb.get_write_ptr().raw_addr(cb);
             let code_size = end_usize - start_usize;
-            let iseq_name = iseq_get_location(iseq, 0);
-            register_with_perf(iseq_name, start_usize, code_size);
+            register_with_perf(iseq_name.clone(), start_usize, code_size);
+
+            // Emit jitdump records with HIR debug info
+            emit_jitdump_for_function(cb, function, &iseq_name, start_ptr, code_size, &hir_pos_markers.borrow());
         }
         if ZJITState::should_log_compiled_iseqs() {
-            let iseq_name = iseq_get_location(iseq, 0);
             ZJITState::log_compile(iseq_name);
         }
     }
