@@ -47,7 +47,11 @@ fn get_jitdump() -> Option<&'static JitdumpWriter> {
 fn get_hir_file_path() -> &'static str {
     HIR_FILE_PATH.get_or_init(|| {
         let pid = std::process::id();
-        format!("/tmp/zjit-hir-{pid}.hir")
+        // Write to home directory so samply's /tmp cleanup won't delete it
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let dir = format!("{home}/.zjit");
+        let _ = std::fs::create_dir_all(&dir);
+        format!("{dir}/hir-{pid}.src")
     })
 }
 
@@ -239,6 +243,17 @@ fn emit_jitdump_for_function(
 
     if let Err(e) = jitdump.write_code_load(&func_name, start_addr, &code_bytes) {
         debug!("Failed to write jitdump code load: {e}");
+    }
+
+    // Write address map for offline analysis (samply deletes jitdump files)
+    // Format: func_name start_addr code_size\n  addr line\n  addr line\n
+    let map_path = hir_file_path.replace(".src", ".map");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&map_path) {
+        use std::io::Write;
+        let _ = writeln!(f, "F {func_name} {start_addr:#x} {code_size}");
+        for entry in &debug_entries {
+            let _ = writeln!(f, "  {:#x} {}", entry.code_addr, entry.line);
+        }
     }
 }
 
