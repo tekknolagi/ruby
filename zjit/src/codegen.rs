@@ -47,8 +47,7 @@ fn get_jitdump() -> Option<&'static JitdumpWriter> {
 fn get_hir_file_path() -> &'static str {
     HIR_FILE_PATH.get_or_init(|| {
         let pid = std::process::id();
-        // Write to home directory so samply's /tmp cleanup won't delete it
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let dir = format!("{home}/.zjit");
         let _ = std::fs::create_dir_all(&dir);
         format!("{dir}/hir-{pid}.src")

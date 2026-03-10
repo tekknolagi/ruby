@@ -73,11 +73,12 @@ def parse_address_map(path)
   File.readlines(path).each do |line|
     line.chomp!
     if line.start_with?("F ")
+      # F zjit::name with spaces 0xaddr size
+      # Parse from the end since name can contain spaces
       parts = line.split(" ")
-      # F zjit::name 0xaddr size
-      name = parts[1]
-      code_addr = Integer(parts[2])
-      code_size = Integer(parts[3])
+      code_size = Integer(parts[-1])
+      code_addr = Integer(parts[-2])
+      name = parts[1...-2].join(" ")
       current_func = { name: name, code_addr: code_addr, code_size: code_size, debug_entries: [] }
       functions[code_addr] = current_func
     elsif line.strip =~ /^(0x[0-9a-f]+)\s+(\d+)$/ && current_func
