@@ -146,7 +146,8 @@ impl JitdumpWriter {
         let mut inner = self.inner.lock().unwrap();
         let timestamp = Self::timestamp(&inner.epoch);
         let name_len = name.len() + 1; // null terminator
-        let total_size = 12 + 32 + name_len + code.len();
+        // prefix(16) + code_load_body(40) + name + code
+        let total_size = 16 + 40 + name_len + code.len();
         let pid = std::process::id();
         let code_index = inner.code_index;
 
@@ -184,7 +185,8 @@ impl JitdumpWriter {
         let entries_size: usize = entries.iter()
             .map(|e| 8 + 4 + 4 + e.filename.len() + 1)
             .sum();
-        let total_size = 12 + 8 + 8 + entries_size;
+        // prefix(16) + code_addr(8) + nr_entry(8) + entries
+        let total_size = 16 + 8 + 8 + entries_size;
 
         let f = &mut inner.file;
         // jr_prefix
@@ -211,7 +213,7 @@ impl JitdumpWriter {
         let timestamp = Self::timestamp(&inner.epoch);
         let f = &mut inner.file;
         f.write_all(&JIT_CODE_CLOSE.to_le_bytes())?;
-        f.write_all(&12u32.to_le_bytes())?;
+        f.write_all(&16u32.to_le_bytes())?; // prefix only
         f.write_all(&timestamp.to_le_bytes())?;
         f.flush()
     }
