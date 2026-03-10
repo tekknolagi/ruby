@@ -54,6 +54,9 @@ fn get_hir_file_path() -> &'static str {
     })
 }
 
+/// Sentinel InsnId used to mark the boundary between main code and side-exit code
+const SIDE_EXIT_MARKER: InsnId = InsnId(usize::MAX);
+
 /// At the moment, we support recompiling each ISEQ only once.
 pub const MAX_ISEQ_VERSIONS: usize = 2;
 
@@ -222,11 +225,22 @@ fn emit_jitdump_for_function(
     // the entry at the lower offset.
     let mut debug_entries: Vec<DebugEntry> = Vec::new();
     let mut seen_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut max_addr: u64 = start_addr;
+    let side_exit_line = line_offset + hir_text.lines().count() as u32;
+
     for &(code_ptr, insn_id) in pos_markers {
+        let addr = code_ptr.raw_addr(cb) as u64;
+        if insn_id == SIDE_EXIT_MARKER {
+            // Mark the start of side-exit code
+            if seen_offsets.insert(addr) {
+                debug_entries.push(DebugEntry {
+                    code_addr: addr,
+                    line: side_exit_line,
+                    filename: hir_file_path,
+                });
+            }
+            continue;
+        }
         if let Some(&line) = insn_id_to_line.get(&insn_id) {
-            let addr = code_ptr.raw_addr(cb) as u64;
-            if addr > max_addr { max_addr = addr; }
             if seen_offsets.insert(addr) {
                 debug_entries.push(DebugEntry {
                     code_addr: addr,
@@ -234,26 +248,6 @@ fn emit_jitdump_for_function(
                     filename: hir_file_path,
                 });
             }
-        }
-    }
-
-    // The "(side-exits)" line in the HIR text is the last line.
-    // Add a debug entry for it so side-exit code isn't attributed to Return.
-    let side_exit_line = line_offset + hir_text.lines().count() as u32;
-    // Find where side-exit code likely starts: scan forward from the last marker
-    // to find the next instruction boundary (approximation: last marker + some offset)
-    let end_addr = start_addr + code_size as u64;
-    if max_addr + 32 < end_addr {
-        // There's significant code after the last HIR instruction — likely side exits
-        // Use the address 4 bytes after the last marker as a conservative start
-        // (the Return instruction itself is ~20 bytes of code)
-        let side_exit_start = max_addr + 24; // past Return's ~5 arm64 instructions
-        if side_exit_start < end_addr {
-            debug_entries.push(DebugEntry {
-                code_addr: side_exit_start,
-                line: side_exit_line,
-                filename: hir_file_path,
-            });
         }
     }
 
@@ -617,6 +611,15 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
         }
         // Blocks should always end with control flow
         assert!(asm.current_block().insns.last().unwrap().is_terminator());
+    }
+
+    // Mark the end of main code for side-exit attribution.
+    // Everything after this marker is side-exit code.
+    if get_option!(perf) {
+        let markers = Rc::clone(&hir_pos_markers);
+        asm.pos_marker(move |code_ptr, _cb| {
+            markers.borrow_mut().push((code_ptr, SIDE_EXIT_MARKER));
+        });
     }
 
     // Generate code if everything can be compiled
