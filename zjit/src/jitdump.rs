@@ -7,21 +7,27 @@
 
 use std::fs;
 use std::io::{self, Write, BufWriter};
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::Mutex;
 use std::time::Instant;
 
 // Raw libc bindings for mmap (no libc crate dependency)
 mod ffi {
-    use std::os::raw::{c_void, c_int, c_long};
+    use std::os::raw::{c_void, c_int, c_long, c_char};
     pub const PROT_READ: c_int = 1;
     pub const PROT_EXEC: c_int = 4;
     pub const MAP_PRIVATE: c_int = 0x0002;
     pub const MAP_FAILED: *mut c_void = !0 as *mut c_void;
+    pub const O_RDWR: c_int = 2;
+    pub const O_CREAT: c_int = 0x200;
+    pub const O_TRUNC: c_int = 0x400;
     #[cfg(target_os = "linux")]
     pub const _SC_PAGESIZE: c_int = 30;
     #[cfg(target_os = "macos")]
     pub const _SC_PAGESIZE: c_int = 29;
     unsafe extern "C" {
+        pub fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+        pub fn close(fd: c_int) -> c_int;
         pub fn mmap(addr: *mut c_void, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: i64) -> *mut c_void;
         pub fn munmap(addr: *mut c_void, len: usize) -> c_int;
         pub fn sysconf(name: c_int) -> c_long;
@@ -73,12 +79,14 @@ impl JitdumpWriter {
         let pid = std::process::id();
         let path = format!("/tmp/jit-{pid}.dump");
 
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .read(true)
-            .open(&path)?;
+        // Use C open() so samply can hook it on macOS to discover the jitdump file.
+        // samply interposes open()/fopen() to detect jitdump paths.
+        let c_path = std::ffi::CString::new(path.as_bytes()).unwrap();
+        let fd = unsafe { ffi::open(c_path.as_ptr(), ffi::O_RDWR | ffi::O_CREAT | ffi::O_TRUNC, 0o644 as std::os::raw::c_int) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let file = unsafe { fs::File::from_raw_fd(fd) };
 
         let epoch = Instant::now();
 
@@ -98,11 +106,17 @@ impl JitdumpWriter {
         use std::os::unix::io::AsRawFd;
         let fd = writer.get_ref().as_raw_fd();
         let page_size = unsafe { ffi::sysconf(ffi::_SC_PAGESIZE) as usize };
+        // mmap with PROT_READ|PROT_EXEC so Linux perf can discover the file.
+        // On macOS, PROT_EXEC requires code signing, so use PROT_READ only.
+        #[cfg(target_os = "linux")]
+        let prot = ffi::PROT_READ | ffi::PROT_EXEC;
+        #[cfg(not(target_os = "linux"))]
+        let prot = ffi::PROT_READ;
         let mmap_ptr = unsafe {
             ffi::mmap(
                 std::ptr::null_mut(),
                 page_size,
-                ffi::PROT_READ | ffi::PROT_EXEC,
+                prot,
                 ffi::MAP_PRIVATE,
                 fd,
                 0,
