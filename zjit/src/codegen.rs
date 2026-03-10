@@ -213,15 +213,22 @@ fn emit_jitdump_for_function(
     // Append HIR text to the shared file and get the starting line offset
     let line_offset = append_hir_to_file(hir_file_path, &hir_text);
 
-    // Build debug entries: map each pos_marker's code offset to the HIR line
+    // Build debug entries: map each pos_marker's code offset to the HIR line.
+    // When multiple instructions share the same offset (e.g. Const that emits no code),
+    // keep only the first — the profiler attributes all code between two offsets to
+    // the entry at the lower offset.
     let mut debug_entries: Vec<DebugEntry> = Vec::new();
+    let mut seen_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for &(code_ptr, insn_id) in pos_markers {
         if let Some(&line) = insn_id_to_line.get(&insn_id) {
-            debug_entries.push(DebugEntry {
-                code_addr: code_ptr.raw_addr(cb) as u64 - start_addr,
-                line: line_offset + line,
-                filename: hir_file_path,
-            });
+            let addr = code_ptr.raw_addr(cb) as u64;
+            if seen_offsets.insert(addr) {
+                debug_entries.push(DebugEntry {
+                    code_addr: addr,
+                    line: line_offset + line,
+                    filename: hir_file_path,
+                });
+            }
         }
     }
 
