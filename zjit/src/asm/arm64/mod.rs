@@ -344,6 +344,20 @@ pub fn cmp(cb: &mut CodeBlock, rn: A64Opnd, rm: A64Opnd) {
     cb.write_bytes(&bytes);
 }
 
+/// CMP (shifted register) - compare with shifted second operand
+/// shift: 0b00=LSL, 0b01=LSR, 0b10=ASR
+pub fn cmp_shifted(cb: &mut CodeBlock, rn: A64Opnd, rm: A64Opnd, shift: u8, amount: u8) {
+    let bytes: [u8; 4] = match (rn, rm) {
+        (A64Opnd::Reg(rn), A64Opnd::Reg(rm)) => {
+            assert!(rn.num_bits == rm.num_bits, "All operands must be of the same size.");
+            DataReg::cmp_shifted(rn.reg_no, rm.reg_no, shift, amount, rn.num_bits).into()
+        },
+        _ => panic!("Invalid operand combination to cmp_shifted instruction."),
+    };
+
+    cb.write_bytes(&bytes);
+}
+
 /// CSEL - conditionally select between two registers
 pub fn csel(cb: &mut CodeBlock, rd: A64Opnd, rn: A64Opnd, rm: A64Opnd, cond: u8) {
     let bytes: [u8; 4] = match (rd, rn, rm) {

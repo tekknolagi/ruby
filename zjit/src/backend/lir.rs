@@ -621,8 +621,9 @@ pub enum Insn {
     /// Jump if overflow
     Jo(Target),
 
-    /// Jump if overflow in multiplication
-    JoMul(Target),
+    /// Jump if overflow in multiplication.
+    /// The operand is the Mul output, used on ARM64 for the barrel-shifted compare.
+    JoMul(Opnd, Target),
 
     /// Jump if zero
     Jz(Target),
@@ -734,7 +735,7 @@ impl Insn {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(target) |
+            Insn::JoMul(_, target) |
             Insn::Jz(target) |
             Insn::Joz(_, target) |
             Insn::Jonz(_, target) |
@@ -786,7 +787,7 @@ impl Insn {
             Insn::Jne(_) => "Jne",
             Insn::Jnz(_) => "Jnz",
             Insn::Jo(_) => "Jo",
-            Insn::JoMul(_) => "JoMul",
+            Insn::JoMul(..) => "JoMul",
             Insn::Jz(_) => "Jz",
             Insn::Joz(..) => "Joz",
             Insn::Jonz(..) => "Jonz",
@@ -894,7 +895,7 @@ impl Insn {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(target) |
+            Insn::JoMul(_, target) |
             Insn::Jz(target) |
             Insn::Joz(_, target) |
             Insn::Jonz(_, target) |
@@ -928,7 +929,7 @@ impl Insn {
             Insn::Jne(_) |
             Insn::Jnz(_) |
             Insn::Jo(_) |
-            Insn::JoMul(_) |
+            Insn::JoMul(..) |
             Insn::Jz(_) |
             Insn::Joz(..) |
             Insn::Jonz(..) |
@@ -966,7 +967,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(target) |
+            Insn::JoMul(_, target) |
             Insn::Jz(target) |
             Insn::Label(target) |
             Insn::LeaJumpTarget { target, .. } |
@@ -1158,7 +1159,6 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(target) |
             Insn::Jz(target) |
             Insn::Label(target) |
             Insn::LeaJumpTarget { target, .. } |
@@ -1192,6 +1192,7 @@ impl<'a> InsnOpndMutIterator<'a> {
                 }
             }
 
+            Insn::JoMul(opnd, target) |
             Insn::Joz(opnd, target) |
             Insn::Jonz(opnd, target) => {
                 if self.idx == 0 {
@@ -1798,7 +1799,7 @@ impl Assembler
             Insn::Jbe(Target::Block(edge)) => Insn::Jbe(Target::Label(process_edge(edge))),
             Insn::Jb(Target::Block(edge)) => Insn::Jb(Target::Label(process_edge(edge))),
             Insn::Jo(Target::Block(edge)) => Insn::Jo(Target::Label(process_edge(edge))),
-            Insn::JoMul(Target::Block(edge)) => Insn::JoMul(Target::Label(process_edge(edge))),
+            Insn::JoMul(opnd, Target::Block(edge)) => Insn::JoMul(*opnd, Target::Label(process_edge(edge))),
             Insn::Joz(opnd, Target::Block(edge)) => Insn::Joz(*opnd, Target::Label(process_edge(edge))),
             Insn::Jonz(opnd, Target::Block(edge)) => Insn::Jonz(*opnd, Target::Label(process_edge(edge))),
             _ => insn.clone()
@@ -2452,6 +2453,7 @@ impl fmt::Display for Assembler {
                         // If the instruction has a SideExit, avoid using opnd_iter(), which has stack/locals.
                         // Here, only handle instructions that have both Opnd and Target.
                         match insn {
+                            Insn::JoMul(opnd, _) |
                             Insn::Joz(opnd, _) |
                             Insn::Jonz(opnd, _) |
                             Insn::LeaJumpTarget { out: opnd, target: _ } => {
@@ -2463,6 +2465,7 @@ impl fmt::Display for Assembler {
                         // If the instruction has a Block target, avoid using opnd_iter() for branch args
                         // since they're already printed inline with the target. Only print non-target operands.
                         match insn {
+                            Insn::JoMul(opnd, _) |
                             Insn::Joz(opnd, _) |
                             Insn::Jonz(opnd, _) |
                             Insn::LeaJumpTarget { out: opnd, target: _ } => {
@@ -2787,8 +2790,8 @@ impl Assembler {
         self.push_insn(Insn::Jo(target));
     }
 
-    pub fn jo_mul(&mut self, target: Target) {
-        self.push_insn(Insn::JoMul(target));
+    pub fn jo_mul(&mut self, val: Opnd, target: Target) {
+        self.push_insn(Insn::JoMul(val, target));
     }
 
     pub fn jz(&mut self, target: Target) {

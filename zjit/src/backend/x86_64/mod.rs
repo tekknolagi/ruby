@@ -1007,7 +1007,7 @@ impl Assembler {
                 }
 
                 Insn::Jo(target) |
-                Insn::JoMul(target) => {
+                Insn::JoMul(_, target) => {
                     match *target {
                         Target::CodePtr(code_ptr) => jo_ptr(cb, code_ptr),
                         Target::Label(label) => jo_label(cb, label),

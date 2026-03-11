@@ -1984,8 +1984,8 @@ fn gen_fixnum_mult(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, rig
     let right_untag = asm.sub(right, Opnd::UImm(1));
     let out_val = asm.mul(left_untag, right_untag);
 
-    // Test for overflow
-    asm.jo_mul(side_exit(jit, state, FixnumMultOverflow));
+    // Test for overflow (on ARM64, JoMul uses out_val for barrel-shifted cmp)
+    asm.jo_mul(out_val, side_exit(jit, state, FixnumMultOverflow));
     asm.add(out_val, Opnd::UImm(1))
 }
 

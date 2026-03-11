@@ -797,33 +797,12 @@ impl Assembler {
                     *left = split_memory_read(asm, *left, SCRATCH0_OPND);
                     *right = split_memory_read(asm, *right, SCRATCH1_OPND);
                     let mem_out = split_memory_write(out, SCRATCH0_OPND);
-                    let reg_out = out.clone();
-
-                    let has_jo_mul = idx + 1 < linearized_insns.len() && matches!(linearized_insns[idx + 1], Insn::JoMul(_));
 
                     asm.push_insn(insn);
 
-                    // When JoMul follows, the emit pass needs Mul → RShift → JoMul
-                    // to be contiguous so it can pair smulh+mul+asr+cmp. The spill
-                    // Store must NOT be between Mul and RShift. Instead, we record
-                    // the spill destination in the RShift and have the emit pass
-                    // emit the store between mul and asr (before asr clobbers the
-                    // mul output register).
-                    if has_jo_mul {
-                        // Emit RShift immediately after Mul (before any Store)
-                        asm.push_insn(Insn::RShift { out: SCRATCH0_OPND, opnd: reg_out, shift: Opnd::UImm(63) });
-                        // Emit spill Store after RShift. The emit pass will
-                        // skip it along with the RShift, and emit the spill
-                        // at the right point (between mul and asr).
-                        if let Some(mem_out) = mem_out {
-                            let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
-                            asm.store(mem_out, reg_out);
-                        }
-                    } else {
-                        if let Some(mem_out) = mem_out {
-                            let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
-                            asm.store(mem_out, SCRATCH0_OPND);
-                        }
+                    if let Some(mem_out) = mem_out {
+                        let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
+                        asm.store(mem_out, SCRATCH0_OPND);
                     }
                 }
                 Insn::LShift { opnd, out, .. } |
@@ -927,6 +906,10 @@ impl Assembler {
                             _ => asm.mov(dst, src),
                         }
                     }
+                }
+                Insn::JoMul(opnd, _) => {
+                    *opnd = split_memory_read(asm, *opnd, SCRATCH0_OPND);
+                    asm.push_insn(insn);
                 }
                 &mut Insn::PatchPoint { ref target, invariant, version } => {
                     split_patch_point(asm, target, invariant, version);
@@ -1252,49 +1235,12 @@ impl Assembler {
                     }
                 },
                 Insn::Mul { left, right, out } => {
-                    // Look for the RShift+JoMul overflow check sequence inserted
-                    // by arm64_scratch_split. When the Mul output is spilled,
-                    // scratch_split emits [Mul, RShift, Store, JoMul] with the
-                    // Store after the RShift. Without a spill, it's just
-                    // [Mul, RShift, JoMul].
-                    let rshift_insn = match (insns.get(insn_idx + 1), insns.get(insn_idx + 2), insns.get(insn_idx + 3)) {
-                        (Some(&Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(&Insn::Store { dest: spill_dest, src: spill_src }), Some(Insn::JoMul(_))) => {
-                            Some((out_sign, out_opnd, out_shift, Some((spill_dest, spill_src))))
-                        }
-                        (Some(&Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(Insn::JoMul(_)), _) => {
-                            Some((out_sign, out_opnd, out_shift, None))
-                        }
-                        _ => None,
-                    };
-
-                    if let Some((out_sign, out_opnd, out_shift, spill)) = rshift_insn {
-                        // Compute the high 64 bits into EMIT_OPND (X16)
-                        smulh(cb, Self::EMIT_OPND, left.into(), right.into());
-
-                        // Compute the low 64 bits into `out` (may clobber inputs,
-                        // so this must come after smulh)
-                        mul(cb, out.into(), left.into(), right.into());
-
-                        // If the mul result was spilled, emit the store now
-                        // BEFORE asr clobbers the output register with the sign
-                        // bit. The spill source is always a register (SCRATCH0),
-                        // not EMIT_OPND (X16), so the smulh result is preserved.
-                        if let Some((spill_dest, spill_src)) = spill {
-                            stur(cb, spill_src.into(), spill_dest.into());
-                            insn_idx += 1; // will skip the Store insn
-                        }
-
-                        // Shift to extract the sign bit of the 64-bit mul result
-                        asr(cb, out_sign.into(), out_opnd.into(), out_shift.into());
-                        insn_idx += 1; // skip the RShift
-
-                        // If the high 64-bits are not all zeros or all ones,
-                        // matching the sign bit, then we have an overflow
-                        cmp(cb, Self::EMIT_OPND, out_sign.into());
-                        // JoMul will emit_conditional_jump::<{Condition::NE}>
-                    } else {
-                        mul(cb, out.into(), left.into(), right.into());
-                    }
+                    // Speculatively emit smulh into EMIT_OPND (X16) for a
+                    // potential following JoMul. If no JoMul follows, X16 is
+                    // simply overwritten later. Must come before mul since mul
+                    // may clobber an input register.
+                    smulh(cb, Self::EMIT_OPND, left.into(), right.into());
+                    mul(cb, out.into(), left.into(), right.into());
                 },
                 Insn::And { left, right, out } => {
                     and(cb, out.into(), left.into(), right.into());
@@ -1558,7 +1504,14 @@ impl Assembler {
                 Insn::Je(target) | Insn::Jz(target) => {
                     emit_conditional_jump::<{Condition::EQ}>(self, cb, target.clone());
                 },
-                Insn::Jne(target) | Insn::Jnz(target) | Insn::JoMul(target) => {
+                Insn::Jne(target) | Insn::Jnz(target) => {
+                    emit_conditional_jump::<{Condition::NE}>(self, cb, target.clone());
+                },
+                Insn::JoMul(val, target) => {
+                    // Compare smulh result (in EMIT_OPND/X16 from preceding Mul)
+                    // with the mul output sign-extended from bit 62. Uses the
+                    // barrel shifter built into CMP for a single instruction.
+                    cmp_shifted(cb, Self::EMIT_OPND, val.into(), 0b10, 62); // ASR #62
                     emit_conditional_jump::<{Condition::NE}>(self, cb, target.clone());
                 },
                 Insn::Jl(target) => {
@@ -1809,11 +1762,12 @@ mod tests {
         asm.compile_with_num_regs(&mut cb, 2);
 
         assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: mov x0, #3
-            0x4: mul x0, x9, x0
-            0x8: mov x1, x0
+        0x0: mov x0, #3
+        0x4: smulh x16, x9, x0
+        0x8: mul x0, x9, x0
+        0xc: mov x1, x0
         ");
-        assert_snapshot!(cb.hexdump(), @"600080d2207d009be10300aa");
+        assert_snapshot!(cb.hexdump(), @"600080d2307d409b207d009be10300aa");
     }
 
     #[test]

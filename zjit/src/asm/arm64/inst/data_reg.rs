@@ -92,6 +92,26 @@ impl DataReg {
         Self::subs(31, rn, rm, num_bits)
     }
 
+    /// CMP (shifted register) with explicit shift
+    /// Encodes: CMP <Xn>, <Xm>, <shift> #<amount>
+    pub fn cmp_shifted(rn: u8, rm: u8, shift: u8, amount: u8, num_bits: u8) -> Self {
+        Self {
+            rd: 31,
+            rn,
+            imm6: amount,
+            rm,
+            shift: match shift {
+                0b00 => Shift::LSL,
+                0b01 => Shift::LSR,
+                0b10 => Shift::ASR,
+                _ => panic!("Invalid shift type"),
+            },
+            s: S::UpdateFlags,
+            op: Op::Sub,
+            sf: num_bits.into()
+        }
+    }
+
     /// SUB (shifted register)
     /// <https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/SUB--shifted-register---Subtract--shifted-register--?lang=en>
     pub fn sub(rd: u8, rn: u8, rm: u8, num_bits: u8) -> Self {
