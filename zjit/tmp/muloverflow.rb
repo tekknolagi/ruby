@@ -1,18 +1,15 @@
 # frozen_string_literal: true
-# Minimal: two mults + getbyte + >> 32
-def repro(str)
-  lo = 5381
-  hi = 0
-  i = 0
-  len = str.bytesize
-  while i < len
-    prod_lo = lo * 33 + str.getbyte(i)
-    carry = prod_lo >> 32
-    lo = prod_lo & 0xFFFFFFFF
-    hi = (hi * 5 + carry) & 0xFFFFFFFF
+# Minimal reproducer: ARM64 FixnumMult spurious overflow side-exits.
+# Needs: two multiplies, getbyte (for register pressure), and >>32.
+# Before fix: fixnum_mult_overflow: 71, ratio_in_zjit: 3.7%
+# After fix:  side_exit_count: 0,       ratio_in_zjit: 69%
+def f(s)
+  a = 0; b = 0; i = 0
+  while i < s.bytesize
+    a = a * 3 + s.getbyte(i)
+    b = b * 3 + (a >> 32)
     i += 1
   end
-  lo
+  a
 end
-
-100.times { repro("hello world") }
+100.times { f("x") }

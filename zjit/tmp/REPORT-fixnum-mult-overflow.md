@@ -22,24 +22,20 @@ this in practice but the possibility exists.
 
 ```ruby
 # frozen_string_literal: true
-# tmp/muloverflow.rb — two FixnumMult + getbyte + >>32 in a loop
-def repro(str)
-  lo = 5381
-  hi = 0
-  i = 0
-  len = str.bytesize
-  while i < len
-    prod_lo = lo * 33 + str.getbyte(i)
-    carry = prod_lo >> 32
-    lo = prod_lo & 0xFFFFFFFF
-    hi = (hi * 5 + carry) & 0xFFFFFFFF
+def f(s)
+  a = 0; b = 0; i = 0
+  while i < s.bytesize
+    a = a * 3 + s.getbyte(i)
+    b = b * 3 + (a >> 32)
     i += 1
   end
-  lo
+  a
 end
-
-100.times { repro("hello world") }
+100.times { f("x") }
 ```
+
+The trigger requires: two `FixnumMult` in one block, a cfunc call (`getbyte`)
+for register pressure, and enough live values (`>> 32`) to force a spill.
 
 **Before fix:**
 ```

@@ -799,31 +799,18 @@ impl Assembler {
                     let mem_out = split_memory_write(out, SCRATCH0_OPND);
                     let reg_out = out.clone();
 
-                    let has_jo_mul = idx + 1 < linearized_insns.len() && matches!(linearized_insns[idx + 1], Insn::JoMul(_));
-
                     asm.push_insn(insn);
 
-                    // When JoMul follows, the emit pass needs Mul → RShift → JoMul
-                    // to be contiguous so it can pair smulh+mul+asr+cmp. The spill
-                    // Store must NOT be between Mul and RShift. Instead, we record
-                    // the spill destination in the RShift and have the emit pass
-                    // emit the store between mul and asr (before asr clobbers the
-                    // mul output register).
-                    if has_jo_mul {
-                        // Emit RShift immediately after Mul (before any Store)
+                    if let Some(mem_out) = mem_out {
+                        let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
+                        asm.store(mem_out, SCRATCH0_OPND);
+                    };
+
+                    // If the next instruction is JoMul
+                    if idx + 1 < linearized_insns.len() && matches!(linearized_insns[idx + 1], Insn::JoMul(_)) {
+                        // Produce a register that is all zeros or all ones
+                        // Based on the sign bit of the 64-bit mul result
                         asm.push_insn(Insn::RShift { out: SCRATCH0_OPND, opnd: reg_out, shift: Opnd::UImm(63) });
-                        // Emit spill Store after RShift. The emit pass will
-                        // skip it along with the RShift, and emit the spill
-                        // at the right point (between mul and asr).
-                        if let Some(mem_out) = mem_out {
-                            let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
-                            asm.store(mem_out, reg_out);
-                        }
-                    } else {
-                        if let Some(mem_out) = mem_out {
-                            let mem_out = split_large_disp(asm, mem_out, SCRATCH1_OPND);
-                            asm.store(mem_out, SCRATCH0_OPND);
-                        }
                     }
                 }
                 Insn::LShift { opnd, out, .. } |
@@ -1252,48 +1239,30 @@ impl Assembler {
                     }
                 },
                 Insn::Mul { left, right, out } => {
-                    // Look for the RShift+JoMul overflow check sequence inserted
-                    // by arm64_scratch_split. When the Mul output is spilled,
-                    // scratch_split emits [Mul, RShift, Store, JoMul] with the
-                    // Store after the RShift. Without a spill, it's just
-                    // [Mul, RShift, JoMul].
-                    let rshift_insn = match (insns.get(insn_idx + 1), insns.get(insn_idx + 2), insns.get(insn_idx + 3)) {
-                        (Some(&Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(&Insn::Store { dest: spill_dest, src: spill_src }), Some(Insn::JoMul(_))) => {
-                            Some((out_sign, out_opnd, out_shift, Some((spill_dest, spill_src))))
+                    // If the next instruction is JoMul with RShift created by arm64_scratch_split
+                    match (insns.get(insn_idx + 1), insns.get(insn_idx + 2)) {
+                        (Some(Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(Insn::JoMul(_))) => {
+                            // Compute the high 64 bits
+                            smulh(cb, Self::EMIT_OPND, left.into(), right.into());
+
+                            // Compute the low 64 bits
+                            // This may clobber one of the input registers,
+                            // so we do it after smulh
+                            mul(cb, out.into(), left.into(), right.into());
+
+                            // Insert the shift instruction created by arm64_scratch_split
+                            // to prepare the register that has the sign bit of the high 64 bits after mul.
+                            asr(cb, out_sign.into(), out_opnd.into(), out_shift.into());
+                            insn_idx += 1; // skip the next Insn::RShift
+
+                            // If the high 64-bits are not all zeros or all ones,
+                            // matching the sign bit, then we have an overflow
+                            cmp(cb, Self::EMIT_OPND, out_sign.into());
+                            // Insn::JoMul will emit_conditional_jump::<{Condition::NE}>
                         }
-                        (Some(&Insn::RShift { out: out_sign, opnd: out_opnd, shift: out_shift }), Some(Insn::JoMul(_)), _) => {
-                            Some((out_sign, out_opnd, out_shift, None))
+                        _ => {
+                            mul(cb, out.into(), left.into(), right.into());
                         }
-                        _ => None,
-                    };
-
-                    if let Some((out_sign, out_opnd, out_shift, spill)) = rshift_insn {
-                        // Compute the high 64 bits into EMIT_OPND (X16)
-                        smulh(cb, Self::EMIT_OPND, left.into(), right.into());
-
-                        // Compute the low 64 bits into `out` (may clobber inputs,
-                        // so this must come after smulh)
-                        mul(cb, out.into(), left.into(), right.into());
-
-                        // If the mul result was spilled, emit the store now
-                        // BEFORE asr clobbers the output register with the sign
-                        // bit. The spill source is always a register (SCRATCH0),
-                        // not EMIT_OPND (X16), so the smulh result is preserved.
-                        if let Some((spill_dest, spill_src)) = spill {
-                            stur(cb, spill_src.into(), spill_dest.into());
-                            insn_idx += 1; // will skip the Store insn
-                        }
-
-                        // Shift to extract the sign bit of the 64-bit mul result
-                        asr(cb, out_sign.into(), out_opnd.into(), out_shift.into());
-                        insn_idx += 1; // skip the RShift
-
-                        // If the high 64-bits are not all zeros or all ones,
-                        // matching the sign bit, then we have an overflow
-                        cmp(cb, Self::EMIT_OPND, out_sign.into());
-                        // JoMul will emit_conditional_jump::<{Condition::NE}>
-                    } else {
-                        mul(cb, out.into(), left.into(), right.into());
                     }
                 },
                 Insn::And { left, right, out } => {
