@@ -622,8 +622,9 @@ pub enum Insn {
     Jo(Target),
 
     /// Jump if overflow in multiplication.
-    /// The operand is the Mul output, used on ARM64 for the barrel-shifted compare.
-    JoMul(Opnd, Target),
+    /// First operand is MulHighBits output, second is Mul output.
+    /// On ARM64, emits CMP high, low, ASR #62. On x86, emits jo (ignores both).
+    JoMul(Opnd, Opnd, Target),
 
     /// Jump if zero
     Jz(Target),
@@ -698,6 +699,9 @@ pub enum Insn {
     // Integer multiplication
     Mul { left: Opnd, right: Opnd, out: Opnd },
 
+    // High 64 bits of a signed 128-bit multiply (smulh on ARM64, no-op on x86)
+    MulHighBits { left: Opnd, right: Opnd, out: Opnd },
+
     // Bitwise AND test instruction
     Test { left: Opnd, right: Opnd },
 
@@ -735,7 +739,7 @@ impl Insn {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(_, target) |
+            Insn::JoMul(_, _, target) |
             Insn::Jz(target) |
             Insn::Joz(_, target) |
             Insn::Jonz(_, target) |
@@ -810,6 +814,7 @@ impl Insn {
             Insn::Store { .. } => "Store",
             Insn::Sub { .. } => "Sub",
             Insn::Mul { .. } => "Mul",
+            Insn::MulHighBits { .. } => "MulHighBits",
             Insn::Test { .. } => "Test",
             Insn::URShift { .. } => "URShift",
             Insn::Xor { .. } => "Xor"
@@ -843,6 +848,7 @@ impl Insn {
             Insn::RShift { out, .. } |
             Insn::Sub { out, .. } |
             Insn::Mul { out, .. } |
+            Insn::MulHighBits { out, .. } |
             Insn::URShift { out, .. } |
             Insn::Xor { out, .. } => Some(out),
             _ => None
@@ -876,6 +882,7 @@ impl Insn {
             Insn::RShift { out, .. } |
             Insn::Sub { out, .. } |
             Insn::Mul { out, .. } |
+            Insn::MulHighBits { out, .. } |
             Insn::URShift { out, .. } |
             Insn::Xor { out, .. } => Some(out),
             _ => None
@@ -895,7 +902,7 @@ impl Insn {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(_, target) |
+            Insn::JoMul(_, _, target) |
             Insn::Jz(target) |
             Insn::Joz(_, target) |
             Insn::Jonz(_, target) |
@@ -967,7 +974,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::Jne(target) |
             Insn::Jnz(target) |
             Insn::Jo(target) |
-            Insn::JoMul(_, target) |
+            Insn::JoMul(_, _, target) |
             Insn::Jz(target) |
             Insn::Label(target) |
             Insn::LeaJumpTarget { target, .. } |
@@ -1084,6 +1091,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::Store { dest: opnd0, src: opnd1 } |
             Insn::Sub { left: opnd0, right: opnd1, .. } |
             Insn::Mul { left: opnd0, right: opnd1, .. } |
+            Insn::MulHighBits { left: opnd0, right: opnd1, .. } |
             Insn::Test { left: opnd0, right: opnd1 } |
             Insn::URShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Xor { left: opnd0, right: opnd1, .. } => {
@@ -1192,7 +1200,43 @@ impl<'a> InsnOpndMutIterator<'a> {
                 }
             }
 
-            Insn::JoMul(opnd, target) |
+            Insn::JoMul(high, low, target) => {
+                match self.idx {
+                    0 => { self.idx += 1; return Some(high); }
+                    1 => { self.idx += 1; return Some(low); }
+                    _ => {}
+                }
+
+                match target {
+                    Target::SideExit { exit: SideExit { stack, locals, .. }, .. } => {
+                        let stack_idx = self.idx - 2;
+                        if stack_idx < stack.len() {
+                            let opnd = &mut stack[stack_idx];
+                            self.idx += 1;
+                            return Some(opnd);
+                        }
+
+                        let local_idx = stack_idx - stack.len();
+                        if local_idx < locals.len() {
+                            let opnd = &mut locals[local_idx];
+                            self.idx += 1;
+                            return Some(opnd);
+                        }
+                        None
+                    }
+                    Target::Block(edge) => {
+                        let arg_idx = self.idx - 2;
+                        if arg_idx < edge.args.len() {
+                            let opnd = &mut edge.args[arg_idx];
+                            self.idx += 1;
+                            return Some(opnd);
+                        }
+                        None
+                    }
+                    _ => None
+                }
+            }
+
             Insn::Joz(opnd, target) |
             Insn::Jonz(opnd, target) => {
                 if self.idx == 0 {
@@ -1278,6 +1322,7 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::Store { dest: opnd0, src: opnd1 } |
             Insn::Sub { left: opnd0, right: opnd1, .. } |
             Insn::Mul { left: opnd0, right: opnd1, .. } |
+            Insn::MulHighBits { left: opnd0, right: opnd1, .. } |
             Insn::Test { left: opnd0, right: opnd1 } |
             Insn::URShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Xor { left: opnd0, right: opnd1, .. } => {
@@ -1799,7 +1844,7 @@ impl Assembler
             Insn::Jbe(Target::Block(edge)) => Insn::Jbe(Target::Label(process_edge(edge))),
             Insn::Jb(Target::Block(edge)) => Insn::Jb(Target::Label(process_edge(edge))),
             Insn::Jo(Target::Block(edge)) => Insn::Jo(Target::Label(process_edge(edge))),
-            Insn::JoMul(opnd, Target::Block(edge)) => Insn::JoMul(*opnd, Target::Label(process_edge(edge))),
+            Insn::JoMul(high, low, Target::Block(edge)) => Insn::JoMul(*high, *low, Target::Label(process_edge(edge))),
             Insn::Joz(opnd, Target::Block(edge)) => Insn::Joz(*opnd, Target::Label(process_edge(edge))),
             Insn::Jonz(opnd, Target::Block(edge)) => Insn::Jonz(*opnd, Target::Label(process_edge(edge))),
             _ => insn.clone()
@@ -2453,7 +2498,9 @@ impl fmt::Display for Assembler {
                         // If the instruction has a SideExit, avoid using opnd_iter(), which has stack/locals.
                         // Here, only handle instructions that have both Opnd and Target.
                         match insn {
-                            Insn::JoMul(opnd, _) |
+                            Insn::JoMul(high, low, _) => {
+                                write!(f, ", {high}, {low}")?;
+                            }
                             Insn::Joz(opnd, _) |
                             Insn::Jonz(opnd, _) |
                             Insn::LeaJumpTarget { out: opnd, target: _ } => {
@@ -2465,7 +2512,9 @@ impl fmt::Display for Assembler {
                         // If the instruction has a Block target, avoid using opnd_iter() for branch args
                         // since they're already printed inline with the target. Only print non-target operands.
                         match insn {
-                            Insn::JoMul(opnd, _) |
+                            Insn::JoMul(high, low, _) => {
+                                write!(f, ", {high}, {low}")?;
+                            }
                             Insn::Joz(opnd, _) |
                             Insn::Jonz(opnd, _) |
                             Insn::LeaJumpTarget { out: opnd, target: _ } => {
@@ -2790,8 +2839,8 @@ impl Assembler {
         self.push_insn(Insn::Jo(target));
     }
 
-    pub fn jo_mul(&mut self, val: Opnd, target: Target) {
-        self.push_insn(Insn::JoMul(val, target));
+    pub fn jo_mul(&mut self, high: Opnd, low: Opnd, target: Target) {
+        self.push_insn(Insn::JoMul(high, low, target));
     }
 
     pub fn jz(&mut self, target: Target) {
@@ -2916,6 +2965,15 @@ impl Assembler {
     pub fn mul(&mut self, left: Opnd, right: Opnd) -> Opnd {
         let out = self.new_vreg(Opnd::match_num_bits(&[left, right]));
         self.push_insn(Insn::Mul { left, right, out });
+        out
+    }
+
+    /// High 64 bits of signed 128-bit multiply. On ARM64 this emits smulh;
+    /// on x86 it's a no-op since imul sets the overflow flag directly.
+    #[must_use]
+    pub fn mul_high_bits(&mut self, left: Opnd, right: Opnd) -> Opnd {
+        let out = self.new_vreg(Opnd::match_num_bits(&[left, right]));
+        self.push_insn(Insn::MulHighBits { left, right, out });
         out
     }
 

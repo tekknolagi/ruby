@@ -785,6 +785,8 @@ impl Assembler {
                 Insn::Mul { left, right, .. } => {
                     imul(cb, left.into(), right.into());
                 },
+                // x86 imul sets OF directly, no high bits needed
+                Insn::MulHighBits { .. } => {},
 
                 Insn::And { left, right, .. } => {
                     and(cb, left.into(), right.into());
@@ -1007,7 +1009,7 @@ impl Assembler {
                 }
 
                 Insn::Jo(target) |
-                Insn::JoMul(_, target) => {
+                Insn::JoMul(_, _, target) => {
                     match *target {
                         Target::CodePtr(code_ptr) => jo_ptr(cb, code_ptr),
                         Target::Label(label) => jo_label(cb, label),

@@ -664,7 +664,8 @@ impl Assembler {
                     *opnd = split_load_operand(asm, *opnd);
                     asm.push_insn(insn);
                 },
-                Insn::Mul { left, right, .. } => {
+                Insn::Mul { left, right, .. } |
+                Insn::MulHighBits { left, right, .. } => {
                     *left = split_load_operand(asm, *left);
                     *right = split_load_operand(asm, *right);
                     asm.push_insn(insn);
@@ -793,7 +794,8 @@ impl Assembler {
                         asm.store(mem_out, SCRATCH0_OPND);
                     }
                 }
-                Insn::Mul { left, right, out } => {
+                Insn::Mul { left, right, out } |
+                Insn::MulHighBits { left, right, out } => {
                     *left = split_memory_read(asm, *left, SCRATCH0_OPND);
                     *right = split_memory_read(asm, *right, SCRATCH1_OPND);
                     let mem_out = split_memory_write(out, SCRATCH0_OPND);
@@ -907,8 +909,9 @@ impl Assembler {
                         }
                     }
                 }
-                Insn::JoMul(opnd, _) => {
-                    *opnd = split_memory_read(asm, *opnd, SCRATCH0_OPND);
+                Insn::JoMul(high, low, _) => {
+                    *high = split_memory_read(asm, *high, SCRATCH0_OPND);
+                    *low = split_memory_read(asm, *low, SCRATCH1_OPND);
                     asm.push_insn(insn);
                 }
                 &mut Insn::PatchPoint { ref target, invariant, version } => {
@@ -1235,12 +1238,10 @@ impl Assembler {
                     }
                 },
                 Insn::Mul { left, right, out } => {
-                    // Speculatively emit smulh into EMIT_OPND (X16) for a
-                    // potential following JoMul. If no JoMul follows, X16 is
-                    // simply overwritten later. Must come before mul since mul
-                    // may clobber an input register.
-                    smulh(cb, Self::EMIT_OPND, left.into(), right.into());
                     mul(cb, out.into(), left.into(), right.into());
+                },
+                Insn::MulHighBits { left, right, out } => {
+                    smulh(cb, out.into(), left.into(), right.into());
                 },
                 Insn::And { left, right, out } => {
                     and(cb, out.into(), left.into(), right.into());
@@ -1507,11 +1508,11 @@ impl Assembler {
                 Insn::Jne(target) | Insn::Jnz(target) => {
                     emit_conditional_jump::<{Condition::NE}>(self, cb, target.clone());
                 },
-                Insn::JoMul(val, target) => {
-                    // Compare smulh result (in EMIT_OPND/X16 from preceding Mul)
-                    // with the mul output sign-extended from bit 62. Uses the
-                    // barrel shifter built into CMP for a single instruction.
-                    cmp_shifted(cb, Self::EMIT_OPND, val.into(), 0b10, 62); // ASR #62
+                Insn::JoMul(high, low, target) => {
+                    // Compare MulHighBits result with the Mul output
+                    // sign-extended from bit 62. Uses the barrel shifter
+                    // built into CMP for a single instruction.
+                    cmp_shifted(cb, high.into(), low.into(), 0b10, 62); // ASR #62
                     emit_conditional_jump::<{Condition::NE}>(self, cb, target.clone());
                 },
                 Insn::Jl(target) => {
@@ -1763,11 +1764,10 @@ mod tests {
 
         assert_disasm_snapshot!(cb.disasm(), @"
         0x0: mov x0, #3
-        0x4: smulh x16, x9, x0
-        0x8: mul x0, x9, x0
-        0xc: mov x1, x0
+        0x4: mul x0, x9, x0
+        0x8: mov x1, x0
         ");
-        assert_snapshot!(cb.hexdump(), @"600080d2307d409b207d009be10300aa");
+        assert_snapshot!(cb.hexdump(), @"600080d2207d009be10300aa");
     }
 
     #[test]
