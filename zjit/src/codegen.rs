@@ -1982,11 +1982,13 @@ fn gen_fixnum_mult(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, rig
     // x * y is translated to (x >> 1) * (y - 1) + 1
     let left_untag = asm.rshift(left, Opnd::UImm(1));
     let right_untag = asm.sub(right, Opnd::UImm(1));
+    // Emit MulHighBits before Mul: smulh needs the original inputs,
+    // but mul may clobber a shared input register.
+    let high = asm.mul_high_bits(left_untag, right_untag);
     let out_val = asm.mul(left_untag, right_untag);
 
-    // Test for overflow: on ARM64, compare smulh (high bits) with sign-extended
+    // Test for overflow: on ARM64, compare high bits with sign-extended
     // low bits. On x86, mul_high_bits is a no-op and jo_mul just reads OF.
-    let high = asm.mul_high_bits(left_untag, right_untag);
     asm.jo_mul(high, out_val, side_exit(jit, state, FixnumMultOverflow));
     asm.add(out_val, Opnd::UImm(1))
 }
