@@ -17,3 +17,5 @@ mod tests;
 
 pub mod lir;
 pub mod parcopy;
+#[cfg(feature = "runtime_checks")]
+pub mod regalloc_verify;

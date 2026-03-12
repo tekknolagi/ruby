@@ -1661,9 +1661,17 @@ impl Assembler {
             }
         }
 
+        #[cfg(feature = "runtime_checks")]
+        crate::backend::regalloc_verify::verify_assignments(&intervals, &assignments);
+        #[cfg(feature = "runtime_checks")]
+        let annotations = crate::backend::regalloc_verify::capture_annotations(&asm);
+
         asm.handle_caller_saved_regs(&intervals, &assignments, &C_ARG_REGREGS);
         asm.resolve_ssa(&intervals, &assignments);
         asm_dump!(asm, alloc_regs);
+
+        #[cfg(feature = "runtime_checks")]
+        crate::backend::regalloc_verify::verify_dataflow(&asm, &annotations, &ALLOC_REGS, &assignments);
 
         // We are moved out of SSA after resolve_ssa
 
