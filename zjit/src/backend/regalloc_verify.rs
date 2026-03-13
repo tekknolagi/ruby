@@ -305,68 +305,133 @@ pub fn verify_dataflow(
         }
     }
 
-    // State at block exit.
+    // Iterate to fixpoint: reprocess blocks until exit states stabilize.
+    // The lattice has finite height (Unknown → VReg → Conflict), so this
+    // converges. Only verify instruction inputs on the final pass.
     let mut exit_states: HashMap<BlockId, CheckerState> = HashMap::new();
+    let max_iterations = block_order.len() + 1;
 
-    for &block_id in &block_order {
-        let block = &asm.basic_blocks[block_id.0];
-        if block.is_dummy() {
-            continue;
-        }
+    for iteration in 0..max_iterations {
+        let mut changed = false;
 
-        // Initialize state by merging predecessors.
-        let mut state = {
-            let preds = predecessors.get(&block_id).cloned().unwrap_or_default();
-            let pred_states: Vec<&CheckerState> =
-                preds.iter().filter_map(|p| exit_states.get(p)).collect();
-            if pred_states.is_empty() {
-                let mut s = CheckerState::new();
-                // Entry block: parameters arrive in calling-convention locations.
-                if block.is_entry {
-                    for (i, param) in block.parameters.iter().enumerate() {
-                        if let Some(vreg) = extract_vreg(param) {
-                            let loc = param_to_loc(i);
-                            s.set(loc, SymValue::VReg(vreg));
-                        }
-                    }
-                }
-                s
+        for &block_id in &block_order {
+            let block = &asm.basic_blocks[block_id.0];
+            if block.is_dummy() {
+                continue;
+            }
+
+            let state = compute_block_exit_state(
+                block, block_id, &predecessors, &exit_states,
+                annotations, alloc_regs, assignments, asm,
+                iteration == max_iterations - 1, // verify only on last pass
+            );
+
+            let is_new = if let Some(old_state) = exit_states.get(&block_id) {
+                old_state.locs != state.locs
             } else {
-                let mut s = pred_states[0].clone();
-                for ps in &pred_states[1..] {
-                    s.meet_with(ps);
-                }
-                s
-            }
-        };
-
-        // At block entry (after merging), set block parameter VRegs at their
-        // allocated locations. resolve_ssa inserted moves at block boundaries
-        // to ensure each parameter's value arrives at its allocated location.
-        // Different predecessors may pass different source VRegs (phi inputs),
-        // which the meet merges to Conflict. We override with the parameter
-        // VReg here because the edge moves define the parameter's value.
-        if !block.is_entry {
-            for param in &block.parameters {
-                if let Some(vreg) = extract_vreg(param) {
-                    if let Some(loc) = alloc_to_loc(assignments, vreg) {
-                        state.set(loc, SymValue::VReg(vreg));
-                    }
-                }
+                true
+            };
+            if is_new {
+                changed = true;
+                exit_states.insert(block_id, state);
             }
         }
 
-        // Process each instruction in the block.
-        for (insn, insn_id) in block.insns.iter().zip(block.insn_ids.iter()) {
-            process_insn(insn, insn_id, annotations, &mut state, alloc_regs, block_id, asm);
+        if !changed {
+            // Converged — do one final verification pass.
+            for &block_id in &block_order {
+                let block = &asm.basic_blocks[block_id.0];
+                if block.is_dummy() {
+                    continue;
+                }
+                compute_block_exit_state(
+                    block, block_id, &predecessors, &exit_states,
+                    annotations, alloc_regs, assignments, asm,
+                    true, // verify
+                );
+            }
+            return;
         }
-
-        exit_states.insert(block_id, state);
     }
+
+    panic!("regalloc verify: fixpoint did not converge after {max_iterations} iterations");
 }
 
-/// Process a single instruction, updating checker state and verifying inputs.
-fn process_insn(
+/// Compute the exit state for a block by symbolically executing its instructions.
+/// If `verify` is true, also check that instruction inputs match expected VRegs.
+fn compute_block_exit_state(
+    block: &BasicBlock,
+    block_id: BlockId,
+    predecessors: &HashMap<BlockId, Vec<BlockId>>,
+    exit_states: &HashMap<BlockId, CheckerState>,
+    annotations: &HashMap<InsnId, InsnAnnotation>,
+    alloc_regs: &[Reg],
+    assignments: &[Option<Allocation>],
+    asm: &Assembler,
+    verify: bool,
+) -> CheckerState {
+    // Initialize state by merging predecessors.
+    let preds = predecessors.get(&block_id).cloned().unwrap_or_default();
+    let pred_states: Vec<&CheckerState> =
+        preds.iter().filter_map(|p| exit_states.get(p)).collect();
+
+    let mut state = if pred_states.is_empty() {
+        let mut s = CheckerState::new();
+        if block.is_entry {
+            for (i, param) in block.parameters.iter().enumerate() {
+                if let Some(vreg) = extract_vreg(param) {
+                    let loc = param_to_loc(i);
+                    s.set(loc, SymValue::VReg(vreg));
+                }
+            }
+        }
+        s
+    } else {
+        let mut s = pred_states[0].clone();
+        for ps in &pred_states[1..] {
+            s.meet_with(ps);
+        }
+        s
+    };
+
+    // Process instructions in two phases for non-entry blocks.
+    let mut insn_iter = block.insns.iter().zip(block.insn_ids.iter()).peekable();
+
+    if !block.is_entry {
+        // Phase 1: process only Labels and inserted Movs at block start.
+        // These are the phi-resolution moves from resolve_ssa.
+        // Stop before any other instruction (CPush/CPop from
+        // handle_caller_saved_regs, original instructions, etc.)
+        while let Some(&(insn, insn_id)) = insn_iter.peek() {
+            match (insn, insn_id) {
+                (Insn::Label(_), _) => {}          // Always process labels
+                (Insn::Mov { .. }, None) => {}     // Entry Mov from resolve_ssa
+                _ => break,                        // Anything else → stop phase 1
+            }
+            insn_iter.next();
+            process_insn_inner(insn, insn_id, annotations, &mut state, alloc_regs, block_id, asm, false);
+        }
+
+        // Apply block parameter definitions after entry Movs.
+        for param in &block.parameters {
+            if let Some(vreg) = extract_vreg(param) {
+                if let Some(loc) = alloc_to_loc(assignments, vreg) {
+                    state.set(loc, SymValue::VReg(vreg));
+                }
+            }
+        }
+    }
+
+    // Phase 2: process remaining instructions
+    for (insn, insn_id) in insn_iter {
+        process_insn_inner(insn, insn_id, annotations, &mut state, alloc_regs, block_id, asm, verify);
+    }
+
+    state
+}
+
+/// Process a single instruction, updating checker state and optionally verifying inputs.
+fn process_insn_inner(
     insn: &Insn,
     insn_id: &Option<InsnId>,
     annotations: &HashMap<InsnId, InsnAnnotation>,
@@ -374,6 +439,7 @@ fn process_insn(
     alloc_regs: &[Reg],
     block_id: BlockId,
     asm: &Assembler,
+    verify: bool,
 ) {
     // ---- Inserted moves (no InsnId): propagate symbolic values ----
     if insn_id.is_none() {
@@ -458,7 +524,18 @@ fn process_insn(
         }
     };
 
-    // Verify each input operand contains the expected VReg value.
+    // Verify each input operand contains the expected VReg value (only on final pass).
+    if !verify {
+        // Still need to set output even when not verifying.
+        if let Some(vreg) = ann.output_vreg {
+            if let Some(out_opnd) = post_output {
+                if let Some(loc) = opnd_to_loc(out_opnd) {
+                    state.set(loc, SymValue::VReg(vreg));
+                }
+            }
+        }
+        return;
+    }
     for (i, opnd) in post_inputs.iter().enumerate() {
         if i >= ann.input_vregs.len() {
             break;
