@@ -5106,14 +5106,34 @@ impl Function {
                         }
                     },
                     Insn::GuardGreaterEq { left, right, state, reason } => {
-                        let left_num = self.type_of(left).cint64_value();
-                        let right_num = self.type_of(right).cint64_value();
-                        match (left_num, right_num) {
-                            (Some(l), Some(r)) if l >= r => {
+                        let left_range = self.type_of(left).integer_range();
+                        let right_range = self.type_of(right).integer_range();
+                        match (left_range, right_range) {
+                            // left's min >= right's max → always true
+                            (Some((l_lo, _)), Some((_, r_hi))) if l_lo >= r_hi => {
                                 self.make_equal_to(insn_id, left);
                                 continue
                             },
-                            (Some(_), Some(_)) => self.new_insn(Insn::SideExit { state, reason }),
+                            // left's max < right's min → always false
+                            (Some((_, l_hi)), Some((r_lo, _))) if l_hi < r_lo => {
+                                self.new_insn(Insn::SideExit { state, reason })
+                            },
+                            _ => insn_id,
+                        }
+                    },
+                    Insn::GuardLess { left, right, state } => {
+                        let left_range = self.type_of(left).integer_range();
+                        let right_range = self.type_of(right).integer_range();
+                        match (left_range, right_range) {
+                            // left's max < right's min → always true
+                            (Some((_, l_hi)), Some((r_lo, _))) if l_hi < r_lo => {
+                                self.make_equal_to(insn_id, left);
+                                continue
+                            },
+                            // left's min >= right's max → always false
+                            (Some((l_lo, _)), Some((_, r_hi))) if l_lo >= r_hi => {
+                                self.new_insn(Insn::SideExit { state, reason: SideExitReason::GuardLess })
+                            },
                             _ => insn_id,
                         }
                     },
