@@ -197,6 +197,17 @@ impl Type {
         }
     }
 
+    /// Create a `Type` representing a CInt64 within an inclusive range [lo, hi].
+    /// If lo == hi, returns an exact Int specialization instead.
+    pub fn cint64_range(lo: i64, hi: i64) -> Type {
+        debug_assert!(lo <= hi);
+        if lo == hi {
+            Type::from_cint(types::CInt64, lo)
+        } else {
+            Type { bits: bits::CInt64, spec: Specialization::Range(lo, hi) }
+        }
+    }
+
     /// Create a `Type` representing a Fixnum within an inclusive range [lo, hi].
     /// If lo == hi, returns an exact Object specialization instead.
     pub fn fixnum_range(lo: i64, hi: i64) -> Type {

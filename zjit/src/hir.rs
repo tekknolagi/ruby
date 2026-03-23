@@ -2870,10 +2870,16 @@ impl Function {
             Insn::IsBitNotEqual { .. } => types::CBool,
             Insn::BoxBool { .. } => types::BoolExact,
             Insn::BoxFixnum { .. } => types::Fixnum,
-            Insn::UnboxFixnum { val } => self
-                .type_of(*val)
-                .fixnum_value()
-                .map_or(types::CInt64, |fixnum| Type::from_cint(types::CInt64, fixnum)),
+            Insn::UnboxFixnum { val } => {
+                let ty = self.type_of(*val);
+                if let Some(fixnum) = ty.fixnum_value() {
+                    Type::from_cint(types::CInt64, fixnum)
+                } else if let Some((lo, hi)) = ty.integer_range() {
+                    Type::cint64_range(lo, hi)
+                } else {
+                    types::CInt64
+                }
+            }
             Insn::FixnumAref { .. } => types::Fixnum,
             Insn::StringCopy { .. } => types::StringExact,
             Insn::StringIntern { .. } => types::Symbol,

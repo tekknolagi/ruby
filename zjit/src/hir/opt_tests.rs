@@ -14378,7 +14378,7 @@ mod hir_opt_tests {
           Return v48
         bb7(v67:BasicObject, v68:Fixnum[Nonnegative]):
           v88:Array = RefineType v67, Array
-          v89:CInt64 = UnboxFixnum v68
+          v89:CInt64[Nonnegative] = UnboxFixnum v68
           v90:BasicObject = ArrayAref v88, v89
           v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: Uncategorized(invokeblock)
           v91:Fixnum[1] = Const Value(1)
