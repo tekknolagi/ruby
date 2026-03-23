@@ -14367,7 +14367,7 @@ mod hir_opt_tests {
           v28:BasicObject = InvokeBuiltin <inline_expr>, v23
           CheckInterrupts
           Return v28
-        bb8(v48:BasicObject, v49:Fixnum[0..=4611686018427387903]):
+        bb8(v48:BasicObject, v49:Fixnum[Nonnegative]):
           v84:Array = RefineType v48, Array
           v85:CInt64 = ArrayLength v84
           v86:Fixnum = BoxFixnum v85
@@ -14376,13 +14376,13 @@ mod hir_opt_tests {
           IfFalse v54, bb7(v48, v49)
           CheckInterrupts
           Return v48
-        bb7(v67:BasicObject, v68:Fixnum[0..=4611686018427387903]):
+        bb7(v67:BasicObject, v68:Fixnum[Nonnegative]):
           v88:Array = RefineType v67, Array
           v89:CInt64 = UnboxFixnum v68
           v90:BasicObject = ArrayAref v88, v89
           v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: Uncategorized(invokeblock)
           v91:Fixnum[1] = Const Value(1)
-          v92:Fixnum[1..=4611686018427387903] = FixnumAdd v68, v91
+          v92:Fixnum[Positive] = FixnumAdd v68, v91
           PatchPoint NoEPEscape(each)
           Jump bb8(v67, v92)
         ");
@@ -14559,7 +14559,7 @@ mod hir_opt_tests {
           v13:Fixnum[0] = Const Value(0)
           CheckInterrupts
           Jump bb5(v8, v13)
-        bb5(v19:BasicObject, v20:Fixnum[0..=4611686018427387903]):
+        bb5(v19:BasicObject, v20:Fixnum[Nonnegative]):
           v24:Fixnum[5] = Const Value(5)
           PatchPoint MethodRedefined(Integer@0x1000, <@0x1008, cme:0x1010)
           v57:BoolExact = FixnumLt v20, v24
@@ -14568,10 +14568,10 @@ mod hir_opt_tests {
           IfTrue v30, bb4(v19, v20)
           CheckInterrupts
           Return v20
-        bb4(v43:BasicObject, v44:Fixnum[0..=4611686018427387903]):
+        bb4(v43:BasicObject, v44:Fixnum[Nonnegative]):
           PatchPoint MethodRedefined(Integer@0x1000, succ@0x1038, cme:0x1040)
           v61:Fixnum[1] = Const Value(1)
-          v62:Fixnum[1..=4611686018427387903] = FixnumAdd v44, v61
+          v62:Fixnum[Positive] = FixnumAdd v44, v61
           Jump bb5(v43, v62)
         ");
     }

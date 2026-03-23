@@ -105,7 +105,18 @@ fn write_spec(f: &mut std::fmt::Formatter, printer: &TypePrinter) -> std::fmt::R
         Specialization::Int(val) if ty.is_subtype(types::CPtr) => write!(f, "[{}]", Const::CPtr(val as *const u8).print(printer.ptr_map)),
         Specialization::Int(val) => write!(f, "[{val}]"),
         Specialization::Double(val) => write!(f, "[{val}]"),
-        Specialization::Range(lo, hi) => write!(f, "[{lo}..={hi}]"),
+        Specialization::Range(lo, hi) => {
+            use crate::cruby::{RUBY_FIXNUM_MIN, RUBY_FIXNUM_MAX};
+            let fmin = RUBY_FIXNUM_MIN as i64;
+            let fmax = RUBY_FIXNUM_MAX as i64;
+            match (lo, hi) {
+                (0, h) if h == fmax => write!(f, "[Nonnegative]"),
+                (1, h) if h == fmax => write!(f, "[Positive]"),
+                (l, -1) if l == fmin => write!(f, "[Negative]"),
+                (l, 0) if l == fmin => write!(f, "[Nonpositive]"),
+                _ => write!(f, "[{lo}..={hi}]"),
+            }
+        }
     }
 }
 
