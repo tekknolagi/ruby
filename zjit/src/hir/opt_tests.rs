@@ -14367,7 +14367,7 @@ mod hir_opt_tests {
           v28:BasicObject = InvokeBuiltin <inline_expr>, v23
           CheckInterrupts
           Return v28
-        bb8(v48:BasicObject, v49:Fixnum):
+        bb8(v48:BasicObject, v49:Fixnum[0..=4611686018427387903]):
           v84:Array = RefineType v48, Array
           v85:CInt64 = ArrayLength v84
           v86:Fixnum = BoxFixnum v85
@@ -14376,13 +14376,13 @@ mod hir_opt_tests {
           IfFalse v54, bb7(v48, v49)
           CheckInterrupts
           Return v48
-        bb7(v67:BasicObject, v68:Fixnum):
+        bb7(v67:BasicObject, v68:Fixnum[0..=4611686018427387903]):
           v88:Array = RefineType v67, Array
           v89:CInt64 = UnboxFixnum v68
           v90:BasicObject = ArrayAref v88, v89
           v74:BasicObject = InvokeBlock, v90 # SendFallbackReason: Uncategorized(invokeblock)
           v91:Fixnum[1] = Const Value(1)
-          v92:Fixnum = FixnumAdd v68, v91
+          v92:Fixnum[1..=4611686018427387903] = FixnumAdd v68, v91
           PatchPoint NoEPEscape(each)
           Jump bb8(v67, v92)
         ");
@@ -14527,6 +14527,52 @@ mod hir_opt_tests {
           WriteBarrier v28, v13
           CheckInterrupts
           Return v13
+        ");
+    }
+
+    #[test]
+    fn test_fixnum_range_succ_in_while_loop() {
+        eval("
+            def test
+              i = 0
+              while i < 5
+                i = i.succ
+              end
+              i
+            end
+            test
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb3(v1, v2)
+        bb2():
+          EntryPoint JIT(0)
+          v5:BasicObject = LoadArg :self@0
+          v6:NilClass = Const Value(nil)
+          Jump bb3(v5, v6)
+        bb3(v8:BasicObject, v9:NilClass):
+          v13:Fixnum[0] = Const Value(0)
+          CheckInterrupts
+          Jump bb5(v8, v13)
+        bb5(v19:BasicObject, v20:Fixnum[0..=4611686018427387903]):
+          v24:Fixnum[5] = Const Value(5)
+          PatchPoint MethodRedefined(Integer@0x1000, <@0x1008, cme:0x1010)
+          v57:BoolExact = FixnumLt v20, v24
+          CheckInterrupts
+          v30:CBool = Test v57
+          IfTrue v30, bb4(v19, v20)
+          CheckInterrupts
+          Return v20
+        bb4(v43:BasicObject, v44:Fixnum[0..=4611686018427387903]):
+          PatchPoint MethodRedefined(Integer@0x1000, succ@0x1038, cme:0x1040)
+          v61:Fixnum[1] = Const Value(1)
+          v62:Fixnum[1..=4611686018427387903] = FixnumAdd v44, v61
+          Jump bb5(v43, v62)
         ");
     }
 }

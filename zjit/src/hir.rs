@@ -2908,8 +2908,12 @@ impl Function {
             Insn::GuardNoBitsSet { val, .. } => self.type_of(*val),
             Insn::GuardLess { left, .. } => self.type_of(*left),
             Insn::GuardGreaterEq { left, .. } => self.type_of(*left),
-            Insn::FixnumAdd  { .. } => types::Fixnum,
-            Insn::FixnumSub  { .. } => types::Fixnum,
+            Insn::FixnumAdd  { left, right, .. } => {
+                Self::fixnum_range_add(self.type_of(*left), self.type_of(*right))
+            }
+            Insn::FixnumSub  { left, right, .. } => {
+                Self::fixnum_range_sub(self.type_of(*left), self.type_of(*right))
+            }
             Insn::FixnumMult { .. } => types::Fixnum,
             Insn::FixnumDiv  { .. } => types::Fixnum,
             Insn::FixnumMod  { .. } => types::Fixnum,
@@ -5000,6 +5004,36 @@ impl Function {
             }
             self.blocks[block.0].insns = new_insns;
         }
+    }
+
+    /// Compute the output range for FixnumAdd. If both inputs have known ranges, add them
+    /// and clamp to fixnum bounds (overflow side-exits at runtime).
+    fn fixnum_range_add(left: Type, right: Type) -> Type {
+        if let (Some((l_lo, l_hi)), Some((r_lo, r_hi))) = (left.integer_range(), right.integer_range()) {
+            if let (Some(lo), Some(hi)) = (l_lo.checked_add(r_lo), l_hi.checked_add(r_hi)) {
+                let lo = lo.max(RUBY_FIXNUM_MIN as i64);
+                let hi = hi.min(RUBY_FIXNUM_MAX as i64);
+                if lo <= hi {
+                    return Type::fixnum_range(lo, hi);
+                }
+            }
+        }
+        types::Fixnum
+    }
+
+    /// Compute the output range for FixnumSub.
+    fn fixnum_range_sub(left: Type, right: Type) -> Type {
+        if let (Some((l_lo, l_hi)), Some((r_lo, r_hi))) = (left.integer_range(), right.integer_range()) {
+            // Subtracting [r_lo, r_hi] means adding [-r_hi, -r_lo]
+            if let (Some(lo), Some(hi)) = (l_lo.checked_sub(r_hi), l_hi.checked_sub(r_lo)) {
+                let lo = lo.max(RUBY_FIXNUM_MIN as i64);
+                let hi = hi.min(RUBY_FIXNUM_MAX as i64);
+                if lo <= hi {
+                    return Type::fixnum_range(lo, hi);
+                }
+            }
+        }
+        types::Fixnum
     }
 
     /// Fold a binary operator on fixnums.
@@ -8968,7 +9002,7 @@ mod infer_tests {
         crate::cruby::with_rubyvm(|| {
             function.infer_types();
         });
-        assert_bit_equal(function.type_of(param), types::Fixnum);
+        assert_bit_equal(function.type_of(param), Type::fixnum_range(3, 4));
     }
 
     #[test]

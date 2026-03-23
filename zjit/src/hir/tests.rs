@@ -1372,7 +1372,7 @@ pub mod hir_build_tests {
         bb4(v30:BasicObject, v31:Falsy, v32:NilClass):
           v36:Fixnum[4] = Const Value(4)
           Jump bb5(v30, v31, v36)
-        bb5(v39:BasicObject, v40:BasicObject, v41:Fixnum):
+        bb5(v39:BasicObject, v40:BasicObject, v41:Fixnum[3..=4]):
           CheckInterrupts
           Return v41
         ");

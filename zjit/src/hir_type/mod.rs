@@ -37,6 +37,9 @@ pub enum Specialization {
     Int(u64),
     /// We know that this Type is exactly the given cvalue/C double.
     Double(f64),
+    /// We know that the integer value is within the inclusive range [lo, hi].
+    /// Works with Fixnum bits (Ruby integers) and CInt/CUInt bits (C integers).
+    Range(i64, i64),
     /// We know that the Type is [`types::Empty`] and therefore the instruction that produces this
     /// value never returns.
     Empty,
@@ -102,6 +105,7 @@ fn write_spec(f: &mut std::fmt::Formatter, printer: &TypePrinter) -> std::fmt::R
         Specialization::Int(val) if ty.is_subtype(types::CPtr) => write!(f, "[{}]", Const::CPtr(val as *const u8).print(printer.ptr_map)),
         Specialization::Int(val) => write!(f, "[{val}]"),
         Specialization::Double(val) => write!(f, "[{val}]"),
+        Specialization::Range(lo, hi) => write!(f, "[{lo}..={hi}]"),
     }
 }
 
@@ -179,6 +183,20 @@ impl Type {
         Type {
             bits: bits::Fixnum,
             spec: Specialization::Object(VALUE::fixnum_from_usize(val as usize)),
+        }
+    }
+
+    /// Create a `Type` representing a Fixnum within an inclusive range [lo, hi].
+    /// If lo == hi, returns an exact Object specialization instead.
+    pub fn fixnum_range(lo: i64, hi: i64) -> Type {
+        debug_assert!(lo <= hi);
+        if lo == hi {
+            Type {
+                bits: bits::Fixnum,
+                spec: Specialization::Object(VALUE::fixnum_from_isize(lo as isize)),
+            }
+        } else {
+            Type { bits: bits::Fixnum, spec: Specialization::Range(lo, hi) }
         }
     }
 
@@ -411,6 +429,22 @@ impl Type {
         }
     }
 
+    /// Return the integer range [lo, hi] for this type, if known.
+    /// Works for Fixnum (Object or Range specialization) and C integer types (Int or Range).
+    pub fn integer_range(&self) -> Option<(i64, i64)> {
+        match self.spec {
+            Specialization::Range(lo, hi) => Some((lo, hi)),
+            Specialization::Object(val) if (self.bits & bits::Fixnum) == bits::Fixnum && val.fixnum_p() => {
+                let n = val.as_fixnum();
+                Some((n, n))
+            }
+            Specialization::Int(v) if (self.bits & bits::CSigned) == self.bits || (self.bits & bits::CUnsigned) == self.bits => {
+                Some((v as i64, v as i64))
+            }
+            _ => None,
+        }
+    }
+
     /// Return true if the Type has object specialization and false otherwise.
     pub fn ruby_object_known(&self) -> bool {
         matches!(self.spec, Specialization::Object(_))
@@ -428,6 +462,30 @@ impl Type {
         if self.is_subtype(other) { return other; }
         if other.is_subtype(*self) { return *self; }
         let bits = self.bits | other.bits;
+        // Range-based union with widening for integer types.
+        // The is_subtype checks above already handle containment (one range inside the other),
+        // so if we reach here, neither range contains the other.
+        if bits == self.bits && bits == other.bits {
+            if let (Some((s_lo, s_hi)), Some((o_lo, o_hi))) = (self.integer_range(), other.integer_range()) {
+                let has_range = matches!(self.spec, Specialization::Range(..))
+                    || matches!(other.spec, Specialization::Range(..));
+                if has_range {
+                    // At least one side is already a Range (likely in a loop fixpoint).
+                    // Widen to landmark boundaries {0, FIXNUM_MIN, FIXNUM_MAX} to guarantee
+                    // convergence in a constant number of iterations.
+                    use crate::cruby::{RUBY_FIXNUM_MIN, RUBY_FIXNUM_MAX};
+                    let lo = if s_lo.min(o_lo) >= 0 { 0 } else { RUBY_FIXNUM_MIN as i64 };
+                    let hi = if s_hi.max(o_hi) <= 0 { 0 } else { RUBY_FIXNUM_MAX as i64 };
+                    return Type { bits, spec: Specialization::Range(lo, hi) };
+                } else {
+                    // Both are exact points (Object or Int) — just compute the tight range.
+                    // This avoids over-widening for simple diamond merges of constants.
+                    let lo = s_lo.min(o_lo);
+                    let hi = s_hi.max(o_hi);
+                    return Type::fixnum_range(lo, hi);
+                }
+            }
+        }
         let result = Type::from_bits(bits);
         // If one type isn't type specialized, we can't return a specialized Type
         if !self.type_known() || !other.type_known() { return result; }
@@ -459,6 +517,23 @@ impl Type {
         if bits == bits::Empty { return types::Empty; }
         if self.spec_is_subtype_of(other) { return Type { bits, spec: self.spec }; }
         if other.spec_is_subtype_of(*self) { return Type { bits, spec: other.spec }; }
+        // Clamp overlapping integer ranges
+        if let (Some((s_lo, s_hi)), Some((o_lo, o_hi))) = (self.integer_range(), other.integer_range()) {
+            let lo = s_lo.max(o_lo);
+            let hi = s_hi.min(o_hi);
+            if lo <= hi {
+                return if lo == hi {
+                    // Single-point range: try to return an exact specialization
+                    if (bits & bits::Fixnum) == bits::Fixnum {
+                        Type { bits, spec: Specialization::Object(VALUE::fixnum_from_isize(lo as isize)) }
+                    } else {
+                        Type { bits, spec: Specialization::Int(lo as u64) }
+                    }
+                } else {
+                    Type { bits, spec: Specialization::Range(lo, hi) }
+                };
+            }
+        }
         types::Empty
     }
 
@@ -534,6 +609,17 @@ impl Type {
             (Specialization::Empty, _) | (_, Specialization::Any) => true,
             // Other is not Any from the previous case, so Any is definitely not a subtype
             (Specialization::Any, _) | (_, Specialization::Empty) => false,
+            // Range containment: [s_lo, s_hi] ⊆ [o_lo, o_hi]
+            (Specialization::Range(s_lo, s_hi), Specialization::Range(o_lo, o_hi)) =>
+                self.bits == other.bits && s_lo >= o_lo && s_hi <= o_hi,
+            // A known fixnum value is within a range
+            (Specialization::Object(val), Specialization::Range(o_lo, o_hi)) if val.fixnum_p() =>
+                { let n = val.as_fixnum(); n >= o_lo && n <= o_hi }
+            // A known C int value is within a range
+            (Specialization::Int(v), Specialization::Range(o_lo, o_hi)) =>
+                self.bits == other.bits && (v as i64) >= o_lo && (v as i64) <= o_hi,
+            // Range is not a subtype of a single value (unless degenerate, but we normalize those)
+            (Specialization::Range(..), _) | (_, Specialization::Range(..)) => false,
             // Int and double specialization requires exact equality
             (Specialization::Int(_), _) | (_, Specialization::Int(_)) |
             (Specialization::Double(_), _) | (_, Specialization::Double(_)) =>
