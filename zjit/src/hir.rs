@@ -5442,6 +5442,106 @@ impl Function {
         }
     }
 
+    /// Eliminate trivial block parameters where all incoming edges pass the same value.
+    /// Iterates to fixpoint because eliminating one param may expose others as trivial.
+    /// Since ZJIT uses EBBs, branches (IfTrue/IfFalse) can appear mid-block, so we scan
+    /// all instructions to find incoming edges.
+    fn eliminate_block_params(&mut self) {
+        let mut changed_any = false;
+        loop {
+            let mut changed = false;
+            let rpo = self.rpo();
+
+            // Build incoming edge map: target block → list of (source_block, insn_index, resolved edge)
+            let mut incoming: HashMap<BlockId, Vec<(BlockId, usize, BranchEdge)>> = HashMap::new();
+            for &block in &rpo {
+                for (idx, &insn_id) in self.blocks[block.0].insns.iter().enumerate() {
+                    let edge = match self.find(insn_id) {
+                        Insn::Jump(edge)
+                        | Insn::IfTrue { target: edge, .. }
+                        | Insn::IfFalse { target: edge, .. } => edge,
+                        _ => continue,
+                    };
+                    incoming.entry(edge.target).or_default().push((block, idx, edge));
+                }
+            }
+
+            for &block in &rpo {
+                let params = &self.blocks[block.0].params;
+                if params.is_empty() { continue; }
+
+                let Some(edges) = incoming.get(&block) else { continue; };
+                if edges.is_empty() { continue; }
+
+                // Find trivial params: all incoming args at that position resolve to the same value
+                let mut trivial: Vec<(usize, InsnId)> = vec![];
+                for (param_idx, &param_id) in params.iter().enumerate() {
+                    let param_id = self.union_find.borrow().find_const(param_id);
+                    let mut single_value: Option<InsnId> = None;
+                    let mut all_same = true;
+                    for (_, _, edge) in edges {
+                        let arg = self.union_find.borrow().find_const(edge.args[param_idx]);
+                        // Skip self-references (loop back-edges passing the param to itself)
+                        if arg == param_id { continue; }
+                        match single_value {
+                            None => single_value = Some(arg),
+                            Some(v) if v == arg => {}
+                            _ => { all_same = false; break; }
+                        }
+                    }
+                    if all_same {
+                        if let Some(replacement) = single_value {
+                            trivial.push((param_idx, replacement));
+                        }
+                    }
+                }
+
+                if trivial.is_empty() { continue; }
+                changed = true;
+
+                // Replace each trivial param via union-find
+                for &(param_idx, replacement) in &trivial {
+                    let param_id = self.blocks[block.0].params[param_idx];
+                    self.make_equal_to(param_id, replacement);
+                }
+
+                // Collect indices to remove
+                let removed: HashSet<usize> = trivial.iter().map(|(i, _)| *i).collect();
+
+                // Remove params in reverse index order to preserve positions
+                let mut indices: Vec<usize> = removed.iter().copied().collect();
+                indices.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in &indices {
+                    self.blocks[block.0].params.remove(*idx);
+                }
+
+                // Update all incoming edges: create new branch insns with the arg removed
+                for (src_block, insn_idx, edge) in edges {
+                    let new_args: Vec<InsnId> = edge.args.iter().enumerate()
+                        .filter(|(i, _)| !removed.contains(i))
+                        .map(|(_, &arg)| arg)
+                        .collect();
+                    let new_edge = BranchEdge { target: edge.target, args: new_args };
+                    let old_insn_id = self.blocks[src_block.0].insns[*insn_idx];
+                    let new_insn = match self.find(old_insn_id) {
+                        Insn::Jump(_) => Insn::Jump(new_edge),
+                        Insn::IfTrue { val, .. } => Insn::IfTrue { val, target: new_edge },
+                        Insn::IfFalse { val, .. } => Insn::IfFalse { val, target: new_edge },
+                        _ => unreachable!(),
+                    };
+                    let new_id = self.new_insn(new_insn);
+                    self.blocks[src_block.0].insns[*insn_idx] = new_id;
+                }
+            }
+
+            if !changed { break; }
+            changed_any = true;
+        }
+        if changed_any {
+            self.infer_types();
+        }
+    }
+
     /// Remove duplicate PatchPoint instructions within each basic block.
     /// Two PatchPoints are redundant if they assert the same Invariant and no
     /// intervening instruction could invalidate it (i.e., writes to PatchPoint).
@@ -5695,6 +5795,7 @@ impl Function {
         let should_dump = get_option!(dump_hir_iongraph);
 
         macro_rules! counter_for {
+            (eliminate_block_params) => { Counter::compile_hir_eliminate_block_params_time_ns };
             // Bucket all strength reduction together
             (type_specialize) => { Counter::compile_hir_strength_reduce_time_ns };
             (inline) => { Counter::compile_hir_strength_reduce_time_ns };
@@ -5728,6 +5829,7 @@ impl Function {
         }
 
         // Function is assumed to have types inferred already
+        run_pass!(eliminate_block_params);
         run_pass!(type_specialize);
         run_pass!(inline);
         run_pass!(optimize_getivar);
@@ -9165,16 +9267,16 @@ mod graphviz_tests {
         <TR><TD ALIGN="left" PORT="v15">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v16">v16:CBool = Test v10&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v17">v17:Falsy = RefineType v10, Falsy&nbsp;</TD></TR>
-        <TR><TD ALIGN="left" PORT="v18">IfFalse v16, bb4(v9, v17)&nbsp;</TD></TR>
+        <TR><TD ALIGN="left" PORT="v38">IfFalse v16, bb4()&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v19">v19:Truthy = RefineType v10, Truthy&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v21">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v22">v22:Fixnum[3] = Const Value(3)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v25">CheckInterrupts&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v26">Return v22&nbsp;</TD></TR>
         </TABLE>>];
-          bb3:v18 -> bb4:params:n;
+          bb3:v38 -> bb4:params:n;
           bb4 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4(v27:BasicObject, v28:Falsy)&nbsp;</TD></TR>
+        <TR><TD ALIGN="LEFT" PORT="params" BGCOLOR="gray">bb4()&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v31">PatchPoint NoTracePoint&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v32">v32:Fixnum[4] = Const Value(4)&nbsp;</TD></TR>
         <TR><TD ALIGN="left" PORT="v35">CheckInterrupts&nbsp;</TD></TR>

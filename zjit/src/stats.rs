@@ -167,6 +167,7 @@ make_counters! {
 
         compile_hir_time_ns,
         compile_hir_build_time_ns,
+        compile_hir_eliminate_block_params_time_ns,
         compile_hir_strength_reduce_time_ns,
         compile_hir_optimize_load_store_time_ns,
         compile_hir_fold_constants_time_ns,
