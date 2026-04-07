@@ -9672,10 +9672,9 @@ mod hir_opt_tests {
           v20:CallableMethodEntry[VALUE(0x1040)] = GuardBitEquals v19, Value(VALUE(0x1040))
           v21:RubyValue = LoadField v18, :_ep_specval@0x1048
           v22:FalseClass = GuardBitEquals v21, Value(false)
-          v30:CPtr = GetEP 0
-          v31:RubyValue = LoadField v30, :_ep_method_entry@0x1038
+          v31:RubyValue = LoadField v18, :_ep_method_entry@0x1038
           v32:CallableMethodEntry[VALUE(0x1040)] = GuardBitEquals v31, Value(VALUE(0x1040))
-          v33:RubyValue = LoadField v30, :_ep_specval@0x1048
+          v33:RubyValue = LoadField v18, :_ep_specval@0x1048
           v34:FalseClass = GuardBitEquals v33, Value(false)
           v23:Array = GuardType v6, Array
           v24:CUInt64 = LoadField v23, :_rbasic_flags@0x1049
@@ -9716,10 +9715,9 @@ mod hir_opt_tests {
           v25:CallableMethodEntry[VALUE(0x1048)] = GuardBitEquals v24, Value(VALUE(0x1048))
           v26:RubyValue = LoadField v23, :_ep_specval@0x1050
           v27:FalseClass = GuardBitEquals v26, Value(false)
-          v38:CPtr = GetEP 0
-          v39:RubyValue = LoadField v38, :_ep_method_entry@0x1040
+          v39:RubyValue = LoadField v23, :_ep_method_entry@0x1040
           v40:CallableMethodEntry[VALUE(0x1048)] = GuardBitEquals v39, Value(VALUE(0x1048))
-          v41:RubyValue = LoadField v38, :_ep_specval@0x1050
+          v41:RubyValue = LoadField v23, :_ep_specval@0x1050
           v42:FalseClass = GuardBitEquals v41, Value(false)
           v28:Array = GuardType v9, Array
           v29:Fixnum = GuardType v10, Fixnum
@@ -15040,8 +15038,7 @@ mod hir_opt_tests {
           SetLocal :kwsplat, l0, EP@3, v115
           v96:CPtr = GetEP 0
           v97:BasicObject = LoadField v96, :list@0x1001
-          v99:CPtr = GetEP 0
-          v100:BasicObject = LoadField v99, :iter_method@0x1058
+          v100:BasicObject = LoadField v96, :iter_method@0x1058
           v102:BasicObject = Send v97, 0x1070, :__send__, v100 # SendFallbackReason: Send: unsupported method type Optimized
           v103:CPtr = GetEP 0
           v104:BasicObject = LoadField v103, :list@0x1001

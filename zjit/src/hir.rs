@@ -1767,6 +1767,8 @@ impl Insn {
 
             &CheckInterrupts { .. } => Some(InsnKey::new(self, &[])),
 
+            &GetEP { level } => Some(InsnKey::new(self, &[level as usize])),
+
             _ => None,
         }
     }
