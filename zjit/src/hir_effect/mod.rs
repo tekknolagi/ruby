@@ -30,7 +30,7 @@ include!("hir_effect.inc.rs");
 /// This enables more complex analyses compared to prior ZJIT implementations such as "has_effect",
 /// a function that returns a boolean value. Such functions impose an implicit single bit effect
 /// system. This explicit design with a lattice allows us many bits for effects.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AbstractHeap {
     bits: effect_types::EffectBits
 }
