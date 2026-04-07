@@ -1438,6 +1438,23 @@ macro_rules! for_each_operand_impl {
     };
 }
 
+type ValueNumber = u32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InsnKey {
+    op: std::mem::Discriminant<Insn>,
+    operands: Vec<usize>,
+}
+
+impl std::hash::Hash for InsnKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.op.hash(state);
+        for operand in &self.operands {
+            operand.hash(state);
+        }
+    }
+}
+
 impl Insn {
     /// Not every instruction returns a value. Return true if the instruction does and false otherwise.
     pub fn has_output(&self) -> bool {
@@ -1688,6 +1705,50 @@ impl Insn {
     /// `read: effects::Any` could potentially be omitted.
     fn is_elidable(&self) -> bool {
         abstract_heaps::Allocator.includes(self.effects_of().write_bits())
+    }
+
+    fn value_number(&self) -> Option<InsnKey> {
+        let op = std::mem::discriminant(self);
+        use Insn::*;
+        match self {
+            &Const { val: crate::hir::Const::CUInt64(v) } => Some(InsnKey { op, operands: vec![0, v as usize] }),
+            &Const { val: crate::hir::Const::CInt64(v) } => Some(InsnKey { op, operands: vec![1, v as usize] }),
+            &Const { val: crate::hir::Const::CPtr(ptr) } => Some(InsnKey { op, operands: vec![2, ptr as usize] }),
+            &Const { val: crate::hir::Const::Value(val) } => Some(InsnKey { op, operands: vec![3, val.0 as usize] }),
+            &Const { val: crate::hir::Const::CShape(shape_id) } => Some(InsnKey { op, operands: vec![4, shape_id.0 as usize] }),
+            &Const { val: crate::hir::Const::CInt32(v) } => Some(InsnKey { op, operands: vec![5, v as usize] }),
+            &Const { val: crate::hir::Const::CUInt32(v) } => Some(InsnKey { op, operands: vec![6, v as usize] }),
+            &Const { val: crate::hir::Const::CInt16(v) } => Some(InsnKey { op, operands: vec![7, v as usize] }),
+            &Const { val: crate::hir::Const::CUInt16(v) } => Some(InsnKey { op, operands: vec![8, v as usize] }),
+            &Const { val: crate::hir::Const::CInt8(v) } => Some(InsnKey { op, operands: vec![9, v as usize] }),
+            &Const { val: crate::hir::Const::CUInt8(v) } => Some(InsnKey { op, operands: vec![10, v as usize] }),
+            &Const { val: crate::hir::Const::CBool(v) } => Some(InsnKey { op, operands: vec![11, v as usize] }),
+            &Const { val: crate::hir::Const::CDouble(v) } => Some(InsnKey { op, operands: vec![12, v.to_bits() as usize] }),
+            &UnboxFixnum { val } => Some(InsnKey { op, operands: vec![val.0] }),
+            &BoxBool { val } => Some(InsnKey { op, operands: vec![val.0] }),
+            &IsNil { val } => Some(InsnKey { op, operands: vec![val.0] }),
+            | &IsBitEqual { left, right }
+            | &IsBitNotEqual { left, right }
+            | &FixnumEq { left, right }
+            | &FixnumNeq { left, right }
+            | &FixnumLt { left, right }
+            | &FixnumLe { left, right }
+            | &FixnumGt { left, right }
+            | &FixnumGe { left, right }
+            | &FixnumAnd { left, right }
+            | &FixnumOr { left, right }
+            | &FixnumXor { left, right }
+            | &IntAnd { left, right }
+            | &IntOr { left, right }
+            =>
+                Some(InsnKey { op, operands: vec![left.0, right.0] }),
+
+            // Ignore state; value numbering can re-use previous BoxFixnum even if they have different Snapshot.
+            &BoxFixnum { val, .. } => Some(InsnKey { op, operands: vec![val.0] }),
+
+            &FixnumAref { recv, index } => Some(InsnKey { op, operands: vec![recv.0, index.0] }),
+            _ => None,
+        }
     }
 }
 
@@ -5531,6 +5592,28 @@ impl Function {
         }
     }
 
+    fn local_value_numbering(&mut self) {
+        for block_id in self.rpo() {
+            let mut heap: HashMap<InsnKey, InsnId> = HashMap::new();
+            let insns = std::mem::take(&mut self.blocks[block_id.0].insns);
+            let mut new_insns = Vec::with_capacity(insns.len());
+            for insn_id in insns {
+                let insn = self.find(insn_id);
+                let Some(key) = insn.value_number() else {
+                    new_insns.push(insn_id);
+                    continue;
+                };
+                if let Some(&existing) = heap.get(&key) {
+                    self.make_equal_to(insn_id, existing);
+                    continue;
+                }
+                heap.insert(key, insn_id);
+                new_insns.push(insn_id);
+            }
+            self.blocks[block_id.0].insns = new_insns;
+        }
+    }
+
     /// Remove duplicate CheckInterrupts instructions within each basic block.
     /// Only the first CheckInterrupts in a block is needed unless an intervening
     /// instruction writes to InterruptFlag (e.g. a call), which resets tracking.
@@ -5773,6 +5856,7 @@ impl Function {
             (clean_cfg) => { Counter::compile_hir_clean_cfg_time_ns };
             (remove_redundant_patch_points) => { Counter::compile_hir_remove_redundant_patch_points_time_ns };
             (remove_duplicate_check_interrupts) => { Counter::compile_hir_remove_duplicate_check_interrupts_time_ns };
+            (local_value_numbering) => { Counter::compile_hir_local_value_numbering_time_ns };
             (eliminate_dead_code) => { Counter::compile_hir_eliminate_dead_code_time_ns };
             ($name:ident) => { unimplemented!("Counter for pass {}", stringify!($name)) };
         }
@@ -5807,6 +5891,7 @@ impl Function {
         run_pass!(clean_cfg);
         run_pass!(remove_redundant_patch_points);
         run_pass!(remove_duplicate_check_interrupts);
+        run_pass!(local_value_numbering);
         run_pass!(eliminate_dead_code);
 
         if should_dump {
