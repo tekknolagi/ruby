@@ -15492,4 +15492,43 @@ mod hir_opt_tests {
           Return v43
         ");
     }
+
+    #[test]
+    fn test_dedup_fixnum_add() {
+        eval("
+            def test(a, b)
+              v0 = a + b
+              v1 = a + b
+              v2 = a + b
+              [v0, v1, v2]
+            end
+            test(3, 4)
+        ");
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :a@0x1000
+          v4:BasicObject = LoadField v2, :b@0x1001
+          v5:NilClass = Const Value(nil)
+          Jump bb3(v1, v3, v4, v5, v5, v5)
+        bb2():
+          EntryPoint JIT(0)
+          v10:BasicObject = LoadArg :self@0
+          v11:BasicObject = LoadArg :a@1
+          v12:BasicObject = LoadArg :b@2
+          v13:NilClass = Const Value(nil)
+          Jump bb3(v10, v11, v12, v13, v13, v13)
+        bb3(v17:BasicObject, v18:BasicObject, v19:BasicObject, v20:NilClass, v21:NilClass, v22:NilClass):
+          PatchPoint MethodRedefined(Integer@0x1008, +@0x1010, cme:0x1018)
+          v58:Fixnum = GuardType v18, Fixnum
+          v59:Fixnum = GuardType v19, Fixnum
+          v60:Fixnum = FixnumAdd v58, v59
+          v50:ArrayExact = NewArray v60, v60, v60
+          CheckInterrupts
+          Return v50
+        ");
+    }
 }

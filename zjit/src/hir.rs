@@ -1743,8 +1743,15 @@ impl Insn {
             =>
                 Some(InsnKey { op, operands: vec![left.0, right.0] }),
 
-            // Ignore state; value numbering can re-use previous BoxFixnum even if they have different Snapshot.
+            // Ignore state; value numbering can re-use previous operation even if they have different Snapshot.
             &BoxFixnum { val, .. } => Some(InsnKey { op, operands: vec![val.0] }),
+            | &FixnumAdd { left, right, .. }
+            | &FixnumSub { left, right, .. }
+            | &FixnumMult { left, right, .. }
+            | &FixnumDiv { left, right, .. }
+            | &FixnumMod { left, right, .. }
+            =>
+                Some(InsnKey { op, operands: vec![left.0, right.0] }),
 
             &FixnumAref { recv, index } => Some(InsnKey { op, operands: vec![recv.0, index.0] }),
             _ => None,
