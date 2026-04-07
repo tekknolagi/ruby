@@ -15531,4 +15531,41 @@ mod hir_opt_tests {
           Return v50
         ");
     }
+
+    #[test]
+    fn test_dedup_new_range_fixnum() {
+        eval("
+            def test(b)
+              v0 = 0..b
+              v1 = 0..b
+              v2 = 0..b
+              [v0, v1, v2]
+            end
+            test(3)
+        ");
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :b@0x1000
+          v4:NilClass = Const Value(nil)
+          Jump bb3(v1, v3, v4, v4, v4)
+        bb2():
+          EntryPoint JIT(0)
+          v9:BasicObject = LoadArg :self@0
+          v10:BasicObject = LoadArg :b@1
+          v11:NilClass = Const Value(nil)
+          Jump bb3(v9, v10, v11, v11, v11)
+        bb3(v15:BasicObject, v16:BasicObject, v17:NilClass, v18:NilClass, v19:NilClass):
+          v23:Fixnum[0] = Const Value(0)
+          v59:Fixnum = GuardType v16, Fixnum
+          v60:RangeExact = NewRangeFixnum v23 NewRangeInclusive v59
+          PatchPoint NoEPEscape(test)
+          v53:ArrayExact = NewArray v60, v60, v60
+          CheckInterrupts
+          Return v53
+        ");
+    }
 }

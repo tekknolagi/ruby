@@ -1727,6 +1727,7 @@ impl Insn {
             &UnboxFixnum { val } => Some(InsnKey { op, operands: vec![val.0] }),
             &BoxBool { val } => Some(InsnKey { op, operands: vec![val.0] }),
             &IsNil { val } => Some(InsnKey { op, operands: vec![val.0] }),
+            &Test { val } => Some(InsnKey { op, operands: vec![val.0] }),
             | &IsBitEqual { left, right }
             | &IsBitNotEqual { left, right }
             | &FixnumEq { left, right }
@@ -1742,6 +1743,7 @@ impl Insn {
             | &IntOr { left, right }
             =>
                 Some(InsnKey { op, operands: vec![left.0, right.0] }),
+            &FixnumAref { recv, index } => Some(InsnKey { op, operands: vec![recv.0, index.0] }),
 
             // Ignore state; value numbering can re-use previous operation even if they have different Snapshot.
             &BoxFixnum { val, .. } => Some(InsnKey { op, operands: vec![val.0] }),
@@ -1753,7 +1755,9 @@ impl Insn {
             =>
                 Some(InsnKey { op, operands: vec![left.0, right.0] }),
 
-            &FixnumAref { recv, index } => Some(InsnKey { op, operands: vec![recv.0, index.0] }),
+            // Ranges are frozen and constructing a Range from fixnums doesn't call any methods.
+            &NewRangeFixnum { low, high, flag, .. } => Some(InsnKey { op, operands: vec![low.0, high.0, flag as usize] }),
+
             _ => None,
         }
     }
