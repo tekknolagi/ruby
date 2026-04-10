@@ -5465,6 +5465,20 @@ impl Function {
                     Insn::IfFalse { val, target } if self.is_a(val, Type::from_cbool(false)) => {
                         self.new_insn(Insn::Jump(target))
                     }
+                    Insn::IsBitEqual { left, right } if left == right => {
+                        // If the two InsnId are the same, they will always compare pointer equal.
+                        self.new_insn(Insn::Const { val: Const::CBool(true) })
+                    }
+                    Insn::IsBitNotEqual { left, right } if left == right => {
+                        // If the two InsnId are the same, they will always compare pointer equal.
+                        self.new_insn(Insn::Const { val: Const::CBool(false) })
+                    }
+                    Insn::BoxBool { val } if self.is_a(val, Type::from_cbool(true)) => {
+                        self.new_insn(Insn::Const { val: Const::Value(Qtrue) })
+                    }
+                    Insn::BoxBool { val } if self.is_a(val, Type::from_cbool(false)) => {
+                        self.new_insn(Insn::Const { val: Const::Value(Qfalse) })
+                    }
                     // If we know that the branch condition is never going to cause a branch,
                     // completely drop the branch from the block.
                     Insn::IfTrue { val, .. } if self.is_a(val, Type::from_cbool(false)) => continue,
@@ -5894,6 +5908,7 @@ impl Function {
         run_pass!(clean_cfg);
         run_pass!(remove_redundant_patch_points);
         run_pass!(local_value_numbering);
+        run_pass!(fold_constants);
         run_pass!(eliminate_dead_code);
 
         if should_dump {

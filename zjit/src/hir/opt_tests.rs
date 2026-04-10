@@ -12422,11 +12422,9 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(String@0x1008, !=@0x1010, cme:0x1018)
           v26:StringExact = GuardType v10, StringExact
           PatchPoint MethodRedefined(String@0x1008, ==@0x1040, cme:0x1048)
-          v35:TrueClass = Const Value(true)
-          v33:CBool = IsBitNotEqual v35, v35
-          v34:BoolExact = BoxBool v33
+          v37:FalseClass = Const Value(false)
           CheckInterrupts
-          Return v34
+          Return v37
         ");
     }
 
