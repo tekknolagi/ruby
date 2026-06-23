@@ -18363,14 +18363,14 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(Object@0x1008, add_opts@0x1010, cme:0x1018)
           v25:ObjectSubclass[class_exact*:Object@VALUE(0x1008)] = GuardType v9, ObjectSubclass[class_exact*:Object@VALUE(0x1008)] recompile
           PushInlineFrame v25 (0x1040), v10, v16
-          v42:Fixnum[100] = Const Value(100)
+          v33:Fixnum[100] = Const Value(100)
           PatchPoint MethodRedefined(Integer@0x1048, +@0x1050, cme:0x1058)
-          v71:Fixnum = GuardType v10, Fixnum recompile
-          v72:Fixnum = FixnumAdd v71, v16
-          v76:Fixnum = FixnumAdd v72, v42
+          v62:Fixnum = GuardType v10, Fixnum recompile
+          v63:Fixnum = FixnumAdd v62, v16
+          v67:Fixnum = FixnumAdd v63, v33
           CheckInterrupts
           PopInlineFrame
-          Return v76
+          Return v67
         ");
     }
 
@@ -18585,12 +18585,12 @@ mod hir_opt_tests {
           v27:ObjectSubclass[class_exact*:Object@VALUE(0x1008)] = GuardType v9, ObjectSubclass[class_exact*:Object@VALUE(0x1008)] recompile
           PushInlineFrame v27 (0x1040), v10, v16, v18
           PatchPoint MethodRedefined(Integer@0x1048, +@0x1050, cme:0x1058)
-          v72:Fixnum = GuardType v10, Fixnum recompile
-          v73:Fixnum = FixnumAdd v72, v16
-          v77:Fixnum = FixnumAdd v73, v18
+          v54:Fixnum = GuardType v10, Fixnum recompile
+          v55:Fixnum = FixnumAdd v54, v16
+          v59:Fixnum = FixnumAdd v55, v18
           CheckInterrupts
           PopInlineFrame
-          Return v77
+          Return v59
         ");
     }
 
@@ -19033,12 +19033,12 @@ mod hir_opt_tests {
           v27:ObjectSubclass[class_exact*:Object@VALUE(0x1008)] = GuardType v9, ObjectSubclass[class_exact*:Object@VALUE(0x1008)] recompile
           PushInlineFrame v27 (0x1040), v10, v16, v18
           PatchPoint MethodRedefined(Integer@0x1048, +@0x1050, cme:0x1058)
-          v63:Fixnum = GuardType v10, Fixnum recompile
-          v64:Fixnum = FixnumAdd v63, v16
-          v68:Fixnum = FixnumAdd v64, v18
+          v54:Fixnum = GuardType v10, Fixnum recompile
+          v55:Fixnum = FixnumAdd v54, v16
+          v59:Fixnum = FixnumAdd v55, v18
           CheckInterrupts
           PopInlineFrame
-          Return v68
+          Return v59
         ");
     }
 
