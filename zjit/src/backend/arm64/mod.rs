@@ -1162,6 +1162,7 @@ impl Assembler {
                         let slot_offset = (slot_count * SIZEOF_VALUE) as u64;
                         // Bail when asked to reserve too many slots in one instruction.
                         if ShiftedImmediate::try_from(slot_offset).is_err() {
+                            eprintln!("offset too big: {slot_offset}");
                             return Err(CompileError::NativeStackTooLarge);
                         }
                         sub(cb, C_SP_REG, C_SP_REG, A64Opnd::new_uimm(slot_offset));
@@ -1647,7 +1648,7 @@ impl Assembler {
             // Dump vreg-to-physical-register mapping if requested
             if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
                 if dump_lirs.contains(&crate::options::DumpLIR::alloc_regs) {
-                    println!("LIR live_intervals:\n{}", crate::backend::lir::debug_intervals(&asm, &intervals));
+                    // println!("LIR live_intervals:\n{}", crate::backend::lir::debug_intervals(&asm, &intervals));
 
                     println!("VReg assignments:");
                     for (i, alloc) in assignments.iter().enumerate() {

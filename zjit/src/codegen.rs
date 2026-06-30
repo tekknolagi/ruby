@@ -3410,6 +3410,7 @@ c_callable! {
                 unsafe { Rc::increment_strong_count(iseq_call_ptr as *const IseqCall); }
 
                 prepare_for_exit(iseq, cfp, sp, argc, num_opts_filled, compile_error);
+                // eprintln!("failed to compile {} due to {compile_error:?}", iseq_get_location(iseq, 0));
                 return ZJITState::get_materialize_exit_trampoline_with_counter().raw_ptr(cb);
             }
 

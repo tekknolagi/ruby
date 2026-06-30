@@ -1988,6 +1988,7 @@ impl Assembler
         let mut active: Vec<&Interval> = Vec::new(); // vreg indices sorted by increasing end point
         let mut assignment: Vec<Option<Allocation>> = vec![None; intervals.len()];
         let mut num_stack_slots: usize = 0;
+        let mut free_stack_slots: Vec<usize> = Vec::new();
 
         // Collect vreg indices that have valid ranges, sorted by start point
         let mut sorted_intervals: Vec<Interval> = intervals.iter()
@@ -1995,6 +1996,8 @@ impl Assembler
             .cloned()
             .collect();
         sorted_intervals.sort_by_key(|i| i.range.start.unwrap());
+
+        let mut max_register_pressure = 0;
 
         for interval in &sorted_intervals {
             // Expire old intervals
@@ -2020,11 +2023,23 @@ impl Assembler
                                 "attempted to return non-allocatable register {:?} to the allocator pool",
                                 allocation.assigned_reg().unwrap(),
                             );
+                            // Treat stack slots like registers: if a stack slot is freed, it can
+                            // be reused for another interval.
+                            if let Allocation::Stack(stack_idx) = allocation {
+                                free_stack_slots.push(stack_idx);
+                            }
                         }
                     }
                     false
                 }
             });
+
+            let num_intervals_interfering = intervals.iter().filter(|i| {
+                i.range.start.is_some() &&
+                i.range.end.is_some() &&
+                i.survives(interval.range.start.unwrap())
+            }).count();
+            max_register_pressure = max_register_pressure.max(num_intervals_interfering);
 
             let preferred_reg = preferred_registers[interval.id];
             let preferred_taken = preferred_reg.is_some_and(|reg| {
@@ -2059,8 +2074,13 @@ impl Assembler
                 let spill = active.iter().rev().copied().find(|active_interval| {
                     matches!(assignment[active_interval.id], Some(Allocation::Reg(_)))
                 });
-                let slot = Allocation::Stack(num_stack_slots);
-                num_stack_slots += 1;
+                // If we have a free stack slot, reuse it; otherwise, allocate a new one.
+                // let slot = Allocation::Stack(if let Some(free_stack_idx) = free_stack_slots.pop() {
+                //     free_stack_idx
+                // } else {
+                    let slot = Allocation::Stack(num_stack_slots);
+                    num_stack_slots += 1;
+                // });
 
                 if let Some(spill) = spill.filter(|spill| spill.range.end.unwrap() > interval.range.end.unwrap()) {
                     // Spill the last active interval; give its register to current
@@ -2085,6 +2105,8 @@ impl Assembler
                 active.insert(insert_idx, &interval);
             }
         }
+
+        eprintln!("linear_scan: max_register_pressure = {}, num_stack_slots = {}", max_register_pressure, num_stack_slots);
 
         (assignment, num_stack_slots)
     }
