@@ -140,17 +140,6 @@ impl std::fmt::Display for BranchEdge {
     }
 }
 
-/// Identifies one outgoing edge of a block's terminator, so that
-/// [`Function::remove_trivial_block_params`] can read and rewrite the arguments
-/// of a specific predecessor edge (a `Jump` has one edge; a `CondBranch` has
-/// two).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum EdgeSelector {
-    Jump,
-    IfTrue,
-    IfFalse,
-}
-
 /// Invalidation reasons
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
@@ -5873,31 +5862,6 @@ impl Function {
         }
     }
 
-    /// Read the argument in column `col` of the edge selected by `sel` on
-    /// `src`'s terminator.
-    fn edge_arg(&self, src: BlockId, sel: EdgeSelector, col: usize) -> InsnId {
-        let term_id = *self.blocks[src.0].insns.last().unwrap();
-        match (&self.insns[term_id.0], sel) {
-            (Insn::Jump(edge), EdgeSelector::Jump) => edge.args[col],
-            (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => if_true.args[col],
-            (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => if_false.args[col],
-            _ => unreachable!("edge selector does not match terminator"),
-        }
-    }
-
-    /// Remove the argument in column `col` of the edge selected by `sel` on
-    /// `src`'s terminator. Keeps a branch edge's args in sync with its target's
-    /// params after a param is removed.
-    fn remove_edge_arg(&mut self, src: BlockId, sel: EdgeSelector, col: usize) {
-        let term_id = *self.blocks[src.0].insns.last().unwrap();
-        match (&mut self.insns[term_id.0], sel) {
-            (Insn::Jump(edge), EdgeSelector::Jump) => { edge.args.remove(col); }
-            (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => { if_true.args.remove(col); }
-            (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => { if_false.args.remove(col); }
-            _ => unreachable!("edge selector does not match terminator"),
-        }
-    }
-
     /// Remove trivial block parameters. A block parameter is trivial when every
     /// predecessor edge passes the same SSA value for it (ignoring self-references,
     /// so loop-carried parameters that only ever forward themselves still count).
@@ -5911,6 +5875,42 @@ impl Function {
     /// means later passes (value numbering, folding, DCE) see fewer redundant
     /// parameters and the values that flowed through them directly.
     fn remove_trivial_block_params(&mut self) {
+        /// Identifies one outgoing edge of a block's terminator, so that
+        /// [`Function::remove_trivial_block_params`] can read and rewrite the arguments
+        /// of a specific predecessor edge (a `Jump` has one edge; a `CondBranch` has
+        /// two).
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum EdgeSelector {
+            Jump,
+            IfTrue,
+            IfFalse,
+        }
+
+        /// Read the argument in column `col` of the edge selected by `sel` on
+        /// `src`'s terminator.
+        fn edge_arg(fun: &Function, src: BlockId, sel: EdgeSelector, col: usize) -> InsnId {
+            let term_id = *fun.blocks[src.0].insns.last().unwrap();
+            match (&fun.insns[term_id.0], sel) {
+                (Insn::Jump(edge), EdgeSelector::Jump) => edge.args[col],
+                (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => if_true.args[col],
+                (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => if_false.args[col],
+                _ => unreachable!("edge selector does not match terminator"),
+            }
+        }
+
+        /// Remove the argument in column `col` of the edge selected by `sel` on
+        /// `src`'s terminator. Keeps a branch edge's args in sync with its target's
+        /// params after a param is removed.
+        fn remove_edge_arg(fun: &mut Function, src: BlockId, sel: EdgeSelector, col: usize) {
+            let term_id = *fun.blocks[src.0].insns.last().unwrap();
+            match (&mut fun.insns[term_id.0], sel) {
+                (Insn::Jump(edge), EdgeSelector::Jump) => { edge.args.remove(col); }
+                (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => { if_true.args.remove(col); }
+                (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => { if_false.args.remove(col); }
+                _ => unreachable!("edge selector does not match terminator"),
+            }
+        }
+
         let mut changed = false;
         let rpo = self.reverse_post_order();
         loop {
@@ -5955,7 +5955,7 @@ impl Function {
                     let cparam = self.union_find.borrow().find_const(param_id);
                     let mut value: Option<InsnId> = None;
                     for &(src, sel) in &incoming {
-                        let arg = self.edge_arg(src, sel, col);
+                        let arg = edge_arg(self, src, sel, col);
                         let carg = self.union_find.borrow().find_const(arg);
                         if carg == cparam {
                             // Self-reference (e.g. a loop back edge forwarding the
@@ -5989,7 +5989,7 @@ impl Function {
                 for &col in &cols {
                     self.blocks[block.0].params.remove(col);
                     for &(src, sel) in &incoming {
-                        self.remove_edge_arg(src, sel, col);
+                        remove_edge_arg(self, src, sel, col);
                     }
                 }
                 iter_changed = true;
