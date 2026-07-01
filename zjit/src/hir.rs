@@ -5873,33 +5873,6 @@ impl Function {
         }
     }
 
-    fn absorb_dst_block(&mut self, num_in_edges: &[u32], block: BlockId) -> bool {
-        let Some(terminator_id) = self.blocks[block.0].insns.last()
-            else { return false };
-        let Insn::Jump(BranchEdge { target, args }) = self.find(*terminator_id)
-            else { return false };
-        if target == block {
-            // Can't absorb self
-            return false;
-        }
-        if num_in_edges[target.0] != 1 {
-            // Can't absorb block if it's the target of more than one branch
-            return false;
-        }
-        // Link up params with block args
-        let params = std::mem::take(&mut self.blocks[target.0].params);
-        assert_eq!(args.len(), params.len());
-        for (arg, param) in args.iter().zip(params) {
-            self.make_equal_to(param, *arg);
-        }
-        // Remove branch instruction
-        self.blocks[block.0].insns.pop();
-        // Move target instructions into block
-        let target_insns = std::mem::take(&mut self.blocks[target.0].insns);
-        self.blocks[block.0].insns.extend(target_insns);
-        true
-    }
-
     /// Read the argument in column `col` of the edge selected by `sel` on
     /// `src`'s terminator.
     fn edge_arg(&self, src: BlockId, sel: EdgeSelector, col: usize) -> InsnId {
@@ -6027,6 +6000,33 @@ impl Function {
         if changed {
             crate::stats::trace_compile_phase("infer_types", || self.infer_types());
         }
+    }
+
+    fn absorb_dst_block(&mut self, num_in_edges: &[u32], block: BlockId) -> bool {
+        let Some(terminator_id) = self.blocks[block.0].insns.last()
+            else { return false };
+        let Insn::Jump(BranchEdge { target, args }) = self.find(*terminator_id)
+            else { return false };
+        if target == block {
+            // Can't absorb self
+            return false;
+        }
+        if num_in_edges[target.0] != 1 {
+            // Can't absorb block if it's the target of more than one branch
+            return false;
+        }
+        // Link up params with block args
+        let params = std::mem::take(&mut self.blocks[target.0].params);
+        assert_eq!(args.len(), params.len());
+        for (arg, param) in args.iter().zip(params) {
+            self.make_equal_to(param, *arg);
+        }
+        // Remove branch instruction
+        self.blocks[block.0].insns.pop();
+        // Move target instructions into block
+        let target_insns = std::mem::take(&mut self.blocks[target.0].insns);
+        self.blocks[block.0].insns.extend(target_insns);
+        true
     }
 
     /// Clean up linked lists of blocks A -> B -> C into A (with B's and C's instructions).
