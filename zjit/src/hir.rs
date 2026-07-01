@@ -140,6 +140,17 @@ impl std::fmt::Display for BranchEdge {
     }
 }
 
+/// Identifies one outgoing edge of a block's terminator, so that
+/// [`Function::remove_trivial_block_params`] can read and rewrite the arguments
+/// of a specific predecessor edge (a `Jump` has one edge; a `CondBranch` has
+/// two).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EdgeSelector {
+    Jump,
+    IfTrue,
+    IfFalse,
+}
+
 /// Invalidation reasons
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
@@ -5889,6 +5900,142 @@ impl Function {
         true
     }
 
+    /// Read the argument in column `col` of the edge selected by `sel` on
+    /// `src`'s terminator.
+    fn edge_arg(&self, src: BlockId, sel: EdgeSelector, col: usize) -> InsnId {
+        let term_id = *self.blocks[src.0].insns.last().unwrap();
+        match (&self.insns[term_id.0], sel) {
+            (Insn::Jump(edge), EdgeSelector::Jump) => edge.args[col],
+            (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => if_true.args[col],
+            (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => if_false.args[col],
+            _ => unreachable!("edge selector does not match terminator"),
+        }
+    }
+
+    /// Remove the argument in column `col` of the edge selected by `sel` on
+    /// `src`'s terminator. Keeps a branch edge's args in sync with its target's
+    /// params after a param is removed.
+    fn remove_edge_arg(&mut self, src: BlockId, sel: EdgeSelector, col: usize) {
+        let term_id = *self.blocks[src.0].insns.last().unwrap();
+        match (&mut self.insns[term_id.0], sel) {
+            (Insn::Jump(edge), EdgeSelector::Jump) => { edge.args.remove(col); }
+            (Insn::CondBranch { if_true, .. }, EdgeSelector::IfTrue) => { if_true.args.remove(col); }
+            (Insn::CondBranch { if_false, .. }, EdgeSelector::IfFalse) => { if_false.args.remove(col); }
+            _ => unreachable!("edge selector does not match terminator"),
+        }
+    }
+
+    /// Remove trivial block parameters. A block parameter is trivial when every
+    /// predecessor edge passes the same SSA value for it (ignoring self-references,
+    /// so loop-carried parameters that only ever forward themselves still count).
+    /// Such a parameter carries no information: we replace all of its uses with
+    /// that single value via the union-find and drop the corresponding argument
+    /// column from every predecessor edge.
+    ///
+    /// This is the classic "remove trivial phi" cleanup. Because the value must be
+    /// the same on every incoming edge, it necessarily dominates the block, so
+    /// replacing the parameter with it is safe. Running it early in `optimize()`
+    /// means later passes (value numbering, folding, DCE) see fewer redundant
+    /// parameters and the values that flowed through them directly.
+    fn remove_trivial_block_params(&mut self) {
+        let mut changed = false;
+        loop {
+            let mut iter_changed = false;
+            for block in self.reverse_post_order() {
+                // Entry block parameters are the method's ABI (self + arguments);
+                // they are supplied by the interpreter/JIT entry, not by BranchEdge
+                // args, so they must not be touched.
+                if self.is_entry_block(block) || block == self.entries_block {
+                    continue;
+                }
+                let num_params = self.blocks[block.0].params.len();
+                if num_params == 0 {
+                    continue;
+                }
+
+                // Collect every predecessor edge that targets `block`. We scan all
+                // blocks (not just RPO) so that args on edges from unreachable
+                // predecessors stay consistent with the block's param arity. If the
+                // block is reached by a terminator that carries no per-edge args
+                // (i.e. Entries), bail: there is no column to remove.
+                let mut incoming: Vec<(BlockId, EdgeSelector)> = vec![];
+                let mut bail = false;
+                for src in 0..self.blocks.len() {
+                    let src = BlockId(src);
+                    let Some(&term_id) = self.blocks[src.0].insns.last() else { continue };
+                    match &self.insns[term_id.0] {
+                        Insn::Jump(edge) => {
+                            if edge.target == block { incoming.push((src, EdgeSelector::Jump)); }
+                        }
+                        Insn::CondBranch { if_true, if_false, .. } => {
+                            if if_true.target == block { incoming.push((src, EdgeSelector::IfTrue)); }
+                            if if_false.target == block { incoming.push((src, EdgeSelector::IfFalse)); }
+                        }
+                        Insn::Entries { targets } => {
+                            if targets.contains(&block) { bail = true; }
+                        }
+                        _ => {}
+                    }
+                }
+                if bail || incoming.is_empty() {
+                    continue;
+                }
+
+                // For each column, find the single distinct incoming value (if any),
+                // ignoring self-references to the parameter itself.
+                let mut trivial: Vec<(usize, InsnId, InsnId)> = vec![];
+                'param: for col in 0..num_params {
+                    let param_id = self.blocks[block.0].params[col];
+                    let cparam = self.union_find.borrow().find_const(param_id);
+                    let mut value: Option<InsnId> = None;
+                    for &(src, sel) in &incoming {
+                        let arg = self.edge_arg(src, sel, col);
+                        let carg = self.union_find.borrow().find_const(arg);
+                        if carg == cparam {
+                            // Self-reference (e.g. a loop back edge forwarding the
+                            // parameter to itself); does not count as a distinct value.
+                            continue;
+                        }
+                        match value {
+                            None => value = Some(carg),
+                            Some(v) if v == carg => {}
+                            // More than one distinct incoming value: not trivial.
+                            Some(_) => continue 'param,
+                        }
+                    }
+                    if let Some(value) = value {
+                        trivial.push((col, param_id, value));
+                    }
+                }
+
+                if trivial.is_empty() {
+                    continue;
+                }
+
+                // Replace each trivial parameter with its single incoming value.
+                for &(_, param_id, value) in &trivial {
+                    self.make_equal_to(param_id, value);
+                }
+                // Drop the columns from the block's params and from every incoming
+                // edge, highest column first so earlier indices stay valid.
+                let mut cols: Vec<usize> = trivial.iter().map(|&(col, _, _)| col).collect();
+                cols.sort_unstable_by(|a, b| b.cmp(a));
+                for &col in &cols {
+                    self.blocks[block.0].params.remove(col);
+                    for &(src, sel) in &incoming {
+                        self.remove_edge_arg(src, sel, col);
+                    }
+                }
+                iter_changed = true;
+            }
+            if !iter_changed { break; }
+            changed = true;
+        }
+        if changed {
+            crate::stats::trace_compile_phase("infer_types", || self.infer_types());
+        }
+    }
+
     /// Clean up linked lists of blocks A -> B -> C into A (with B's and C's instructions).
     fn clean_cfg(&mut self) {
         // num_in_edges is invariant throughout cleaning the CFG:
@@ -6164,6 +6311,7 @@ impl Function {
             (type_specialize) => { Counter::compile_hir_strength_reduce_time_ns };
             (convert_no_profile_sends) => { Counter::compile_hir_strength_reduce_time_ns };
             // End strength reduction bucket
+            (remove_trivial_block_params) => { Counter::compile_hir_remove_trivial_block_params_time_ns };
             (inline_methods) => { Counter::compile_hir_inline_methods_time_ns };
             (optimize_load_store) => { Counter::compile_hir_optimize_load_store_time_ns };
             (canonicalize) => { Counter::compile_hir_canonicalize_time_ns };
@@ -6205,6 +6353,9 @@ impl Function {
         // disabled in order to optimize the results of the last inlining operation.
         let inline_max_iterations = get_option!(inline_max_iterations);
         for iteration in 0..=inline_max_iterations {
+            // Drop block parameters whose incoming value is identical on every
+            // predecessor edge before anything else looks at the CFG.
+            run_pass!(remove_trivial_block_params);
             // Function is assumed to have types inferred already
             run_pass!(type_specialize);
             // Cap inlining at inline_max_iterations passes; the trailing iteration (see above)
