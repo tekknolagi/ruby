@@ -5866,9 +5866,10 @@ impl Function {
     /// parameters and the values that flowed through them directly.
     fn remove_trivial_block_params(&mut self) {
         let mut changed = false;
+        let rpo = self.reverse_post_order();
         loop {
             let mut iter_changed = false;
-            for block in self.reverse_post_order() {
+            for &block in &rpo {
                 // Entry block parameters are the method's ABI (self + arguments);
                 // they are supplied by the interpreter/JIT entry, not by BranchEdge
                 // args, so they must not be touched.
@@ -5880,15 +5881,12 @@ impl Function {
                     continue;
                 }
 
-                // Collect every predecessor edge that targets `block`. We scan all
-                // blocks (not just RPO) so that args on edges from unreachable
-                // predecessors stay consistent with the block's param arity. If the
-                // block is reached by a terminator that carries no per-edge args
-                // (i.e. Entries), bail: there is no column to remove.
+                // Collect every predecessor edge that targets `block`. If the block is reached by
+                // a terminator that carries no per-edge args (i.e. Entries), bail: there is no
+                // column to remove.
                 let mut incoming: Vec<(BlockId, EdgeSelector)> = vec![];
                 let mut bail = false;
-                for src in 0..self.blocks.len() {
-                    let src = BlockId(src);
+                for &src in &rpo {
                     let Some(&term_id) = self.blocks[src.0].insns.last() else { continue };
                     match &self.insns[term_id.0] {
                         Insn::Jump(edge) => {
