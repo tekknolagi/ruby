@@ -5881,11 +5881,8 @@ impl Function {
                     continue;
                 }
 
-                // Collect every predecessor edge that targets `block`. If the block is reached by
-                // a terminator that carries no per-edge args (i.e. Entries), bail: there is no
-                // column to remove.
+                // Collect every predecessor edge that targets `block`.
                 let mut incoming: Vec<(BlockId, EdgeSelector)> = vec![];
-                let mut bail = false;
                 for &src in &rpo {
                     let Some(&term_id) = self.blocks[src.0].insns.last() else { continue };
                     match &self.insns[term_id.0] {
@@ -5896,15 +5893,13 @@ impl Function {
                             if if_true.target == block { incoming.push((src, EdgeSelector::IfTrue)); }
                             if if_false.target == block { incoming.push((src, EdgeSelector::IfFalse)); }
                         }
-                        Insn::Entries { targets } => {
-                            if targets.contains(&block) { bail = true; }
-                        }
+                        // Don't scan Entries; they pass no block parameters (and only jump into
+                        // entry blocks).
+                        Insn::Entries { .. } => {}
                         _ => {}
                     }
                 }
-                if bail || incoming.is_empty() {
-                    continue;
-                }
+                debug_assert!(!incoming.is_empty(), "block {} is unreachable", block.0);
 
                 // For each column, find the single distinct incoming value (if any),
                 // ignoring self-references to the parameter itself.
