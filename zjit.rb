@@ -150,6 +150,7 @@ class << RubyVM::ZJIT
       :compile_side_exit_time_ratio,
       :compile_hir_time_ns,
       :compile_hir_build_time_ns,
+      :compile_hir_remove_trivial_block_params_time_ns,
       :compile_hir_strength_reduce_time_ns,
       :compile_hir_inline_methods_time_ns,
       :compile_hir_canonicalize_time_ns,
