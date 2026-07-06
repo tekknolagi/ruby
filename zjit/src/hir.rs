@@ -5838,8 +5838,29 @@ impl Function {
             }
         }
 
-        let mut changed = false;
         let rpo = self.reverse_post_order();
+
+        // Map of block -> every predecessor edge that targets the block.
+        let mut incoming: Vec<Vec<(BlockId, EdgeSelector)>> = vec![vec![]; self.blocks.len()];
+        for &src in &rpo {
+            let Some(&term_id) = self.blocks[src.0].insns.last() else { continue };
+            match &self.insns[term_id.0] {
+                Insn::Jump(edge) => {
+                    incoming[edge.target.0].push((src, EdgeSelector::Jump));
+                }
+                Insn::CondBranch { if_true, if_false, .. } => {
+                    incoming[if_true.target.0].push((src, EdgeSelector::IfTrue));
+                    incoming[if_false.target.0].push((src, EdgeSelector::IfFalse));
+                }
+                // Don't scan Entries; they pass no block parameters (and only jump into
+                // entry blocks).
+                Insn::Entries { .. } => {}
+                _ => {}
+            }
+        }
+        let incoming = incoming;
+
+        let mut changed = false;
         loop {
             let mut iter_changed = false;
             for &block in &rpo {
@@ -5854,24 +5875,7 @@ impl Function {
                     continue;
                 }
 
-                // Collect every predecessor edge that targets `block`.
-                let mut incoming: Vec<(BlockId, EdgeSelector)> = vec![];
-                for &src in &rpo {
-                    let Some(&term_id) = self.blocks[src.0].insns.last() else { continue };
-                    match &self.insns[term_id.0] {
-                        Insn::Jump(edge) => {
-                            if edge.target == block { incoming.push((src, EdgeSelector::Jump)); }
-                        }
-                        Insn::CondBranch { if_true, if_false, .. } => {
-                            if if_true.target == block { incoming.push((src, EdgeSelector::IfTrue)); }
-                            if if_false.target == block { incoming.push((src, EdgeSelector::IfFalse)); }
-                        }
-                        // Don't scan Entries; they pass no block parameters (and only jump into
-                        // entry blocks).
-                        Insn::Entries { .. } => {}
-                        _ => {}
-                    }
-                }
+                let incoming = &incoming[block.0];
                 debug_assert!(!incoming.is_empty(), "block {} is unreachable", block.0);
 
                 // For each column, find the single distinct incoming value (if any),
@@ -5881,7 +5885,7 @@ impl Function {
                     let param_id = self.blocks[block.0].params[col];
                     let cparam = self.union_find.borrow().find_const(param_id);
                     let mut value: Option<InsnId> = None;
-                    for &(src, sel) in &incoming {
+                    for &(src, sel) in incoming {
                         let arg = edge_arg(self, src, sel, col);
                         let carg = self.union_find.borrow().find_const(arg);
                         if carg == cparam {
@@ -5915,7 +5919,7 @@ impl Function {
                 cols.sort_unstable_by(|a, b| b.cmp(a));
                 for &col in &cols {
                     self.blocks[block.0].params.remove(col);
-                    for &(src, sel) in &incoming {
+                    for &(src, sel) in incoming {
                         remove_edge_arg(self, src, sel, col);
                     }
                 }
