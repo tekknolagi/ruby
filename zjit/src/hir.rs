@@ -6304,11 +6304,11 @@ impl Function {
         let should_dump = get_option!(dump_hir_iongraph);
 
         macro_rules! counter_for {
+            (remove_trivial_block_params) => { Counter::compile_hir_remove_trivial_block_params_time_ns };
             // Bucket all strength reduction together
             (type_specialize) => { Counter::compile_hir_strength_reduce_time_ns };
             (convert_no_profile_sends) => { Counter::compile_hir_strength_reduce_time_ns };
             // End strength reduction bucket
-            (remove_trivial_block_params) => { Counter::compile_hir_remove_trivial_block_params_time_ns };
             (inline_methods) => { Counter::compile_hir_inline_methods_time_ns };
             (optimize_load_store) => { Counter::compile_hir_optimize_load_store_time_ns };
             (canonicalize) => { Counter::compile_hir_canonicalize_time_ns };
