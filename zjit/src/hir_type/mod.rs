@@ -55,6 +55,26 @@ const SPEC_MASK: Bits = (((1 as Bits) << NUM_SPEC_BITS) - 1) << SPEC_SHIFT;
 /// Mask that isolates the type-lattice bits (everything below the spec tag).
 const BITS_MASK: Bits = !SPEC_MASK;
 
+/// Size-class metadata bits, packed just above the type-lattice leaf bits and below the spec
+/// tag.
+///
+/// INVARIANT: at most one of these is ever set, and only on an *uninhabited* (Empty) Type,
+/// where it records the physical width the value would have had. Inhabited types never carry a
+/// size bit; their width is derived from their leaf bits. This lets meet (intersection) produce
+/// a distinct bottom per size — e.g. `CInt32 ∩ CUInt32` collapses to a 4-byte Empty rather than
+/// the single size-less bottom — so `num_bytes()` still works on the result. Because the bits
+/// are masked out of subtyping, every sized Empty is `is_subtype`-equivalent to [`types::Empty`]
+/// (they are all ⊥); only `num_bytes()` and `bit_equal()` distinguish them.
+const SIZE_SHIFT: u32 = bits::NumTypeBits as u32;
+const SIZE_1: Bits = (1 as Bits) << SIZE_SHIFT;
+const SIZE_2: Bits = (1 as Bits) << (SIZE_SHIFT + 1);
+const SIZE_4: Bits = (1 as Bits) << (SIZE_SHIFT + 2);
+const SIZE_8: Bits = (1 as Bits) << (SIZE_SHIFT + 3);
+/// Mask isolating the size-class metadata bits.
+const SIZE_MASK: Bits = SIZE_1 | SIZE_2 | SIZE_4 | SIZE_8;
+/// Mask isolating the type-lattice *leaf/union* bits (type bits minus size-class metadata).
+const LEAF_MASK: Bits = BITS_MASK & !SIZE_MASK;
+
 /// Tag stored in the top `NUM_SPEC_BITS` of `Type::bits`, identifying which
 /// [`Specialization`] variant the `spec_val` payload belongs to. `repr(u64)` pins
 /// the discriminants to `Bits`-wide values for the `as Bits` casts in
@@ -107,6 +127,10 @@ include!("hir_type.inc.rs");
 // Compile-time check that type lattice bits don't overlap with the spec tag.
 const _: () = assert!(bits::NumTypeBits <= SPEC_SHIFT as u64,
     "type lattice bits overlap with spec tag bits");
+
+// Compile-time check that the size-class metadata bits fit below the spec tag.
+const _: () = assert!(SIZE_SHIFT as u64 + 4 <= SPEC_SHIFT as u64,
+    "size-class metadata bits overlap with spec tag bits");
 
 fn write_spec(f: &mut std::fmt::Formatter, printer: &TypePrinter) -> std::fmt::Result {
     let ty = printer.inner;
@@ -167,6 +191,12 @@ pub struct TypePrinter<'a> {
 impl<'a> std::fmt::Display for TypePrinter<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let ty = self.inner;
+        // Sized bottoms carry a size-class bit but no leaf bits, so they don't appear in
+        // AllBitPatterns. Print them as `Empty<N bytes>`.
+        if ty.type_bits() & SIZE_MASK != 0 {
+            write!(f, "Empty{}", ty.num_bytes())?;
+            return write_spec(f, self);
+        }
         for (name, pattern) in bits::AllBitPatterns {
             if ty.type_bits() == pattern {
                 write!(f, "{name}")?;
@@ -373,11 +403,51 @@ impl Type {
 
     /// Private. Only for creating type globals.
     const fn from_bits(bits: u64) -> Type {
-        Type::new(bits, if bits == bits::Empty {
+        Type::new(bits, if bits & LEAF_MASK == 0 {
             Specialization::Empty
         } else {
             Specialization::Any
         })
+    }
+
+    /// Uninhabited (Empty) Types, one per physical size class. Produced by meets that leave no
+    /// inhabited leaf but agree on width (see [`Type::intersection`]); read back by
+    /// [`Type::num_bytes`]. All are `is_subtype`-equivalent to [`types::Empty`] — they are all ⊥
+    /// — so only `num_bytes`/`bit_equal` tell them apart.
+    pub const EMPTY_1: Type = Type::new(SIZE_1, Specialization::Empty);
+    pub const EMPTY_2: Type = Type::new(SIZE_2, Specialization::Empty);
+    pub const EMPTY_4: Type = Type::new(SIZE_4, Specialization::Empty);
+    pub const EMPTY_8: Type = Type::new(SIZE_8, Specialization::Empty);
+
+    /// True if no value inhabits this Type: it has no leaf bits set (it is [`types::Empty`] or
+    /// one of the sized `EMPTY_*` bottoms). Distinct from `bit_equal(types::Empty)`, which holds
+    /// only for the size-less universal bottom.
+    pub fn is_uninhabited(&self) -> bool {
+        (self.type_bits() & LEAF_MASK) == 0
+    }
+
+    /// Return the single size-class bit describing this Type's physical width, or 0 if it has no
+    /// single well-defined width (the universal [`types::Empty`]). For a sized bottom this is the
+    /// stored bit; otherwise it is derived from the leaf bits, mirroring [`Type::num_bytes`].
+    fn size_class_bit(&self) -> Bits {
+        let stored = self.type_bits() & SIZE_MASK;
+        if stored != 0 { return stored; }
+        if self.is_uninhabited() { return 0; }
+        if self.is_subtype(types::CUInt8) || self.is_subtype(types::CInt8) { SIZE_1 }
+        else if self.is_subtype(types::CUInt16) || self.is_subtype(types::CInt16) { SIZE_2 }
+        else if self.is_subtype(types::CUInt32) || self.is_subtype(types::CInt32) || self.is_subtype(types::CShape) { SIZE_4 }
+        else { SIZE_8 }
+    }
+
+    /// The appropriate bottom for a meet of `self` and `other` that left no inhabited leaf: a
+    /// sized `EMPTY_*` if both operands agree on width, else the size-less [`types::Empty`].
+    fn empty_like(&self, other: Type) -> Type {
+        let sc = self.size_class_bit();
+        if sc != 0 && sc == other.size_class_bit() {
+            Type::new(sc, Specialization::Empty)
+        } else {
+            types::Empty
+        }
     }
 
     /// Create a `Type` from a cvalue integer. Use the `ty` given to specify what size the
@@ -535,21 +605,27 @@ impl Type {
 
     /// Intersect both types, preserving specialization if possible.
     pub fn intersection(&self, other: Type) -> Type {
-        let bits = self.type_bits() & other.type_bits();
-        if bits == bits::Empty { return types::Empty; }
+        let bits = (self.type_bits() & other.type_bits()) & LEAF_MASK;
+        if bits == bits::Empty { return self.empty_like(other); }
         if self.spec_is_subtype_of(other) { return Type::new(bits, self.spec()); }
         if other.spec_is_subtype_of(*self) { return Type::new(bits, other.spec()); }
-        types::Empty
+        self.empty_like(other)
     }
 
     pub fn could_be(&self, other: Type) -> bool {
-        !self.intersection(other).bit_equal(types::Empty)
+        !self.intersection(other).is_uninhabited()
     }
 
     /// Check if the type field of `self` is a subtype of the type field of `other` and also check
     /// if the specialization of `self` is a subtype of the specialization of `other`.
+    ///
+    /// Size-class metadata bits are masked out: they annotate a bottom's physical width and must
+    /// not affect the lattice ordering, so every sized `EMPTY_*` is a subtype of everything the
+    /// universal [`types::Empty`] is (and vice versa).
     pub fn is_subtype(&self, other: Type) -> bool {
-        (self.type_bits() & other.type_bits()) == self.type_bits() && self.spec_is_subtype_of(other)
+        let self_leaf = self.type_bits() & LEAF_MASK;
+        let other_leaf = other.type_bits() & LEAF_MASK;
+        (self_leaf & other_leaf) == self_leaf && self.spec_is_subtype_of(other)
     }
 
     /// Return the type specialization, if any. Type specialization asks if we know the Ruby type
@@ -641,18 +717,15 @@ impl Type {
     }
 
     pub fn num_bytes(&self) -> u8 {
-        assert!(!self.bit_equal(types::Empty),
-                "a value of type Empty is unreachable and should have been eliminated before codegen");
-
-        if self.is_subtype(types::CUInt8) || self.is_subtype(types::CInt8) { return 1; }
-        if self.is_subtype(types::CUInt16) || self.is_subtype(types::CInt16) { return 2; }
-        if self.is_subtype(types::CUInt32) || self.is_subtype(types::CInt32) { return 4; }
-        if self.is_subtype(types::CShape) {
-            use crate::cruby::{SHAPE_ID_NUM_BITS, BITS_PER_BYTE};
-            return (SHAPE_ID_NUM_BITS as usize / BITS_PER_BYTE).try_into().unwrap();
+        // Sized bottoms (EMPTY_*) and inhabited types both answer via their size class; only the
+        // size-less universal Empty has no width and is unreachable at codegen.
+        match self.size_class_bit() {
+            SIZE_1 => 1,
+            SIZE_2 => 2,
+            SIZE_4 => 4,
+            SIZE_8 => crate::cruby::SIZEOF_VALUE as u8,
+            _ => panic!("a value of type Empty is unreachable and should have been eliminated before codegen"),
         }
-        // CUInt64, CInt64, CPtr, CNull, CDouble, or anything else defaults to 8 bytes
-        crate::cruby::SIZEOF_VALUE as u8
     }
 }
 
@@ -697,6 +770,42 @@ mod tests {
         assert_subtype(types::Empty, Type::from_cint(types::CInt32, 10));
         assert_subtype(types::Empty, types::Any);
         assert_subtype(types::Empty, types::Empty);
+    }
+
+    #[test]
+    fn sized_bottoms() {
+        // Meet of two same-size C ints leaves no inhabited leaf but a known width: a sized bottom.
+        let e = types::CInt32.intersection(types::CUInt32);
+        assert!(e.is_uninhabited());
+        assert!(!e.bit_equal(types::Empty));
+        assert_eq!(e.num_bytes(), 4);
+        assert_bit_equal(e, Type::EMPTY_4);
+        // A sized bottom is still ⊥: below everything the universal Empty is below.
+        assert_subtype(e, types::Empty);
+        assert_subtype(types::Empty, e);
+        assert_subtype(e, types::CInt32);
+        assert_subtype(e, types::CInt64);
+        // ...and disjoint same-size types genuinely can't overlap.
+        assert!(!types::CInt32.could_be(types::CUInt32));
+
+        // Meet across sizes has no shared width, so it falls back to the universal bottom.
+        let u = types::CInt32.intersection(types::CInt64);
+        assert!(u.bit_equal(types::Empty));
+
+        // Ruby-object meets keep the 8-byte VALUE width.
+        let r = types::Fixnum.intersection(types::NilClass);
+        assert!(r.is_uninhabited());
+        assert_eq!(r.num_bytes(), 8);
+        assert_bit_equal(r, Type::EMPTY_8);
+
+        // num_bytes now answers on empties instead of panicking.
+        assert_eq!(Type::EMPTY_1.num_bytes(), 1);
+        assert_eq!(Type::EMPTY_2.num_bytes(), 2);
+        assert_eq!(Type::EMPTY_4.num_bytes(), 4);
+        assert_eq!(Type::EMPTY_8.num_bytes(), 8);
+
+        assert_eq!(format!("{}", Type::EMPTY_4), "Empty4");
+        assert_eq!(format!("{}", types::Empty), "Empty");
     }
 
     #[test]
