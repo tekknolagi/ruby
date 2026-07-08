@@ -18169,8 +18169,8 @@ mod hir_opt_tests {
           Jump bb4(v42)
         bb6():
           CheckInterrupts
-          Jump bb4(v10)
-        bb4(v56:BasicObject):
+          Jump bb4(v62)
+        bb4(v56:Fixnum):
           PopInlineFrame
           CheckInterrupts
           Return v56
