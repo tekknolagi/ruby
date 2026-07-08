@@ -6241,7 +6241,7 @@ impl Function {
         for block_id in self.reverse_post_order() {
             // Create the block with instructions.
             let block = &self.blocks[block_id.0];
-            let predecessors = cfi.predecessors(block_id).collect();
+            let predecessors = cfi.predecessors(block_id).to_vec();
             let successors = cfi.successors(block_id).collect();
             let mut instructions = Vec::new();
 
@@ -9594,9 +9594,9 @@ impl Dominators {
                 if block == root { continue; }
 
                 // Find the first predecessor that already has an idom computed.
-                let preds: Vec<BlockId> = cfi.predecessors(block).collect();
+                let preds = cfi.predecessors(block);
                 let mut new_idom = IDOM_NONE;
-                for &p in &preds {
+                for &p in preds {
                     if idoms[p.0] != IDOM_NONE {
                         new_idom = p;
                         break;
@@ -9605,7 +9605,7 @@ impl Dominators {
                 if new_idom == IDOM_NONE { continue; }
 
                 // Intersect with remaining processed predecessors.
-                for &p in &preds {
+                for &p in preds {
                     if p == new_idom { continue; }
                     if idoms[p.0] != IDOM_NONE {
                         new_idom = Self::intersect(&idoms, &rpo_order, p, new_idom);
@@ -9712,8 +9712,8 @@ impl<'a> ControlFlowInfo<'a> {
         self.predecessor_map.get(&right).is_some_and(|set| set.contains(&left))
     }
 
-    pub fn predecessors(&self, block: BlockId) -> impl Iterator<Item = BlockId> {
-        self.predecessor_map.get(&block).into_iter().flatten().copied()
+    pub fn predecessors(&self, block: BlockId) -> &[BlockId] {
+        self.predecessor_map.get(&block).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn successors(&self, block: BlockId) -> impl Iterator<Item = BlockId> {
@@ -9743,7 +9743,7 @@ impl<'a> LoopInfo<'a> {
         // Collect loop headers.
         for &block in &rpo {
             // Initialize the loop depths.
-            for predecessor in cfi.predecessors(block) {
+            for &predecessor in cfi.predecessors(block) {
                 if dominators.is_dominated_by(predecessor, block) {
                     // Found a loop header, so then identify the natural loop.
                     loop_headers.insert(block);
@@ -9779,7 +9779,7 @@ impl<'a> LoopInfo<'a> {
         loop_blocks.insert(back_edge_source);
 
         while let Some(block) = stack.pop() {
-            for pred in cfi.predecessors(block) {
+            for &pred in cfi.predecessors(block) {
                 // Pushes to stack only if `pred` wasn't already in `loop_blocks`.
                 if loop_blocks.insert(pred) {
                     stack.push(pred)
