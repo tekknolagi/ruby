@@ -18178,6 +18178,45 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_inline_nest() {
+        eval("
+            def d = 5
+            def c = d
+            def b = c
+            def a = b
+            def test = a
+            test
+            test
+        ");
+        assert_snapshot!(hir_string_with_inlining("test"), @"
+        fn test@<compiled>:6:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          PatchPoint MethodRedefined(Object@0x1000, a@0x1008, cme:0x1010)
+          v18:ObjectSubclass[class_exact*:Object@VALUE(0x1000)] = GuardType v6, ObjectSubclass[class_exact*:Object@VALUE(0x1000)] recompile
+          PushInlineFrame v18 (0x1038)
+          PatchPoint MethodRedefined(Object@0x1000, b@0x1040, cme:0x1048)
+          PushInlineFrame v18 (0x1038)
+          PatchPoint MethodRedefined(Object@0x1000, c@0x1070, cme:0x1078)
+          PushInlineFrame v18 (0x1038)
+          PatchPoint MethodRedefined(Object@0x1000, d@0x10a0, cme:0x10a8)
+          v70:Fixnum[5] = Const Value(5)
+          CheckInterrupts
+          PopInlineFrame
+          PopInlineFrame
+          PopInlineFrame
+          Return v70
+        ");
+    }
+
+    #[test]
     fn test_inline_arithmetic_method() {
         eval("
             def add_one(x)

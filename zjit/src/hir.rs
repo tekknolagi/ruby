@@ -6038,6 +6038,31 @@ impl Function {
                 new_insns.push(insn_id);
             }
             self.blocks[block_id.0].insns = new_insns;
+
+            // PushInlineFrame/PopInlineFrame removal
+            let mut stack = vec![];
+            let mut to_drop = vec![];
+            for &insn_id in &self.blocks[block_id.0].insns {
+                let insn = &self.insns[insn_id.0];
+                if matches!(insn, Insn::PushInlineFrame { .. }) {
+                    stack.push((insn_id, false));
+                } else if matches!(insn, Insn::PopInlineFrame { .. }) {
+                    // Since this is block-local it's expected that we might not have matching Push/Pop
+                    if let Some((push_id, needs_frame)) = stack.pop() {
+                        if !needs_frame {
+                            to_drop.push(push_id);
+                            to_drop.push(insn_id);
+                        }
+                    }
+                } else if insn.effects_of().read_bits().overlaps(abstract_heaps::Frame)
+                    || insn.effects_of().write_bits().overlaps(abstract_heaps::Frame)
+                    || insn.effects_of().write_bits().overlaps(abstract_heaps::Control) {
+                    if let Some((_, needs_frame)) = stack.last_mut() {
+                        *needs_frame = true;
+                    }
+                }
+            }
+            self.blocks[block_id.0].insns.retain(|insn_id| !to_drop.contains(insn_id));
         }
     }
 
