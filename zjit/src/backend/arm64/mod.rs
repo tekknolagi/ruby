@@ -1164,12 +1164,17 @@ impl Assembler {
                         slot_count += 1
                     }
                     if slot_count > 0 {
-                        let slot_offset = (slot_count * SIZEOF_VALUE) as u64;
-                        // Bail when asked to reserve too many slots in one instruction.
-                        if ShiftedImmediate::try_from(slot_offset).is_err() {
-                            return Err(CompileError::NativeStackTooLarge);
+                        let mut slot_offset = (slot_count * SIZEOF_VALUE) as u64;
+                        // Loop when asked to reserve too many slots in one instruction.
+                        while slot_offset > 0 {
+                            let reserve_step = if ShiftedImmediate::try_from(slot_offset).is_ok() {
+                                slot_offset
+                            } else {
+                                ShiftedImmediate::MAX_LEGAL
+                            };
+                            sub(cb, C_SP_REG, C_SP_REG, A64Opnd::new_uimm(reserve_step));
+                            slot_offset = slot_offset.saturating_sub(ShiftedImmediate::MAX_LEGAL);
                         }
-                        sub(cb, C_SP_REG, C_SP_REG, A64Opnd::new_uimm(slot_offset));
                     }
                 }
                 Insn::FrameTeardown { preserved } => {
