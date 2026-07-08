@@ -5472,6 +5472,7 @@ impl Function {
         // information for dominator tree.
         let mut rewrite_maps: Vec<HashMap<InsnId, InsnId>> = vec![HashMap::new(); self.blocks.len()];
         let dominators = Dominators::new(self);
+        let mut changed = false;
         for block in self.reverse_post_order() {
             rewrite_maps[block.0] = rewrite_maps[dominators.idom(block).0].clone();
             let rewrite_map = &mut rewrite_maps[block.0];
@@ -5482,7 +5483,11 @@ impl Function {
                 let union_find = &self.union_find;
                 self.insns[canonical_id.0].for_each_operand_mut(|operand| {
                     let canon = union_find.borrow().find_const(*operand);
-                    *operand = rewrite_map.get(&canon).copied().unwrap_or(canon);
+                    let new_operand = rewrite_map.get(&canon).copied().unwrap_or(canon);
+                    if *operand != new_operand {
+                        *operand = new_operand;
+                        changed = true;
+                    }
                 });
 
                 // For the binary guards only `left` is registered because their infer_type is
@@ -5501,7 +5506,9 @@ impl Function {
             }
         }
 
-        crate::stats::trace_compile_phase("infer_types", || self.infer_types());
+        if changed {
+            crate::stats::trace_compile_phase("infer_types", || self.infer_types());
+        }
     }
 
     /// Use type information left by `infer_types` to fold away operations that can be evaluated at compile-time.
