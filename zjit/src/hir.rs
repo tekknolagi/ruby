@@ -5395,13 +5395,53 @@ impl Function {
     /// Inspired by Cranelift's aegraph canonicalize step
     /// (<https://cfallin.org/blog/2026/04/09/aegraph/>).
     fn canonicalize(&mut self) {
+        #[derive(Clone)]
+        struct ScopedHashMap<'a, K, V> {
+            map: Option<HashMap<K, V>>,
+            parent: Option<&'a ScopedHashMap<'a, K, V>>,
+        }
+        impl<'a, K, V> ScopedHashMap<'a, K, V> {
+            fn root() -> Self {
+                Self { map: None, parent: None }
+            }
+
+            fn new(parent: &'a ScopedHashMap<'a, K, V>) -> Self {
+                Self { map: None, parent: Some(parent) }
+            }
+
+            fn get(&self, key: &K) -> Option<&V>
+            where
+                K: std::cmp::Eq + std::hash::Hash,
+            {
+                if let Some(map) = &self.map {
+                    if let Some(value) = map.get(key) {
+                        return Some(value);
+                    }
+                }
+                self.parent.and_then(|parent| parent.get(key))
+            }
+
+            fn insert(&mut self, key: K, value: V)
+            where
+                K: std::cmp::Eq + std::hash::Hash,
+            {
+                if self.map.is_none() {
+                    self.map = Some(HashMap::new());
+                }
+                self.map.as_mut().unwrap().insert(key, value);
+            }
+        }
         // TODO(max): Don't duplicate map. Instead, use either undo-redo or dominator numbering
         // information for dominator tree.
-        let mut rewrite_maps: Vec<HashMap<InsnId, InsnId>> = vec![HashMap::new(); self.blocks.len()];
+        let mut rewrite_maps: Vec<ScopedHashMap<'_, InsnId, InsnId>> = vec![ScopedHashMap::root(); self.blocks.len()];
         let dominators = Dominators::new(self);
         for block in self.reverse_post_order() {
-            rewrite_maps[block.0] = rewrite_maps[dominators.idom(block).0].clone();
-            let rewrite_map = &mut rewrite_maps[block.0];
+            let idom = dominators.idom(block);
+            let mut rewrite_map = if block == idom {
+                ScopedHashMap::root()
+            } else {
+                ScopedHashMap::new(&rewrite_maps[idom.0])
+            };
             for i in 0..self.blocks[block.0].insns.len() {
                 let insn_id = self.blocks[block.0].insns[i];
                 let canonical_id = self.union_find.borrow().find_const(insn_id);
@@ -5426,6 +5466,7 @@ impl Function {
                     _ => {}
                 }
             }
+            rewrite_maps[block.0] = rewrite_map;
         }
 
         crate::stats::trace_compile_phase("infer_types", || self.infer_types());
