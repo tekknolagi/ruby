@@ -9126,7 +9126,17 @@ fn add_iseq_to_hir(
                             // keyed at exit_id.
                             let snapshot = fun.push_insn(iftrue_block, Insn::Snapshot { state: Box::new(exit_state.clone()) });
                             let refined_recv = fun.push_insn(iftrue_block, Insn::RefineType { val: recv, new_type: expected });
-                            let send = fun.push_insn(iftrue_block, Insn::Send { recv: refined_recv, cd, block: None, args: args.clone(), state: snapshot, reason: Uncategorized(opcode) });
+                            let send = fun.new_insn(Insn::Send { recv: refined_recv, cd, block: None, args: args.clone(), state: snapshot, reason: Uncategorized(opcode) });
+                            let send = match fun.try_specialize_send(iftrue_block, send, refined_recv, profiled_type.class(), Some(profiled_type), cd, snapshot, None, &args) {
+                                Ok(replacement) => {
+                                    replacement
+                                }
+                                Err(()) => {
+                                    // The reason is set inside try_specialize_send
+                                    fun.blocks[iftrue_block.0].insns.push(send);
+                                    send
+                                }
+                            };
                             fun.push_insn(iftrue_block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
                         }
                         // In the fallthrough case, do a generic interpreter send and then join.
