@@ -111,9 +111,9 @@ mod hir_opt_tests {
           v10:Fixnum[1] = Const Value(1)
           v12:Fixnum[2] = Const Value(2)
           PatchPoint MethodRedefined(Integer@0x1000, +@0x1008, cme:0x1010)
-          v33:Fixnum[6] = Const Value(6)
-          CheckInterrupts
-          Return v33
+          v30:Fixnum[3] = Const Value(3)
+          v17:Fixnum[3] = Const Value(3)
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -168,9 +168,9 @@ mod hir_opt_tests {
           v10:Fixnum[5] = Const Value(5)
           v12:Fixnum[3] = Const Value(3)
           PatchPoint MethodRedefined(Integer@0x1000, -@0x1008, cme:0x1010)
-          v33:Fixnum[1] = Const Value(1)
-          CheckInterrupts
-          Return v33
+          v30:Fixnum[2] = Const Value(2)
+          v17:Fixnum[1] = Const Value(1)
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -364,11 +364,11 @@ mod hir_opt_tests {
           v14:Fixnum[0] = Const Value(0)
           PatchPoint MethodRedefined(Integer@0x1008, *@0x1010, cme:0x1018)
           v36:Fixnum = GuardType v10, Fixnum
-          v46:Fixnum[0] = Const Value(0)
           v47:Fixnum[0] = Const Value(0)
+          v48:Fixnum[0] = Const Value(0)
           PatchPoint MethodRedefined(Integer@0x1008, +@0x1040, cme:0x1048)
           CheckInterrupts
-          Return v47
+          Return v48
         ");
     }
 
@@ -398,9 +398,9 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(Integer@0x1008, *@0x1010, cme:0x1018)
           v36:Fixnum = GuardType v10, Fixnum
           PatchPoint MethodRedefined(Integer@0x1008, +@0x1040, cme:0x1048)
-          v45:Fixnum = FixnumAdd v36, v36
+          v46:Fixnum = FixnumAdd v36, v36
           CheckInterrupts
-          Return v45
+          Return v46
         ");
     }
 
@@ -12517,16 +12517,16 @@ mod hir_opt_tests {
           PatchPoint NoSingletonClass(String@0x1008)
           PatchPoint MethodRedefined(String@0x1008, ascii_only?@0x1010, cme:0x1018)
           v23:StringExact = GuardType v10, StringExact recompile
-          v24:CUInt64 = LoadField v23, :RBASIC_FLAGS@0x1040
-          v25:CUInt64[3145728] = Const CUInt64(3145728)
-          v26:CInt64 = IntAnd v24, v25
-          v27:CInt64[1048576] = Const CInt64(1048576)
-          v28:CInt64 = GuardGreaterEq v26, v27
-          v29:CInt64[1048576] = Const CInt64(1048576)
-          v30:CBool = IsBitEqual v28, v29
-          v31:BoolExact = BoxBool v30
+          v25:CUInt64 = LoadField v23, :RBASIC_FLAGS@0x1040
+          v26:CUInt64[3145728] = Const CUInt64(3145728)
+          v27:CInt64 = IntAnd v25, v26
+          v28:CInt64[1048576] = Const CInt64(1048576)
+          v29:CInt64 = GuardGreaterEq v27, v28
+          v30:CInt64[1048576] = Const CInt64(1048576)
+          v31:CBool = IsBitEqual v29, v30
+          v32:BoolExact = BoxBool v31
           CheckInterrupts
-          Return v31
+          Return v32
         ");
     }
 
@@ -17811,9 +17811,9 @@ mod hir_opt_tests {
           v21:Fixnum[2] = Const Value(2)
           v40:Fixnum = FixnumSub v35, v21
           PatchPoint MethodRedefined(Integer@0x1008, +@0x1040, cme:0x1048)
-          v44:Fixnum = FixnumAdd v36, v40
+          v45:Fixnum = FixnumAdd v36, v40
           CheckInterrupts
-          Return v44
+          Return v45
         ");
     }
 
@@ -19752,13 +19752,13 @@ mod hir_opt_tests {
           PatchPoint MethodRedefined(Integer@0x1048, *@0x1050, cme:0x1058)
           v68:Fixnum = GuardType v10, Fixnum recompile
           v69:Fixnum = FixnumMult v68, v40
-          v82:Fixnum[20] = Const Value(20)
+          v83:Fixnum[20] = Const Value(20)
           PatchPoint MethodRedefined(Integer@0x1048, +@0x1080, cme:0x1088)
-          v77:Fixnum = FixnumAdd v69, v82
-          v81:Fixnum = FixnumAdd v77, v16
+          v78:Fixnum = FixnumAdd v69, v83
+          v82:Fixnum = FixnumAdd v78, v16
           CheckInterrupts
           PopInlineFrame
-          Return v81
+          Return v82
         ");
     }
 

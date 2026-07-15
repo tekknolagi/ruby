@@ -2944,7 +2944,13 @@ impl Function {
 
     // Add an instruction to an SSA block
     fn push_insn_id(&mut self, block: BlockId, insn_id: InsnId) -> InsnId {
-        self.blocks[block.0].insns.push(insn_id);
+        let insn_id = self.union_find.borrow().find_const(insn_id);
+        let is_param = matches!(self.insns[insn_id.0], Insn::Param);
+        if is_param {
+            self.blocks[block.0].params.push(insn_id);
+        } else {
+            self.blocks[block.0].insns.push(insn_id);
+        }
         insn_id
     }
 
@@ -4171,7 +4177,7 @@ impl Function {
             // Add GuardType for profiled receiver
             if let Some(profiled_type) = profiled_type {
                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state, recompile: Some(Recompile) });
-                self.insn_types[recv.0] = self.infer_type(recv);
+                // self.insn_types[recv.0] = self.infer_type(recv);
             }
 
             let replacement = self.try_inline_send_direct(block, Insn::SendDirect(Box::new(SendDirectData { recv, cd, cme, iseq, args: send_args, kw_bits, jit_entry_idx, state: send_state, block: send_block })));
@@ -4445,10 +4451,10 @@ impl Function {
                                 let insns = std::mem::take(&mut fun.blocks[tmp_block.0].insns);
                                 fun.blocks[block.0].insns.extend(insns);
                                 fun.count(block, Counter::inline_cfunc_optimized_send_count);
-                                if fun.type_of(replacement).bit_equal(types::Any) {
-                                    // Not set yet; infer type
-                                    fun.insn_types[replacement.0] = fun.infer_type(replacement);
-                                }
+                                // if fun.type_of(replacement).bit_equal(types::Any) {
+                                //     // Not set yet; infer type
+                                //     fun.insn_types[replacement.0] = fun.infer_type(replacement);
+                                // }
                                 fun.remove_block(tmp_block);
                                 return Ok(replacement);
                             }
@@ -4458,7 +4464,7 @@ impl Function {
                                 fun.count(block, Counter::inline_cfunc_optimized_send_count);
                                 let owner = unsafe { (*cme).owner };
                                 let ccall = fun.push_insn(block, Insn::CCall { cfunc: cfunc_ptr, recv, args: args.to_vec(), name, owner, return_type, elidable });
-                                fun.insn_types[ccall.0] = fun.infer_type(ccall);
+                                // fun.insn_types[ccall.0] = fun.infer_type(ccall);
                                 return Ok(ccall);
                             }
                         }
@@ -4479,7 +4485,7 @@ impl Function {
                             elidable,
                             block: blockiseq.map(BlockHandler::BlockIseq),
                         })));
-                        fun.insn_types[ccall.0] = fun.infer_type(ccall);
+                        // fun.insn_types[ccall.0] = fun.infer_type(ccall);
                         Ok(ccall)
                     }
                     // Variadic method
@@ -4509,10 +4515,10 @@ impl Function {
                                 let insns = std::mem::take(&mut fun.blocks[tmp_block.0].insns);
                                 fun.blocks[block.0].insns.extend(insns);
                                 fun.count(block, Counter::inline_cfunc_optimized_send_count);
-                                if fun.type_of(replacement).bit_equal(types::Any) {
-                                    // Not set yet; infer type
-                                    fun.insn_types[replacement.0] = fun.infer_type(replacement);
-                                }
+                                // if fun.type_of(replacement).bit_equal(types::Any) {
+                                //     // Not set yet; infer type
+                                //     fun.insn_types[replacement.0] = fun.infer_type(replacement);
+                                // }
                                 fun.remove_block(tmp_block);
                                 return Ok(replacement);
                             }
@@ -4522,7 +4528,7 @@ impl Function {
                                 fun.count(block, Counter::inline_cfunc_optimized_send_count);
                                 let owner = unsafe { (*cme).owner };
                                 let ccall = fun.push_insn(block, Insn::CCall { cfunc: cfunc_ptr, recv, args: args.to_vec(), name, owner, return_type, elidable });
-                                fun.insn_types[ccall.0] = fun.infer_type(ccall);
+                                // fun.insn_types[ccall.0] = fun.infer_type(ccall);
                                 return Ok(ccall);
                             }
                         }
@@ -4543,7 +4549,7 @@ impl Function {
                             elidable,
                             block: blockiseq.map(BlockHandler::BlockIseq),
                         })));
-                        fun.insn_types[ccall.0] = fun.infer_type(ccall);
+                        // fun.insn_types[ccall.0] = fun.infer_type(ccall);
                         Ok(ccall)
                     }
                     -2 => {
@@ -9133,7 +9139,7 @@ fn add_iseq_to_hir(
                                 }
                                 Err(()) => {
                                     // The reason is set inside try_specialize_send
-                                    fun.blocks[iftrue_block.0].insns.push(send);
+                                    fun.push_insn_id(iftrue_block, send);
                                     send
                                 }
                             };
