@@ -4177,7 +4177,7 @@ impl Function {
             // Add GuardType for profiled receiver
             if let Some(profiled_type) = profiled_type {
                 recv = self.push_insn(block, Insn::GuardType { val: recv, guard_type: Type::from_profiled_type(profiled_type), state, recompile: Some(Recompile) });
-                // self.insn_types[recv.0] = self.infer_type(recv);
+                self.insn_types[recv.0] = self.infer_type(recv);
             }
 
             let replacement = self.try_inline_send_direct(block, Insn::SendDirect(Box::new(SendDirectData { recv, cd, cme, iseq, args: send_args, kw_bits, jit_entry_idx, state: send_state, block: send_block })));
