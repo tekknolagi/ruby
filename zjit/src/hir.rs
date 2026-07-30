@@ -10175,7 +10175,7 @@ impl Dominators {
     /// Cooper, Harvey & Kennedy, "A Simple, Fast Dominance Algorithm" (2001),
     /// Figure 3: <https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf>
     pub fn with_cfi(f: &Function, cfi: ControlFlowInfo) -> Self {
-        let rpo = f.reverse_post_order();
+        let rpo = cfi.reverse_post_order();
         let num_blocks = f.blocks.len();
 
         // Map BlockId -> RPO index for O(1) lookup in intersect.
@@ -10192,7 +10192,7 @@ impl Dominators {
         let mut changed = true;
         while changed {
             changed = false;
-            for &block in &rpo {
+            for &block in rpo {
                 if block == root { continue; }
 
                 // Find the first predecessor that already has an idom computed.
