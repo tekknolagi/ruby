@@ -6521,7 +6521,7 @@ impl Function {
     }
 
     /// Helper function to make an Iongraph JSON "block".
-    fn make_iongraph_block(id: BlockId, predecessors: Vec<BlockId>, successors: Vec<BlockId>, instructions: Vec<Json>, attributes: Vec<&str>, loop_depth: u32) -> Json {
+    fn make_iongraph_block(id: BlockId, predecessors: &[BlockId], successors: &[BlockId], instructions: Vec<Json>, attributes: Vec<&str>, loop_depth: u32) -> Json {
         Json::object()
             // Add an offset of 0x1000 to avoid the `ptr` being 0x0, which iongraph rejects.
             .insert("ptr", id.0 + 0x1000)
@@ -6558,16 +6558,15 @@ impl Function {
         }
 
         let mut hir_blocks = Vec::new();
-        let cfi = ControlFlowInfo::new(self);
         let dominators = Dominators::new(self);
-        let loop_info = LoopInfo::new(&cfi, &dominators);
+        let loop_info = LoopInfo::new(&dominators.cfi, &dominators);
 
         // Push each block from the iteration in reverse post order to `hir_blocks`.
-        for block_id in self.reverse_post_order() {
+        for &block_id in dominators.cfi.reverse_post_order() {
             // Create the block with instructions.
             let block = &self.blocks[block_id.0];
-            let predecessors = cfi.predecessors(block_id).collect();
-            let successors = cfi.successors(block_id).collect();
+            let predecessors = dominators.cfi.predecessors(block_id);
+            let successors = dominators.cfi.successors(block_id);
             let mut instructions = Vec::new();
 
             // Process all instructions (parameters and body instructions).
@@ -10160,6 +10159,7 @@ pub struct Dominators {
     /// Immediate dominator for each block, indexed by BlockId.
     /// idom(root) = root (self-loop is sentinel), idom[unreachable] == IDOM_NONE.
     idoms: Vec<BlockId>,
+    cfi: ControlFlowInfo,
 }
 
 /// Sentinel value for "no idom computed yet".
@@ -10167,14 +10167,14 @@ const IDOM_NONE: BlockId = BlockId(usize::MAX);
 
 impl Dominators {
     pub fn new(f: &Function) -> Self {
-        let mut cfi = ControlFlowInfo::new(f);
-        Self::with_cfi(f, &mut cfi)
+        let cfi = ControlFlowInfo::new(f);
+        Self::with_cfi(f, cfi)
     }
 
     /// Compute immediate dominators using the "engineered algorithm" from
     /// Cooper, Harvey & Kennedy, "A Simple, Fast Dominance Algorithm" (2001),
     /// Figure 3: <https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf>
-    pub fn with_cfi(f: &Function, cfi: &mut ControlFlowInfo) -> Self {
+    pub fn with_cfi(f: &Function, cfi: ControlFlowInfo) -> Self {
         let rpo = f.reverse_post_order();
         let num_blocks = f.blocks.len();
 
@@ -10196,9 +10196,9 @@ impl Dominators {
                 if block == root { continue; }
 
                 // Find the first predecessor that already has an idom computed.
-                let preds: Vec<BlockId> = cfi.predecessors(block).collect();
+                let preds = cfi.predecessors(block);
                 let mut new_idom = IDOM_NONE;
-                for &p in &preds {
+                for &p in preds {
                     if idoms[p.0] != IDOM_NONE {
                         new_idom = p;
                         break;
@@ -10207,7 +10207,7 @@ impl Dominators {
                 if new_idom == IDOM_NONE { continue; }
 
                 // Intersect with remaining processed predecessors.
-                for &p in &preds {
+                for &p in preds {
                     if p == new_idom { continue; }
                     if idoms[p.0] != IDOM_NONE {
                         new_idom = Self::intersect(&idoms, &rpo_order, p, new_idom);
@@ -10221,7 +10221,7 @@ impl Dominators {
             }
         }
 
-        Self { idoms }
+        Self { idoms, cfi }
     }
 
     /// Walk up the dominator tree from two fingers until they meet.
@@ -10270,20 +10270,26 @@ impl Dominators {
         doms.sort();
         doms
     }
+
+    pub fn reverse_post_order(&self) -> &[BlockId] {
+        self.cfi.reverse_post_order()
+    }
 }
 
-pub struct ControlFlowInfo<'a> {
-    function: &'a Function,
+pub struct ControlFlowInfo {
     successor_map: HashMap<BlockId, Vec<BlockId>>,
     predecessor_map: HashMap<BlockId, Vec<BlockId>>,
+    reverse_post_order: Vec<BlockId>,
+    num_blocks: usize,
 }
 
-impl<'a> ControlFlowInfo<'a> {
-    pub fn new(function: &'a Function) -> Self {
+impl ControlFlowInfo {
+    pub fn new(function: &Function) -> Self {
         let mut successor_map: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
         let mut predecessor_map: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
 
-        for block_id in function.reverse_post_order() {
+        let reverse_post_order = function.reverse_post_order();
+        for &block_id in &reverse_post_order {
             let mut successors: Vec<BlockId> = function.successors(block_id).collect();
             successors.dedup();
 
@@ -10300,9 +10306,10 @@ impl<'a> ControlFlowInfo<'a> {
         }
 
         Self {
-            function,
             successor_map,
             predecessor_map,
+            reverse_post_order,
+            num_blocks: function.num_blocks(),
         }
     }
 
@@ -10314,17 +10321,27 @@ impl<'a> ControlFlowInfo<'a> {
         self.predecessor_map.get(&right).is_some_and(|set| set.contains(&left))
     }
 
-    pub fn predecessors(&self, block: BlockId) -> impl Iterator<Item = BlockId> {
-        self.predecessor_map.get(&block).into_iter().flatten().copied()
+    pub fn predecessors(&self, block: BlockId) -> &[BlockId] {
+        static EMPTY: &[BlockId] = &[];
+        self.predecessor_map.get(&block).map_or(EMPTY, |v| v.as_slice())
     }
 
-    pub fn successors(&self, block: BlockId) -> impl Iterator<Item = BlockId> {
-        self.successor_map.get(&block).into_iter().flatten().copied()
+    pub fn successors(&self, block: BlockId) -> &[BlockId] {
+        static EMPTY: &[BlockId] = &[];
+        self.successor_map.get(&block).map_or(EMPTY, |v| v.as_slice())
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        self.num_blocks
+    }
+
+    pub fn reverse_post_order(&self) -> &[BlockId] {
+        &self.reverse_post_order
     }
 }
 
 pub struct LoopInfo<'a> {
-    cfi: &'a ControlFlowInfo<'a>,
+    cfi: &'a ControlFlowInfo,
     dominators: &'a Dominators,
     loop_depths: HashMap<BlockId, u32>,
     loop_headers: BlockSet,
@@ -10332,20 +10349,20 @@ pub struct LoopInfo<'a> {
 }
 
 impl<'a> LoopInfo<'a> {
-    pub fn new(cfi: &'a ControlFlowInfo<'a>, dominators: &'a Dominators) -> Self {
-        let mut loop_headers: BlockSet = BlockSet::with_capacity(cfi.function.num_blocks());
+    pub fn new(cfi: &'a ControlFlowInfo, dominators: &'a Dominators) -> Self {
+        let mut loop_headers: BlockSet = BlockSet::with_capacity(cfi.num_blocks());
         let mut loop_depths: HashMap<BlockId, u32> = HashMap::new();
-        let mut back_edge_sources: BlockSet = BlockSet::with_capacity(cfi.function.num_blocks());
-        let rpo = cfi.function.reverse_post_order();
+        let mut back_edge_sources: BlockSet = BlockSet::with_capacity(cfi.num_blocks());
+        let rpo = cfi.reverse_post_order();
 
-        for &block in &rpo {
+        for &block in rpo {
             loop_depths.insert(block, 0);
         }
 
         // Collect loop headers.
-        for &block in &rpo {
+        for &block in rpo {
             // Initialize the loop depths.
-            for predecessor in cfi.predecessors(block) {
+            for &predecessor in cfi.predecessors(block) {
                 if dominators.is_dominated_by(predecessor, block) {
                     // Found a loop header, so then identify the natural loop.
                     loop_headers.insert(block);
@@ -10381,7 +10398,7 @@ impl<'a> LoopInfo<'a> {
         loop_blocks.insert(back_edge_source);
 
         while let Some(block) = stack.pop() {
-            for pred in cfi.predecessors(block) {
+            for &pred in cfi.predecessors(block) {
                 // Pushes to stack only if `pred` wasn't already in `loop_blocks`.
                 if loop_blocks.insert(pred) {
                     stack.push(pred)
