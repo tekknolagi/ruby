@@ -4089,11 +4089,11 @@ mod hir_opt_tests {
           PushInlineFrame v26 (0x1038), v23
           PatchPoint NoSingletonClass(Array@0x1040)
           PatchPoint MethodRedefined(Array@0x1040, length@0x1048, cme:0x1050)
-          v49:CInt64 = ArrayLength v23
-          v50:Fixnum = BoxFixnum v49
+          v53:CInt64[3] = Const CInt64(3)
+          v51:Fixnum = BoxFixnum v53
           CheckInterrupts
           PopInlineFrame
-          Return v50
+          Return v51
         ");
     }
 
@@ -4165,13 +4165,13 @@ mod hir_opt_tests {
           PushInlineFrame v26 (0x1038), v23
           PatchPoint NoSingletonClass(Array@0x1040)
           PatchPoint MethodRedefined(Array@0x1040, length@0x1048, cme:0x1050)
-          v55:CInt64 = ArrayLength v23
-          v56:Fixnum = BoxFixnum v55
+          v59:CInt64[3] = Const CInt64(3)
+          v57:Fixnum = BoxFixnum v59
           v38:CPtr = GetEP 0
           v39:CInt64 = LoadField v38, :VM_ENV_DATA_INDEX_SPECVAL@0x1078
           v40:CInt64[-4] = Const CInt64(-4)
           v41:CInt64 = IntAnd v39, v40
-          v42:BasicObject = InvokeBlockIseqDirect (0x1080), v41, v56
+          v42:BasicObject = InvokeBlockIseqDirect (0x1080), v41, v57
           CheckInterrupts
           PopInlineFrame
           Return v42
@@ -4220,9 +4220,9 @@ mod hir_opt_tests {
         bb8(v35:BasicObject, v36:BasicObject):
           PatchPoint NoSingletonClass(Array@0x1050)
           PatchPoint MethodRedefined(Array@0x1050, length@0x1058, cme:0x1060)
-          v66:CInt64 = ArrayLength v23
-          v67:Fixnum = BoxFixnum v66
-          v52:BasicObject = Send v35, :call, v67 # SendFallbackReason: Send: unsupported optimized method type BlockCall
+          v67:CInt64 = ArrayLength v23
+          v68:Fixnum = BoxFixnum v67
+          v52:BasicObject = Send v35, :call, v68 # SendFallbackReason: Send: unsupported optimized method type BlockCall
           CheckInterrupts
           PopInlineFrame
           Return v52
@@ -4258,14 +4258,14 @@ mod hir_opt_tests {
           PushInlineFrame v28 (0x1038), v11, v25, v17
           PatchPoint NoSingletonClass(Array@0x1040)
           PatchPoint MethodRedefined(Array@0x1040, length@0x1048, cme:0x1050)
-          v61:CInt64 = ArrayLength v25
-          v62:Fixnum = BoxFixnum v61
+          v73:CInt64[2] = Const CInt64(2)
+          v63:Fixnum = BoxFixnum v73
           PatchPoint MethodRedefined(Integer@0x1078, +@0x1080, cme:0x1088)
-          v66:Fixnum = FixnumAdd v62, v11
-          v70:Fixnum = FixnumAdd v66, v17
+          v67:Fixnum = FixnumAdd v63, v11
+          v71:Fixnum = FixnumAdd v67, v17
           CheckInterrupts
           PopInlineFrame
-          Return v70
+          Return v71
         ");
     }
 
@@ -4298,13 +4298,13 @@ mod hir_opt_tests {
           PushInlineFrame v26 (0x1038), v23, v15
           PatchPoint NoSingletonClass(Array@0x1040)
           PatchPoint MethodRedefined(Array@0x1040, length@0x1048, cme:0x1050)
-          v56:CInt64 = ArrayLength v23
-          v57:Fixnum = BoxFixnum v56
+          v64:CInt64[2] = Const CInt64(2)
+          v58:Fixnum = BoxFixnum v64
           PatchPoint MethodRedefined(Integer@0x1078, +@0x1080, cme:0x1088)
-          v61:Fixnum = FixnumAdd v57, v15
+          v62:Fixnum = FixnumAdd v58, v15
           CheckInterrupts
           PopInlineFrame
-          Return v61
+          Return v62
         ");
     }
 
@@ -4337,13 +4337,13 @@ mod hir_opt_tests {
           PushInlineFrame v25 (0x1038), v22, v21
           PatchPoint NoSingletonClass(Array@0x1040)
           PatchPoint MethodRedefined(Array@0x1040, length@0x1048, cme:0x1050)
-          v55:CInt64 = ArrayLength v22
-          v56:Fixnum = BoxFixnum v55
+          v63:CInt64[2] = Const CInt64(2)
+          v57:Fixnum = BoxFixnum v63
           PatchPoint MethodRedefined(Integer@0x1078, +@0x1080, cme:0x1088)
-          v60:Fixnum = FixnumAdd v56, v21
+          v61:Fixnum = FixnumAdd v57, v21
           CheckInterrupts
           PopInlineFrame
-          Return v60
+          Return v61
         ");
     }
 
@@ -5562,8 +5562,8 @@ mod hir_opt_tests {
           v19:ArrayExact = NewArray v12, v13
           PatchPoint NoSingletonClass(Array@0x1008)
           PatchPoint MethodRedefined(Array@0x1008, length@0x1010, cme:0x1018)
-          v31:CInt64 = ArrayLength v19
-          v32:Fixnum = BoxFixnum v31
+          v34:CInt64[2] = Const CInt64(2)
+          v32:Fixnum = BoxFixnum v34
           CheckInterrupts
           Return v32
         ");
@@ -5593,8 +5593,8 @@ mod hir_opt_tests {
           v19:ArrayExact = NewArray v12, v13
           PatchPoint NoSingletonClass(Array@0x1008)
           PatchPoint MethodRedefined(Array@0x1008, size@0x1010, cme:0x1018)
-          v31:CInt64 = ArrayLength v19
-          v32:Fixnum = BoxFixnum v31
+          v34:CInt64[2] = Const CInt64(2)
+          v32:Fixnum = BoxFixnum v34
           CheckInterrupts
           Return v32
         ");
@@ -18790,6 +18790,40 @@ mod hir_opt_tests {
           v26:Fixnum = BoxFixnum v27
           CheckInterrupts
           Return v26
+        ");
+    }
+
+    #[test]
+    fn test_fold_new_empty_array_length() {
+        eval(r#"
+            def test(a, b)
+              [].length
+            end
+            test(3, 4)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :a@0x1000
+          v4:BasicObject = LoadField v2, :b@0x1001
+          Jump bb3(v1, v3, v4)
+        bb2():
+          EntryPoint JIT(0)
+          v7:BasicObject = LoadArg :self@0
+          v8:BasicObject = LoadArg :a@1
+          v9:BasicObject = LoadArg :b@2
+          Jump bb3(v7, v8, v9)
+        bb3(v11:BasicObject, v12:BasicObject, v13:BasicObject):
+          v17:ArrayExact = NewArray
+          PatchPoint NoSingletonClass(Array@0x1008)
+          PatchPoint MethodRedefined(Array@0x1008, length@0x1010, cme:0x1018)
+          v33:CInt64[0] = Const CInt64(0)
+          v31:Fixnum = BoxFixnum v33
+          CheckInterrupts
+          Return v31
         ");
     }
 

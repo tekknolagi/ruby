@@ -461,6 +461,13 @@ impl Type {
         }
     }
 
+    pub fn cuint64_value(&self) -> Option<u64> {
+        match (self.is_subtype(types::CUInt64), self.spec()) {
+            (true, Specialization::Int(val)) => Some(val),
+            _ => None,
+        }
+    }
+
     fn int_spec_signed(&self) -> Option<i64> {
         assert!(self.is_subtype(types::CSigned), "int_spec_signed() only makes sense for signed integer types");
         match self.spec() {

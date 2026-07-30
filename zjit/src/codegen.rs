@@ -2177,12 +2177,13 @@ fn gen_new_array(
         return asm_ccall!(asm, rb_ec_ary_new_from_values, EC, num.into(), argv);
     }
 
-    let alloc_size = std::mem::size_of::<RArray>();
-
-    let flags = (RUBY_T_ARRAY as u64) | (RARRAY_EMBED_FLAG as u64);
+    let mut alloc_size: usize = 0;
+    let mut flags = VALUE(0);
+    let can_fastpath = unsafe { rb_zjit_array_new_can_fastpath(0, &mut alloc_size, &mut flags) };
+    assert!(can_fastpath, "empty array must fit in the embedded fastpath");
     let klass = unsafe { rb_cArray };
 
-    gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags, klass, |_asm, _obj| {}, |asm| {
+    gc_fastpath::gc_fastpath_new_obj(jit, asm, alloc_size, flags.as_u64(), klass, |_asm, _obj| {}, |asm| {
         asm_ccall!(asm, rb_ec_ary_new_from_values, EC, 0i64.into(), Opnd::UImm(0))
     })
 }

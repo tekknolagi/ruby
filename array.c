@@ -2928,6 +2928,21 @@ rb_ary_resurrect(VALUE ary)
 
 #if USE_ZJIT
 bool
+rb_zjit_array_new_can_fastpath(long len, size_t *alloc_size_out, VALUE *flags_out)
+{
+    long embed_capa = (sizeof(struct RArray) - offsetof(struct RArray, as.ary)) / sizeof(VALUE);
+
+    if (len > embed_capa) return false;
+
+    size_t size = sizeof(struct RArray);
+    shape_id_t shape_id = rb_shape_transition_slot_size(ROOT_SHAPE_ID | SHAPE_ID_LAYOUT_OTHER,
+                                                        rb_gc_size_slot_size(size));
+    *alloc_size_out = size;
+    *flags_out = T_ARRAY | RARRAY_EMBED_FLAG | ((VALUE)len << RARRAY_EMBED_LEN_SHIFT) | ((VALUE)shape_id << SHAPE_FLAG_SHIFT);
+    return true;
+}
+
+bool
 rb_zjit_array_dup_can_fastpath(VALUE ary, size_t *alloc_size_out, VALUE *flags_out, long *len_out)
 {
     long len = RARRAY_LEN(ary);

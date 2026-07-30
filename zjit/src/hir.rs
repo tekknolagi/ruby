@@ -5747,6 +5747,38 @@ impl Function {
                         compile_time_heap.retain(|(_, off), _| *off != offset);
                         insn_id
                     },
+                    Insn::NewArray { ref elements, .. } => {
+                        // A freshly allocated array has a statically known flags word (type tag,
+                        // embed flag + length, shape bits). Seed the compile-time heap with it as
+                        // a constant so later flags loads fold; the constant matches what both
+                        // gen_new_array's fastpath and the C slowpath write at runtime.
+                        let mut alloc_size: usize = 0;
+                        let mut flags = VALUE(0);
+                        if unsafe { rb_zjit_array_new_can_fastpath(elements.len() as std::os::raw::c_long, &mut alloc_size, &mut flags) } {
+                            new_insns.push(insn_id);
+                            let flags_const = self.new_insn(Insn::Const { val: Const::CUInt64(flags.as_u64()) });
+                            self.insn_types[flags_const.0] = self.infer_type(flags_const);
+                            compile_time_heap.insert((self.chase_insn(insn_id), RUBY_OFFSET_RBASIC_FLAGS), flags_const);
+                            flags_const
+                        } else {
+                            insn_id
+                        }
+                    },
+                    Insn::ArrayLength { array } if self.type_of(array).is_subtype(types::ArrayExact) => 'arm: {
+                        // If the array's flags word is a known constant with the embed flag set,
+                        // the length is encoded in the flags and can be folded. Any intervening
+                        // mutation (e.g. Array#push) is a Memory-writing call that cleared the
+                        // map, and heap<->embed transitions rewrite flags the same way.
+                        let key = (self.chase_insn(array), RUBY_OFFSET_RBASIC_FLAGS);
+                        let Some(&cached) = compile_time_heap.get(&key) else { break 'arm insn_id };
+                        let Some(flags) = self.type_of(cached).cuint64_value() else { break 'arm insn_id };
+                        if flags & RARRAY_EMBED_FLAG as u64 == 0 { break 'arm insn_id }
+                        let len = ((flags & RARRAY_EMBED_LEN_MASK as u64) >> RARRAY_EMBED_LEN_SHIFT) as i64;
+                        let len_const = self.new_insn(Insn::Const { val: Const::CInt64(len) });
+                        self.insn_types[len_const.0] = self.infer_type(len_const);
+                        self.make_equal_to(insn_id, len_const);
+                        len_const
+                    },
                     insn => {
                         // If an instruction affects memory and we haven't modeled it, the compile_time_heap is invalidated
                         if insn.effects_of().includes(Effect::write(abstract_heaps::Memory)) {
