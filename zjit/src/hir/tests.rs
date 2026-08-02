@@ -7112,3 +7112,78 @@ mod iongraph_tests {
         assert_snapshot!(json.to_string(), @r#"{"name":"multiple_successors", "mir":{"blocks":[{"ptr":4096, "id":0, "loopDepth":0, "attributes":[], "predecessors":[], "successors":[1], "instructions":[{"ptr":4102, "id":6, "opcode":"Entries bb1", "attributes":[], "inputs":[], "uses":[], "memInputs":[], "type":""}]}, {"ptr":4097, "id":1, "loopDepth":0, "attributes":[], "predecessors":[0], "successors":[2, 3], "instructions":[{"ptr":4096, "id":0, "opcode":"Const CBool(true)", "attributes":[], "inputs":[], "uses":[], "memInputs":[], "type":"Any"}, {"ptr":4097, "id":1, "opcode":"CondBranch v0, bb2(), bb3()", "attributes":[], "inputs":[0], "uses":[], "memInputs":[], "type":""}]}, {"ptr":4098, "id":2, "loopDepth":0, "attributes":[], "predecessors":[1], "successors":[], "instructions":[{"ptr":4098, "id":2, "opcode":"Const CBool(true)", "attributes":[], "inputs":[], "uses":[], "memInputs":[], "type":"Any"}, {"ptr":4099, "id":3, "opcode":"Return v2", "attributes":[], "inputs":[2], "uses":[], "memInputs":[], "type":""}]}, {"ptr":4099, "id":3, "loopDepth":0, "attributes":[], "predecessors":[1], "successors":[], "instructions":[{"ptr":4100, "id":4, "opcode":"Const CBool(false)", "attributes":[], "inputs":[], "uses":[], "memInputs":[], "type":"Any"}, {"ptr":4101, "id":5, "opcode":"Return v4", "attributes":[], "inputs":[4], "uses":[], "memInputs":[], "type":""}]}]}, "lir":{"blocks":[]}}"#);
     }
  }
+
+ /// Test dominator set computations.
+ #[cfg(test)]
+ mod dom_tree_tests {
+     use super::*;
+     use insta::assert_snapshot;
+
+     fn edge(target: BlockId) -> BranchEdge {
+         BranchEdge { target, args: vec![] }
+     }
+
+     #[test]
+     fn test_linked_list() {
+         let mut function = Function::new(std::ptr::null());
+         let bb0 = function.entry_block;
+         let bb1 = function.new_block(0);
+         let bb2 = function.new_block(0);
+         let bb3 = function.new_block(0);
+         function.push_insn(bb0, Insn::Jump(edge(bb1)));
+         function.push_insn(bb1, Insn::Jump(edge(bb2)));
+         function.push_insn(bb2, Insn::Jump(edge(bb3)));
+         let retval = function.push_insn(bb3, Insn::Const { val: Const::CBool(true) });
+         function.push_insn(bb3, Insn::Return { val: retval });
+         function.seal_entries();
+
+         assert_snapshot!(format!("{}", FunctionPrinter::without_snapshot(&function)), @"
+         fn <manual>:
+         bb1():
+           Jump bb2()
+         bb2():
+           Jump bb3()
+         bb3():
+           Jump bb4()
+         bb4():
+           v3:Any = Const CBool(true)
+           Return v3
+         ");
+
+         let dominators = Dominators::new(&function);
+         let intervals = DominatorTree::compute_dominator_intervals(&dominators);
+     }
+
+     #[test]
+     fn test_diamond() {
+        let mut function = Function::new(std::ptr::null());
+        let bb0 = function.entry_block;
+        let bb1 = function.new_block(0);
+        let bb2 = function.new_block(0);
+        let bb3 = function.new_block(0);
+        let v1 = function.push_insn(bb0, Insn::Const { val: Const::Value(Qfalse) });
+        let _ = function.push_insn(bb0, Insn::CondBranch { val: v1, if_true: edge(bb2), if_false: edge(bb1) });
+        function.push_insn(bb1, Insn::Jump(edge(bb3)));
+        function.push_insn(bb2, Insn::Jump(edge(bb3)));
+        let retval = function.push_insn(bb3, Insn::Const { val: Const::CBool(true) });
+        function.push_insn(bb3, Insn::Return { val: retval });
+        function.seal_entries();
+
+         assert_snapshot!(format!("{}", FunctionPrinter::without_snapshot(&function)), @"
+         fn <manual>:
+         bb1():
+           v0:Any = Const Value(false)
+           CondBranch v0, bb3(), bb2()
+         bb3():
+           Jump bb4()
+         bb2():
+           Jump bb4()
+         bb4():
+           v4:Any = Const CBool(true)
+           Return v4
+         ");
+
+         let dominators = Dominators::new(&function);
+         let intervals = DominatorTree::compute_dominator_intervals(&dominators);
+     }
+ }

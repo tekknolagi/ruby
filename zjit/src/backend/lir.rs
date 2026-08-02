@@ -3056,6 +3056,7 @@ impl Assembler
 
     /// Return a traversal of the block graph in reverse post-order.
     pub fn reverse_post_order(&self) -> Vec<BlockId> {
+        // TODO(max): Don't iterate over all blocks; keep track of entry blocks on Assembler
         let entry_blocks: Vec<BlockId> = self.basic_blocks.iter()
             .filter(|block| block.is_entry)
             .map(|block| block.id)

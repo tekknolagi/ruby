@@ -10103,6 +10103,10 @@ impl Dominators {
         Self::with_cfi(f, &mut cfi)
     }
 
+    pub fn num_blocks(&self) -> usize {
+        self.idoms.len()
+    }
+
     /// Compute immediate dominators using the "engineered algorithm" from
     /// Cooper, Harvey & Kennedy, "A Simple, Fast Dominance Algorithm" (2001),
     /// Figure 3: <https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf>
@@ -10201,6 +10205,71 @@ impl Dominators {
         }
         doms.sort();
         doms
+    }
+}
+
+impl std::fmt::Debug for Dominators {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, "digraph G {{")?;
+        for (block, &idom) in self.idoms.iter().enumerate() {
+            let block = BlockId(block);
+            if idom == IDOM_NONE { continue; }
+            if idom == block { continue; }  // Skip root self-loop
+            writeln!(f, "{} -> {};", idom, block)?;
+        }
+        writeln!(f, "}}")
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DominatorInterval {
+    pub pre: u32,
+    pub post: u32,
+}
+
+pub struct DominatorTree {
+}
+
+impl DominatorTree {
+    pub fn compute_dominator_intervals(dominators: &Dominators) -> Vec<DominatorInterval> {
+        let num_blocks = dominators.num_blocks();
+        let mut head = vec![None; num_blocks];
+        let mut next = vec![None; num_blocks];
+        // Build domtree:
+        // * each node in head points to the start of its children in the domtree
+        // * each node in next points to the next child in the domtree
+        // TODO(max): Iterate in RPO
+        let mut root = BlockId(0);
+        for child_idx in 0..num_blocks {
+            let child = BlockId(child_idx);
+            let parent = dominators.idom(child);
+            // Root has no children
+            if parent == child { root = child; continue }
+            // TODO(max): Remove unreachable branch
+            // Unreachable block
+            if parent == IDOM_NONE { continue }
+            next[child.0] = head[parent.0];
+            head[parent.0] = Some(child);
+        }
+        // Do a DFS of domtree and compute pre/post order traversal numbers for each block
+        // Dominator tree is (definitionally) a tree, so no need for visited/seen set
+        let mut result = vec![DominatorInterval { pre: 0, post: 0 }; num_blocks];
+        let mut counter = 0;
+        // (current block, next block to visit)
+        let mut stack = Vec::with_capacity(num_blocks);
+        stack.push((root, head[root.0]));
+        while let Some((block, next_child)) = stack.pop() {
+            if let Some(child) = next_child {
+                stack.push((block, next[child.0]));
+                result[child.0].pre = counter;
+                counter += 1;
+                stack.push((child, head[child.0]));
+            } else {
+                result[block.0].post = counter;
+                counter += 1;
+            }
+        }
+        result
     }
 }
 
