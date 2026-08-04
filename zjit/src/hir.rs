@@ -8053,10 +8053,6 @@ fn add_iseq_to_hir(
             result
         };
 
-        // Start the block off with a Snapshot so that if we need to insert a new Guard later on
-        // and we don't have a Snapshot handy, we can just iterate backward (at the earliest, to
-        // the beginning of the block).
-        fun.push_insn(block, Insn::Snapshot { state: Box::new(state.clone()) });
         while insn_idx < iseq_size {
             state.insn_idx = insn_idx as usize;
             // Get the current pc and opcode
