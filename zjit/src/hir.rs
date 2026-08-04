@@ -7463,16 +7463,12 @@ impl FrameState {
 
     /// Return itself without locals. Useful for side-exiting without spilling locals.
     fn without_locals(&self) -> Self {
-        let mut state = self.clone();
-        state.locals.clear();
-        state
+        FrameState { locals: vec![], stack: self.stack.clone(), ..*self }
     }
 
     /// Return itself without stack. Used by leaf calls with GC to reset SP to the base pointer.
     pub fn without_stack(&self) -> Self {
-        let mut state = self.clone();
-        state.stack.clear();
-        state
+        FrameState { stack: vec![], locals: self.locals.clone(), ..*self }
     }
 
     /// Return itself with a truncated stack.
