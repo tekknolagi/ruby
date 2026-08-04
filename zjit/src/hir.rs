@@ -7598,8 +7598,20 @@ impl FrameState {
         // we reuse an argument from another basic block.
         // TODO: Modify the register allocator to allow reusing an argument
         // of another basic block.
-        let mut args = vec![self_param];
-        args.extend(self.locals.iter().chain(self.stack.iter()).copied());
+        let mut args = Vec::with_capacity(1 + self.locals.len() + self.stack.len());
+        args.push(self_param);
+        args.extend(&self.locals);
+        args.extend(&self.stack);
+        args
+    }
+
+    fn as_args_replace(&self, self_param: InsnId, old: InsnId, new: InsnId) -> Vec<InsnId> {
+        let mut args = self.as_args(self_param);
+        for arg in &mut args {
+            if *arg == old {
+                *arg = new;
+            }
+        }
         args
     }
 
@@ -8565,14 +8577,13 @@ fn add_iseq_to_hir(
                     let target = insn_idx_to_block[&target_idx];
                     let nil_false_type = types::Falsy;
                     let nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: nil_false_type });
-                    let mut iffalse_state = state.clone();
-                    iffalse_state.replace(val, nil_false);
+                    let iffalse_args = state.as_args_replace(self_param, val, nil_false);
                     let fall_through = fun.new_block(insn_idx);
 
                     fun.push_insn(block, Insn::CondBranch {
                         val: test_id,
                         if_true: BranchEdge { target: fall_through, args: vec![] },
-                        if_false: BranchEdge { target, args: iffalse_state.as_args(self_param) }
+                        if_false: BranchEdge { target, args: iffalse_args }
                     });
 
                     block = fall_through;
@@ -8593,14 +8604,12 @@ fn add_iseq_to_hir(
                     let target = insn_idx_to_block[&target_idx];
                     let not_nil_false_type = types::Truthy;
                     let not_nil_false = fun.push_insn(block, Insn::RefineType { val, new_type: not_nil_false_type });
-                    let mut iftrue_state = state.clone();
-                    iftrue_state.replace(val, not_nil_false);
-
+                    let iftrue_args = state.as_args_replace(self_param, val, not_nil_false);
                     let fall_through = fun.new_block(insn_idx);
 
                     fun.push_insn(block, Insn::CondBranch {
                         val: test_id,
-                        if_true: BranchEdge { target, args: iftrue_state.as_args(self_param) },
+                        if_true: BranchEdge { target, args: iftrue_args },
                         if_false: BranchEdge { target: fall_through, args: vec![] }
                     });
 
@@ -8621,14 +8630,13 @@ fn add_iseq_to_hir(
                     let target_idx = insn_idx_at_offset(insn_idx, offset);
                     let target = insn_idx_to_block[&target_idx];
                     let nil = fun.push_insn(block, Insn::Const { val: Const::Value(Qnil) });
-                    let mut iftrue_state = state.clone();
-                    iftrue_state.replace(val, nil);
+                    let iftrue_args = state.as_args_replace(self_param, val, nil);
 
                     let fall_through = fun.new_block(insn_idx);
 
                     fun.push_insn(block, Insn::CondBranch {
                         val: test_id,
-                        if_true: BranchEdge { target, args: iftrue_state.as_args(self_param) },
+                        if_true: BranchEdge { target, args: iftrue_args },
                         if_false: BranchEdge { target: fall_through, args: vec![] }
                     });
 
@@ -9289,6 +9297,7 @@ fn add_iseq_to_hir(
                             // reusing exit_id so type specialization resolves the receiver from
                             // its refined, exact type instead of the polymorphic profile that is
                             // keyed at exit_id.
+                            // TODO(max): Investigate
                             let snapshot = fun.push_insn(iftrue_block, Insn::Snapshot { state: Box::new(exit_state.clone()) });
                             let refined_recv = fun.push_insn(iftrue_block, Insn::RefineType { val: recv, new_type: expected });
                             let send = fun.push_insn(iftrue_block, Insn::Send { recv: refined_recv, cd, block: None, args: args.clone(), state: snapshot, reason: Uncategorized(opcode) });
