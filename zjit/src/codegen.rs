@@ -767,6 +767,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::HashAref { hash, key, state } => { gen_hash_aref(jit, asm, function, opnd!(hash), opnd!(key), &function.frame_state(state)) },
         &Insn::HashAset { hash, key, val, state } => { no_output!(gen_hash_aset(jit, asm, function, opnd!(hash), opnd!(key), opnd!(val), &function.frame_state(state))) },
         &Insn::ArrayPush { array, val, state } => { no_output!(gen_array_push(asm, opnd!(array), opnd!(val), &function.frame_state(state))) },
+        &Insn::ArrayPushMany { array, ref vals, state } => { no_output!(gen_array_push_many(jit, asm, opnd!(array), opnds!(vals), &function.frame_state(state))) },
         &Insn::ToNewArray { val, state } => { gen_to_new_array(jit, asm, function, opnd!(val), &function.frame_state(state)) },
         &Insn::ToArray { val, state } => { gen_to_array(jit, asm, function, opnd!(val), &function.frame_state(state)) },
         &Insn::DefinedIvar { self_val, id, pushval, .. } => { gen_defined_ivar(asm, opnd!(self_val), id, pushval) },
@@ -1328,6 +1329,12 @@ fn gen_hash_aset(jit: &mut JITState, asm: &mut Assembler, function: &Function, h
 fn gen_array_push(asm: &mut Assembler, array: Opnd, val: Opnd, state: &FrameState) {
     gen_prepare_leaf_call_with_gc(asm, state);
     asm_ccall!(asm, rb_ary_push, array, val);
+}
+
+fn gen_array_push_many(jit: &mut JITState, asm: &mut Assembler, array: Opnd, vals: Vec<Opnd>, state: &FrameState) {
+    gen_prepare_leaf_call_with_gc(asm, state);
+    let argv_ptr = gen_push_opnds(jit, asm, &vals);
+    asm_ccall!(asm, rb_ary_cat, array, argv_ptr, vals.len().into());
 }
 
 fn gen_to_new_array(jit: &mut JITState, asm: &mut Assembler, function: &Function, val: Opnd, state: &FrameState) -> lir::Opnd {

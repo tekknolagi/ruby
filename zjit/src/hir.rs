@@ -989,6 +989,7 @@ pub enum Insn {
     ArrayExtend { left: InsnId, right: InsnId, state: InsnId },
     /// Push `val` onto `array`, where `array` is already `Array`.
     ArrayPush { array: InsnId, val: InsnId, state: InsnId },
+    ArrayPushMany { array: InsnId, vals: Vec<InsnId>, state: InsnId },
     ArrayAref { array: InsnId, index: InsnId },
     ArrayAset { array: InsnId, index: InsnId, val: InsnId },
     ArrayPop { array: InsnId, state: InsnId },
@@ -1587,6 +1588,11 @@ macro_rules! for_each_operand_impl {
                 $visit_one!(*val);
                 $visit_one!(*state);
             }
+            Insn::ArrayPushMany { array, vals, state } => {
+                $visit_one!(*array);
+                $visit_many!(*vals);
+                $visit_one!(*state);
+            }
             Insn::AnyToString { val, state, .. } => {
                 $visit_one!(*val);
                 $visit_one!(*state);
@@ -1634,7 +1640,7 @@ impl Insn {
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
             | Insn::CheckInterrupts { .. } | Insn::BreakPoint | Insn::Unreachable
             | Insn::StoreField { .. } | Insn::WriteBarrier { .. } | Insn::HashAset { .. }
-            | Insn::ArrayAset { .. }
+            | Insn::ArrayAset { .. } | Insn::ArrayPushMany { .. }
             | Insn::PushInlineFrame { .. } | Insn::PopInlineFrame { .. } => false,
             _ => true,
         }
@@ -1725,6 +1731,7 @@ impl Insn {
             Insn::DupArrayInclude { .. } => effects::Any,
             Insn::ArrayExtend { .. } => effects::Any,
             Insn::ArrayPush { .. } => effects::Any,
+            Insn::ArrayPushMany { .. } => effects::Any,
             Insn::ArrayAref { ..  } => effects::Any,
             Insn::ArrayAset { .. } => effects::Any,
             Insn::ArrayPop { ..  } => effects::Any,
@@ -2376,6 +2383,11 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::ToNewArray { val, .. } => write!(f, "ToNewArray {val}"),
             Insn::ArrayExtend { left, right, .. } => write!(f, "ArrayExtend {left}, {right}"),
             Insn::ArrayPush { array, val, .. } => write!(f, "ArrayPush {array}, {val}"),
+            Insn::ArrayPushMany { array, vals, .. } => {
+                write!(f, "ArrayPushMany {array}")?;
+                write_separated!(f, ", ", ", ", vals);
+                Ok(())
+            }
             Insn::StringIntern { val, .. } => { write!(f, "StringIntern {val}") },
             Insn::AnyToString { val, .. } => { write!(f, "AnyToString {val}") },
             Insn::SideExit { reason, recompile, .. } => {
@@ -3323,7 +3335,7 @@ impl Function {
             | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
             | Insn::CheckInterrupts { .. } | Insn::BreakPoint | Insn::Unreachable
             | Insn::StoreField { .. } | Insn::WriteBarrier { .. } | Insn::HashAset { .. } | Insn::ArrayAset { .. }
-            | Insn::PushInlineFrame { .. } | Insn::PopInlineFrame { .. } =>
+            | Insn::PushInlineFrame { .. } | Insn::PopInlineFrame { .. } | Insn::ArrayPushMany { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}. See Insn::has_output().", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
@@ -7115,6 +7127,13 @@ impl Function {
             | Insn::ArrayLength { array, .. } => {
                 self.assert_subtype(insn_id, array, types::Array)
             }
+            Insn::ArrayPushMany { array, vals, .. } => {
+                self.assert_subtype(insn_id, array, types::Array)?;
+                for val in vals {
+                    self.assert_subtype(insn_id, val, types::BasicObject)?;
+                }
+                Ok(())
+            }
             Insn::ArrayAref { array, index } => {
                 self.assert_subtype(insn_id, array, types::Array)?;
                 self.assert_subtype(insn_id, index, types::CInt64)
@@ -8438,9 +8457,7 @@ fn add_iseq_to_hir(
                     let vals = state.stack_pop_n(count)?;
                     let array = state.stack_pop()?;
                     fun.guard_not_frozen(block, array, exit_id);
-                    for val in vals.into_iter() {
-                        fun.push_insn(block, Insn::ArrayPush { array, val, state: exit_id });
-                    }
+                    fun.push_insn(block, Insn::ArrayPushMany { array, vals, state: exit_id });
                     state.stack_push(array);
                 }
                 YARVINSN_putobject_INT2FIX_0_ => {
