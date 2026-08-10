@@ -56,15 +56,19 @@ pc = frame.subeffect 'PC'
 locals = frame.subeffect 'Locals'
 stack = frame.subeffect 'Stack'
 
+all_effects = Set[any, *any.all_subeffects]
+num_bits_required = all_effects.count { |effect| effect.subeffects.empty? }
+next_power_of_two = 1 << (Math.log2(num_bits_required).ceil)
+
 # Use the smallest unsigned value needed to describe all effect bits
 # If it becomes an issue, this can be generated but for now we do it manually
-$int_label = 'u8'
+$int_label = "u#{next_power_of_two}"
 
 # Assign individual bits to effect leaves and union bit patterns to nodes with subeffects
 num_bits = 0
 $bits = {"Empty" => ["0#{$int_label}"]}
 $numeric_bits = {"Empty" => 0}
-Set[any, *any.all_subeffects].sort_by(&:name).each {|effect|
+all_effects.sort_by(&:name).each {|effect|
   subeffects = effect.subeffects
   if subeffects.empty?
     # Assign bits for leaves
