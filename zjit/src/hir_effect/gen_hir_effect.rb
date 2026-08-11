@@ -47,6 +47,8 @@ any = Effect.new 'Any'
 # Build the effect universe.
 allocator = any.subeffect 'Allocator'
 control = any.subeffect 'Control'
+control.subeffect 'ToInterpreter'
+control.subeffect 'ToJIT'
 memory = any.subeffect 'Memory'
 patch_point = any.subeffect 'PatchPoint'
 interrupt_flag = memory.subeffect 'InterruptFlag'

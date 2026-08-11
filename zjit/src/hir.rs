@@ -1693,6 +1693,7 @@ impl Insn {
     // TODO(Jacob): Add sideeffect failure bit
     fn effects_of(&self) -> Effect {
         const allocates: Effect = Effect::read_write(abstract_heaps::PC.union(abstract_heaps::Allocator), abstract_heaps::Allocator);
+        const empty_or_exit: Effect = Effect::read_write(abstract_heaps::Empty, abstract_heaps::ToInterpreter);
         match &self {
             Insn::Comment { .. } => effects::Empty,
             Insn::Const { .. } => effects::Empty,
@@ -1836,7 +1837,7 @@ impl Insn {
             Insn::EntryPoint { .. } => effects::Any,
             Insn::Return { .. } => effects::Any,
             Insn::Throw { .. } => effects::Any,
-            Insn::FixnumAdd { .. } => effects::Empty,
+            Insn::FixnumAdd { .. } => empty_or_exit,
             Insn::FixnumSub { .. } => effects::Empty,
             Insn::FixnumMult { .. } => effects::Empty,
             Insn::FixnumDiv { .. } => effects::Any,
