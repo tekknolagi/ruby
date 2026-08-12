@@ -3149,6 +3149,14 @@ impl Function {
         id
     }
 
+    // Add an instruction to an SSA block
+    pub fn prepend_insn(&mut self, block: BlockId, insn: Insn) -> InsnId {
+        assert!(!matches!(insn, Insn::Param), "Cannot prepend a Param instruction");
+        let id = self.new_insn(insn);
+        self.blocks[block.to_usize()].insns.insert(0, id);
+        id
+    }
+
     pub fn push_comment(&mut self, block: BlockId, message: String) -> InsnId {
         self.push_insn(block, Insn::Comment { message })
     }
@@ -6310,7 +6318,7 @@ impl Function {
         let dominators = Dominators::new(self);
         for &block in dominators.cfi.reverse_post_order() {
             let idom = dominators.idom(block);
-            let mut rewrite_map = rewrite_maps[idom.to_usize()].clone().unwrap_or_else(|| HashMap::new());
+            let mut rewrite_map = rewrite_maps[block.to_usize()].clone().unwrap_or_else(|| rewrite_maps[idom.to_usize()].clone().unwrap_or_else(|| HashMap::new()));
             let mut value_number = value_numbers[idom.to_usize()].clone().unwrap_or_else(|| HashMap::new());
             self.blocks[block.to_usize()].insns.retain(|&insn_id| {
                 let canonical_id = self.union_find.borrow().find_const(insn_id);
@@ -6351,6 +6359,26 @@ impl Function {
             });
             rewrite_maps[block.to_usize()] = Some(rewrite_map);
             value_numbers[block.to_usize()] = Some(value_number);
+
+            // If terminator is CondBranch vNN, bbL, bbM, then we can:
+            // * Seed bbL with a rewrite of vNN to CBool(true)
+            // * Seed bbM with a rewrite of vNN to CBool(false)
+            if let Some(Insn::CondBranch { val, if_true, if_false }) = self.blocks[block.to_usize()].insns.last().map(|&id| &self.insns[id.to_usize()]) {
+                let val = self.union_find.borrow().find_const(*val);
+                let if_true_target = if_true.target;
+                let if_false_target = if_false.target;
+                if if_true_target != if_false_target {
+                    let block_rewrite_map = rewrite_maps[block.to_usize()].clone().unwrap();
+                    let true_map = rewrite_maps[if_false_target.to_usize()].get_or_insert_with(|| block_rewrite_map.clone());
+                    true_map.insert(val, self.prepend_insn(if_true_target, Insn::Const { val: Const::CBool(true) }));
+                    let true_map = true_map.clone();
+                    let false_map = rewrite_maps[if_false_target.to_usize()].get_or_insert_with(|| block_rewrite_map.clone());
+                    false_map.insert(val, self.prepend_insn(if_false_target, Insn::Const { val: Const::CBool(false) }));
+                    let false_map = false_map.clone();
+                    rewrite_maps[if_true_target.to_usize()] = Some(true_map);
+                    rewrite_maps[if_false_target.to_usize()] = Some(false_map);
+                }
+            }
         }
 
         crate::stats::trace_compile_phase("infer_types", || self.infer_types());
@@ -7098,6 +7126,7 @@ impl Function {
             run_pass!(canonicalize);
             run_pass!(fold_constants);
             run_pass!(canonicalize);
+            run_pass!(fold_constants);
             run_pass!(clean_cfg);
             run_pass!(remove_redundant_patch_points);
             run_pass!(remove_duplicate_check_interrupts);
