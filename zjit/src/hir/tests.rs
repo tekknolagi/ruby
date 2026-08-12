@@ -965,7 +965,8 @@ pub(crate) mod hir_build_tests {
 
     #[test]
     fn test_opt_plus() {
-        eval("def test = 1+2");
+        eval("def test = 1+2
+              test");
         assert_contains_opcode("test", YARVINSN_opt_plus);
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:1:
@@ -1223,6 +1224,7 @@ pub(crate) mod hir_build_tests {
               end
             end
           end
+          test
         ");
         assert_contains_opcodes(
             "test",
@@ -2054,6 +2056,7 @@ pub(crate) mod hir_build_tests {
             def test
               bar(2, 3)
             end
+            test
         ");
         assert_contains_opcode("test", YARVINSN_opt_send_without_block);
         assert_snapshot!(hir_string("test"), @"
@@ -2364,6 +2367,7 @@ pub(crate) mod hir_build_tests {
             def test
               :"foo#{123}"
             end
+            test
         "#);
         assert_contains_opcode("test", YARVINSN_intern);
         assert_snapshot!(hir_string("test"), @"
@@ -2379,35 +2383,28 @@ pub(crate) mod hir_build_tests {
         bb3(v6:BasicObject):
           v10:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
           v12:Fixnum[123] = Const Value(123)
-          v15:CBool[false] = HasType v12, String
-          CondBranch v15, bb4(), bb5()
+          v15:Fixnum[123] = GuardType v12, Fixnum
+          v16:BasicObject = Send v15, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:CBool = HasType v16, String
+          CondBranch v18, bb4(), bb5()
         bb4():
-          v17 = RefineType v12, String
-          Jump bb6(v17)
-        bb5():
-          v19:Fixnum[123] = RefineType v12, NotString
-          v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v20:String = RefineType v16, String
           Jump bb6(v20)
-        bb6(v22:BasicObject):
-          v24:CBool = HasType v22, String
-          CondBranch v24, bb7(), bb8()
-        bb7():
-          v26:String = RefineType v22, String
-          Jump bb9(v26)
-        bb8():
-          v28:StringExact = AnyToString v12
-          Jump bb9(v28)
-        bb9(v30:String):
-          v32:StringExact = StringConcat v10, v30
-          v34:Symbol = StringIntern v32
+        bb5():
+          v22:StringExact = AnyToString v12
+          Jump bb6(v22)
+        bb6(v24:String):
+          v26:StringExact = StringConcat v10, v24
+          v28:Symbol = StringIntern v26
           CheckInterrupts
-          Return v34
+          Return v28
         ");
     }
 
     #[test]
     fn different_objects_get_addresses() {
-        eval("def test = unknown_method([0], [1], '2', '2')");
+        eval("def test = unknown_method([0], [1], '2', '2')
+              test rescue nil");
 
         // The 2 string literals have the same address because they're deduped.
         assert_snapshot!(hir_string("test"), @"
@@ -2439,6 +2436,7 @@ pub(crate) mod hir_build_tests {
     fn test_cant_compile_splat() {
         eval("
             def test(a) = foo(*a)
+            test([1]) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2465,6 +2463,7 @@ pub(crate) mod hir_build_tests {
     fn test_compile_block_arg() {
         eval("
             def test(a) = foo(&a)
+            test(nil) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2490,6 +2489,7 @@ pub(crate) mod hir_build_tests {
     fn test_cant_compile_kwarg() {
         eval("
             def test(a) = foo(a: 1)
+            test(nil) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2516,6 +2516,7 @@ pub(crate) mod hir_build_tests {
     fn test_cant_compile_kw_splat() {
         eval("
             def test(a) = foo(**a)
+            test({a: 1}) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2660,10 +2661,16 @@ pub(crate) mod hir_build_tests {
     #[test]
     fn test_compile_super_forward_with_use() {
         eval("
-            def test(...) = super(...) + 1
+            class C
+              def test(a) = a
+            end
+            class D < C
+              def test(...) = super(...) + 1
+            end
+            D.new.test(1)
         ");
-        assert_snapshot!(hir_string("test"), @"
-        fn test@<compiled>:2:
+        assert_snapshot!(hir_string_proc("D.instance_method(:test)"), @"
+        fn test@<compiled>:6:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -2739,6 +2746,7 @@ pub(crate) mod hir_build_tests {
     fn test_cant_compile_kw_splat_mut() {
         eval("
             def test(a) = foo **a, b: 1
+            test({a: 1}) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2768,6 +2776,7 @@ pub(crate) mod hir_build_tests {
     fn test_cant_compile_splat_mut() {
         eval("
             def test(*) = foo *, 1
+            test(1) rescue nil
         ");
         assert_snapshot!(hir_string("test"), @"
         fn test@<compiled>:2:
@@ -2870,6 +2879,7 @@ pub(crate) mod hir_build_tests {
         eval("
             class C; end
             def test = C.new
+            test
         ");
         assert_contains_opcode("test", YARVINSN_opt_new);
         assert_snapshot!(hir_string("test"), @"
@@ -2883,20 +2893,20 @@ pub(crate) mod hir_build_tests {
           v4:BasicObject = LoadArg :self@0
           Jump bb3(v4)
         bb3(v6:BasicObject):
-          v10:BasicObject = GetConstantPath 0x1000
-          v12:NilClass = Const Value(nil)
-          v15:CBool = IsMethodCFunc v10, :new
-          CondBranch v15, bb6(), bb4(v6, v12, v10)
+          PatchPoint StableConstantNames(0x1000, C)
+          v11:ClassSubclass[C@0x1008] = Const Value(VALUE(0x1008))
+          v13:NilClass = Const Value(nil)
+          v16:CBool = IsMethodCFunc v11, :new
+          CondBranch v16, bb6(), bb4(v6, v13, v11)
         bb6():
-          v17:HeapBasicObject = ObjectAlloc v10
-          v19:BasicObject = Send v17, :initialize # SendFallbackReason: Uncategorized(opt_send_without_block)
-          Jump bb5(v6, v17, v19)
-        bb4(v22:BasicObject, v23:NilClass, v24:BasicObject):
-          v27:BasicObject = Send v24, :new # SendFallbackReason: Uncategorized(opt_send_without_block)
-          Jump bb5(v22, v27, v23)
-        bb5(v30:BasicObject, v31:BasicObject, v32:BasicObject):
+          v18:HeapBasicObject = ObjectAlloc v11
+          v20:BasicObject = Send v18, :initialize # SendFallbackReason: Uncategorized(opt_send_without_block)
+          Jump bb5(v6, v18, v20)
+        bb5(v29:BasicObject, v30:HeapBasicObject, v31:BasicObject):
           CheckInterrupts
-          Return v31
+          Return v30
+        bb4(v23:BasicObject, v24:NilClass, v25:ClassSubclass[C@0x1008]):
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -3083,6 +3093,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3129,6 +3140,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3165,6 +3177,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3214,6 +3227,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         "#);
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3252,6 +3266,7 @@ pub(crate) mod hir_build_tests {
               [a,b].pack 'C', buffer: buf
               buf
             end
+            test(1,2)
         "#);
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3299,6 +3314,7 @@ pub(crate) mod hir_build_tests {
               [a,b].pack 'C', buffer: buf
               buf
             end
+            test(1,2)
         "#);
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3339,6 +3355,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3390,6 +3407,7 @@ pub(crate) mod hir_build_tests {
               puts [1,2,3]
               result
             end
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_newarray_send);
         assert_snapshot!(hir_string("test"), @"
@@ -3482,6 +3500,7 @@ pub(crate) mod hir_build_tests {
     fn test_opt_length() {
         eval("
             def test(a,b) = [a,b].length
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_length);
         assert_snapshot!(hir_string("test"), @"
@@ -3511,6 +3530,7 @@ pub(crate) mod hir_build_tests {
     fn test_opt_size() {
         eval("
             def test(a,b) = [a,b].size
+            test(1,2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_size);
         assert_snapshot!(hir_string("test"), @"
@@ -3796,6 +3816,7 @@ pub(crate) mod hir_build_tests {
     fn test_getblockparamproxy() {
         eval("
             def test(&block) = tap(&block)
+            test {}
         ");
         assert_contains_opcode("test", YARVINSN_getblockparamproxy);
         assert_snapshot!(hir_string("test"), @"
@@ -3882,6 +3903,7 @@ pub(crate) mod hir_build_tests {
               b = block
               tap(&block)
             end
+            test {}
         ");
         assert_contains_opcode("test", YARVINSN_getblockparamproxy);
         assert_snapshot!(hir_string("test"), @"
@@ -3939,6 +3961,7 @@ pub(crate) mod hir_build_tests {
                 tap(&block)
               end
             end
+            test {}.call
         ");
         assert_snapshot!(hir_string_proc("test"), @"
         fn block in test@<compiled>:4:
@@ -3972,10 +3995,10 @@ pub(crate) mod hir_build_tests {
           v31:BasicObject = LoadField v27, :block@0x1001
           Jump bb9(v31)
         bb8():
-          v33:CInt64 = LoadField v27, :VM_ENV_DATA_INDEX_SPECVAL@0x1002
-          v34:CInt64 = GuardAnyBitSet v33, CUInt64(1) recompile
-          v35:ObjectSubclass[BlockParamProxy] = Const Value(VALUE(0x1008))
-          Jump bb9(v35)
+          v33:BasicObject = LoadField v27, :VM_ENV_DATA_INDEX_SPECVAL@0x1002
+          v34:BasicObject = CCall v33, :rb_obj_is_proc@0x1003
+          v35:TrueClass = GuardBitEquals v34, Value(true) recompile
+          Jump bb9(v33)
         bb9(v26:BasicObject):
           v38:BasicObject = Send v8, &block, :tap, v26 # SendFallbackReason: Uncategorized(send)
           CheckInterrupts
@@ -4611,6 +4634,7 @@ pub(crate) mod hir_build_tests {
     fn test_aset() {
         eval("
             def test(a, b) = a[b] = 1
+            test([0], 0)
         ");
         assert_contains_opcode("test", YARVINSN_opt_aset);
         assert_snapshot!(hir_string("test"), @"
@@ -4641,6 +4665,7 @@ pub(crate) mod hir_build_tests {
     fn test_aref() {
         eval("
             def test(a, b) = a[b]
+            test([0], 0)
         ");
         assert_contains_opcode("test", YARVINSN_opt_aref);
         assert_snapshot!(hir_string("test"), @"
@@ -4669,6 +4694,7 @@ pub(crate) mod hir_build_tests {
     fn opt_empty_p() {
         eval("
             def test(x) = x.empty?
+            test([])
         ");
         assert_contains_opcode("test", YARVINSN_opt_empty_p);
         assert_snapshot!(hir_string("test"), @"
@@ -4695,6 +4721,7 @@ pub(crate) mod hir_build_tests {
     fn opt_succ() {
         eval("
             def test(x) = x.succ
+            test(1)
         ");
         assert_contains_opcode("test", YARVINSN_opt_succ);
         assert_snapshot!(hir_string("test"), @"
@@ -4721,6 +4748,7 @@ pub(crate) mod hir_build_tests {
     fn opt_and() {
         eval("
             def test(x, y) = x & y
+            test(1, 2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_and);
         assert_snapshot!(hir_string("test"), @"
@@ -4749,6 +4777,7 @@ pub(crate) mod hir_build_tests {
     fn opt_or() {
         eval("
             def test(x, y) = x | y
+            test(1, 2)
         ");
         assert_contains_opcode("test", YARVINSN_opt_or);
         assert_snapshot!(hir_string("test"), @"
@@ -4777,6 +4806,7 @@ pub(crate) mod hir_build_tests {
     fn opt_not() {
         eval("
             def test(x) = !x
+            test(1)
         ");
         assert_contains_opcode("test", YARVINSN_opt_not);
         assert_snapshot!(hir_string("test"), @"
@@ -4803,6 +4833,7 @@ pub(crate) mod hir_build_tests {
     fn opt_regexpmatch2() {
         eval("
             def test(regexp, matchee) = regexp =~ matchee
+            test(/a/, 'a')
         ");
         assert_contains_opcode("test", YARVINSN_opt_regexpmatch2);
         assert_snapshot!(hir_string("test"), @"
@@ -4835,6 +4866,7 @@ pub(crate) mod hir_build_tests {
             def test
               alias aliased __callee__
             end
+            test
         ");
         assert_contains_opcode("test", YARVINSN_putspecialobject);
         assert_snapshot!(hir_string("test"), @"
@@ -4922,6 +4954,7 @@ pub(crate) mod hir_build_tests {
     fn test_branchnil() {
         eval("
         def test(x) = x&.itself
+        test(1)
         ");
         assert_contains_opcode("test", YARVINSN_branchnil);
         assert_snapshot!(hir_string("test"), @"
@@ -4961,6 +4994,7 @@ pub(crate) mod hir_build_tests {
             4
           end
         end
+        test(1)
         ");
         assert_contains_opcode("test", YARVINSN_branchnil);
         // Note that IsNil has as its operand a value that we know statically *cannot* be nil
@@ -5333,6 +5367,7 @@ pub(crate) mod hir_build_tests {
     fn dupn() {
         eval("
             def test(x) = (x[0, 1] ||= 2)
+            test([1, 2])
         ");
         assert_contains_opcode("test", YARVINSN_dupn);
         assert_snapshot!(hir_string("test"), @"
@@ -5356,15 +5391,13 @@ pub(crate) mod hir_build_tests {
           v25:CBool = Test v22
           v26:Truthy = RefineType v22, Truthy
           CondBranch v25, bb4(v9, v10, v14, v10, v17, v19, v26), bb5()
-        bb4(v40:BasicObject, v41:BasicObject, v42:NilClass, v43:BasicObject, v44:Fixnum[0], v45:Fixnum[1], v46:Truthy):
+        bb4(v35:BasicObject, v36:BasicObject, v37:NilClass, v38:BasicObject, v39:Fixnum[0], v40:Fixnum[1], v41:Truthy):
           CheckInterrupts
-          Return v46
+          Return v41
         bb5():
           v28:Falsy = RefineType v22, Falsy
           v31:Fixnum[2] = Const Value(2)
-          v34:BasicObject = Send v10, :[]=, v17, v19, v31 # SendFallbackReason: Uncategorized(opt_send_without_block)
-          CheckInterrupts
-          Return v31
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -5372,6 +5405,7 @@ pub(crate) mod hir_build_tests {
     fn test_objtostring_anytostring() {
         eval("
             def test = \"#{1}\"
+            test
         ");
         assert_contains_opcode("test", YARVINSN_objtostring);
         assert_snapshot!(hir_string("test"), @"
@@ -5387,28 +5421,20 @@ pub(crate) mod hir_build_tests {
         bb3(v6:BasicObject):
           v10:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
           v12:Fixnum[1] = Const Value(1)
-          v15:CBool[false] = HasType v12, String
-          CondBranch v15, bb4(), bb5()
+          v15:Fixnum[1] = GuardType v12, Fixnum
+          v16:BasicObject = Send v15, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:CBool = HasType v16, String
+          CondBranch v18, bb4(), bb5()
         bb4():
-          v17 = RefineType v12, String
-          Jump bb6(v17)
-        bb5():
-          v19:Fixnum[1] = RefineType v12, NotString
-          v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v20:String = RefineType v16, String
           Jump bb6(v20)
-        bb6(v22:BasicObject):
-          v24:CBool = HasType v22, String
-          CondBranch v24, bb7(), bb8()
-        bb7():
-          v26:String = RefineType v22, String
-          Jump bb9(v26)
-        bb8():
-          v28:StringExact = AnyToString v12
-          Jump bb9(v28)
-        bb9(v30:String):
-          v32:StringExact = StringConcat v10, v30
+        bb5():
+          v22:StringExact = AnyToString v12
+          Jump bb6(v22)
+        bb6(v24:String):
+          v26:StringExact = StringConcat v10, v24
           CheckInterrupts
-          Return v32
+          Return v26
         ");
     }
 
@@ -5416,6 +5442,7 @@ pub(crate) mod hir_build_tests {
     fn test_string_concat() {
         eval(r##"
             def test = "#{1}#{2}#{3}"
+            test
         "##);
         assert_contains_opcode("test", YARVINSN_concatstrings);
         assert_snapshot!(hir_string("test"), @"
@@ -5430,68 +5457,44 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          v13:CBool[false] = HasType v10, String
-          CondBranch v13, bb4(), bb5()
+          v13:Fixnum[1] = GuardType v10, Fixnum
+          v14:BasicObject = Send v13, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v16:CBool = HasType v14, String
+          CondBranch v16, bb4(), bb5()
         bb4():
-          v15 = RefineType v10, String
-          Jump bb6(v15)
-        bb5():
-          v17:Fixnum[1] = RefineType v10, NotString
-          v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:String = RefineType v14, String
           Jump bb6(v18)
-        bb6(v20:BasicObject):
-          v22:CBool = HasType v20, String
-          CondBranch v22, bb7(), bb8()
+        bb5():
+          v20:StringExact = AnyToString v10
+          Jump bb6(v20)
+        bb6(v22:String):
+          v24:Fixnum[2] = Const Value(2)
+          v27:Fixnum[2] = GuardType v24, Fixnum
+          v28:BasicObject = Send v27, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v30:CBool = HasType v28, String
+          CondBranch v30, bb7(), bb8()
         bb7():
-          v24:String = RefineType v20, String
-          Jump bb9(v24)
+          v32:String = RefineType v28, String
+          Jump bb9(v32)
         bb8():
-          v26:StringExact = AnyToString v10
-          Jump bb9(v26)
-        bb9(v28:String):
-          v30:Fixnum[2] = Const Value(2)
-          v33:CBool[false] = HasType v30, String
-          CondBranch v33, bb10(), bb11()
+          v34:StringExact = AnyToString v24
+          Jump bb9(v34)
+        bb9(v36:String):
+          v38:Fixnum[3] = Const Value(3)
+          v41:Fixnum[3] = GuardType v38, Fixnum
+          v42:BasicObject = Send v41, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v44:CBool = HasType v42, String
+          CondBranch v44, bb10(), bb11()
         bb10():
-          v35 = RefineType v30, String
-          Jump bb12(v35)
+          v46:String = RefineType v42, String
+          Jump bb12(v46)
         bb11():
-          v37:Fixnum[2] = RefineType v30, NotString
-          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb12(v38)
-        bb12(v40:BasicObject):
-          v42:CBool = HasType v40, String
-          CondBranch v42, bb13(), bb14()
-        bb13():
-          v44:String = RefineType v40, String
-          Jump bb15(v44)
-        bb14():
-          v46:StringExact = AnyToString v30
-          Jump bb15(v46)
-        bb15(v48:String):
-          v50:Fixnum[3] = Const Value(3)
-          v53:CBool[false] = HasType v50, String
-          CondBranch v53, bb16(), bb17()
-        bb16():
-          v55 = RefineType v50, String
-          Jump bb18(v55)
-        bb17():
-          v57:Fixnum[3] = RefineType v50, NotString
-          v58:BasicObject = Send v57, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb18(v58)
-        bb18(v60:BasicObject):
-          v62:CBool = HasType v60, String
-          CondBranch v62, bb19(), bb20()
-        bb19():
-          v64:String = RefineType v60, String
-          Jump bb21(v64)
-        bb20():
-          v66:StringExact = AnyToString v50
-          Jump bb21(v66)
-        bb21(v68:String):
-          v70:StringExact = StringConcat v28, v48, v68
+          v48:StringExact = AnyToString v38
+          Jump bb12(v48)
+        bb12(v50:String):
+          v52:StringExact = StringConcat v22, v36, v50
           CheckInterrupts
-          Return v70
+          Return v52
         ");
     }
 
@@ -5499,6 +5502,7 @@ pub(crate) mod hir_build_tests {
     fn test_string_concat_empty() {
         eval(r##"
             def test = "#{}"
+            test
         "##);
         assert_contains_opcode("test", YARVINSN_concatstrings);
         assert_snapshot!(hir_string("test"), @"
@@ -5514,28 +5518,20 @@ pub(crate) mod hir_build_tests {
         bb3(v6:BasicObject):
           v10:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
           v12:NilClass = Const Value(nil)
-          v15:CBool[false] = HasType v12, String
-          CondBranch v15, bb4(), bb5()
+          v15:NilClass = GuardType v12, NilClass
+          v16:BasicObject = Send v15, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:CBool = HasType v16, String
+          CondBranch v18, bb4(), bb5()
         bb4():
-          v17 = RefineType v12, String
-          Jump bb6(v17)
-        bb5():
-          v19:NilClass = RefineType v12, NotString
-          v20:BasicObject = Send v19, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v20:String = RefineType v16, String
           Jump bb6(v20)
-        bb6(v22:BasicObject):
-          v24:CBool = HasType v22, String
-          CondBranch v24, bb7(), bb8()
-        bb7():
-          v26:String = RefineType v22, String
-          Jump bb9(v26)
-        bb8():
-          v28:StringExact = AnyToString v12
-          Jump bb9(v28)
-        bb9(v30:String):
-          v32:StringExact = StringConcat v10, v30
+        bb5():
+          v22:StringExact = AnyToString v12
+          Jump bb6(v22)
+        bb6(v24:String):
+          v26:StringExact = StringConcat v10, v24
           CheckInterrupts
-          Return v32
+          Return v26
         ");
     }
 
@@ -5543,6 +5539,7 @@ pub(crate) mod hir_build_tests {
     fn test_toregexp() {
         eval(r##"
             def test = /#{1}#{2}#{3}/
+            test
         "##);
         assert_contains_opcode("test", YARVINSN_toregexp);
         assert_snapshot!(hir_string("test"), @"
@@ -5557,68 +5554,44 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          v13:CBool[false] = HasType v10, String
-          CondBranch v13, bb4(), bb5()
+          v13:Fixnum[1] = GuardType v10, Fixnum
+          v14:BasicObject = Send v13, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v16:CBool = HasType v14, String
+          CondBranch v16, bb4(), bb5()
         bb4():
-          v15 = RefineType v10, String
-          Jump bb6(v15)
-        bb5():
-          v17:Fixnum[1] = RefineType v10, NotString
-          v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:String = RefineType v14, String
           Jump bb6(v18)
-        bb6(v20:BasicObject):
-          v22:CBool = HasType v20, String
-          CondBranch v22, bb7(), bb8()
+        bb5():
+          v20:StringExact = AnyToString v10
+          Jump bb6(v20)
+        bb6(v22:String):
+          v24:Fixnum[2] = Const Value(2)
+          v27:Fixnum[2] = GuardType v24, Fixnum
+          v28:BasicObject = Send v27, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v30:CBool = HasType v28, String
+          CondBranch v30, bb7(), bb8()
         bb7():
-          v24:String = RefineType v20, String
-          Jump bb9(v24)
+          v32:String = RefineType v28, String
+          Jump bb9(v32)
         bb8():
-          v26:StringExact = AnyToString v10
-          Jump bb9(v26)
-        bb9(v28:String):
-          v30:Fixnum[2] = Const Value(2)
-          v33:CBool[false] = HasType v30, String
-          CondBranch v33, bb10(), bb11()
+          v34:StringExact = AnyToString v24
+          Jump bb9(v34)
+        bb9(v36:String):
+          v38:Fixnum[3] = Const Value(3)
+          v41:Fixnum[3] = GuardType v38, Fixnum
+          v42:BasicObject = Send v41, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v44:CBool = HasType v42, String
+          CondBranch v44, bb10(), bb11()
         bb10():
-          v35 = RefineType v30, String
-          Jump bb12(v35)
+          v46:String = RefineType v42, String
+          Jump bb12(v46)
         bb11():
-          v37:Fixnum[2] = RefineType v30, NotString
-          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb12(v38)
-        bb12(v40:BasicObject):
-          v42:CBool = HasType v40, String
-          CondBranch v42, bb13(), bb14()
-        bb13():
-          v44:String = RefineType v40, String
-          Jump bb15(v44)
-        bb14():
-          v46:StringExact = AnyToString v30
-          Jump bb15(v46)
-        bb15(v48:String):
-          v50:Fixnum[3] = Const Value(3)
-          v53:CBool[false] = HasType v50, String
-          CondBranch v53, bb16(), bb17()
-        bb16():
-          v55 = RefineType v50, String
-          Jump bb18(v55)
-        bb17():
-          v57:Fixnum[3] = RefineType v50, NotString
-          v58:BasicObject = Send v57, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb18(v58)
-        bb18(v60:BasicObject):
-          v62:CBool = HasType v60, String
-          CondBranch v62, bb19(), bb20()
-        bb19():
-          v64:String = RefineType v60, String
-          Jump bb21(v64)
-        bb20():
-          v66:StringExact = AnyToString v50
-          Jump bb21(v66)
-        bb21(v68:String):
-          v70:RegexpExact = ToRegexp v28, v48, v68
+          v48:StringExact = AnyToString v38
+          Jump bb12(v48)
+        bb12(v50:String):
+          v52:RegexpExact = ToRegexp v22, v36, v50
           CheckInterrupts
-          Return v70
+          Return v52
         ");
     }
 
@@ -5626,6 +5599,7 @@ pub(crate) mod hir_build_tests {
     fn test_toregexp_with_options() {
         eval(r##"
             def test = /#{1}#{2}/mixn
+            test
         "##);
         assert_contains_opcode("test", YARVINSN_toregexp);
         assert_snapshot!(hir_string("test"), @"
@@ -5640,48 +5614,32 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          v13:CBool[false] = HasType v10, String
-          CondBranch v13, bb4(), bb5()
+          v13:Fixnum[1] = GuardType v10, Fixnum
+          v14:BasicObject = Send v13, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v16:CBool = HasType v14, String
+          CondBranch v16, bb4(), bb5()
         bb4():
-          v15 = RefineType v10, String
-          Jump bb6(v15)
-        bb5():
-          v17:Fixnum[1] = RefineType v10, NotString
-          v18:BasicObject = Send v17, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v18:String = RefineType v14, String
           Jump bb6(v18)
-        bb6(v20:BasicObject):
-          v22:CBool = HasType v20, String
-          CondBranch v22, bb7(), bb8()
+        bb5():
+          v20:StringExact = AnyToString v10
+          Jump bb6(v20)
+        bb6(v22:String):
+          v24:Fixnum[2] = Const Value(2)
+          v27:Fixnum[2] = GuardType v24, Fixnum
+          v28:BasicObject = Send v27, :to_s # SendFallbackReason: ObjToString: result is not a string
+          v30:CBool = HasType v28, String
+          CondBranch v30, bb7(), bb8()
         bb7():
-          v24:String = RefineType v20, String
-          Jump bb9(v24)
+          v32:String = RefineType v28, String
+          Jump bb9(v32)
         bb8():
-          v26:StringExact = AnyToString v10
-          Jump bb9(v26)
-        bb9(v28:String):
-          v30:Fixnum[2] = Const Value(2)
-          v33:CBool[false] = HasType v30, String
-          CondBranch v33, bb10(), bb11()
-        bb10():
-          v35 = RefineType v30, String
-          Jump bb12(v35)
-        bb11():
-          v37:Fixnum[2] = RefineType v30, NotString
-          v38:BasicObject = Send v37, :to_s # SendFallbackReason: ObjToString: result is not a string
-          Jump bb12(v38)
-        bb12(v40:BasicObject):
-          v42:CBool = HasType v40, String
-          CondBranch v42, bb13(), bb14()
-        bb13():
-          v44:String = RefineType v40, String
-          Jump bb15(v44)
-        bb14():
-          v46:StringExact = AnyToString v30
-          Jump bb15(v46)
-        bb15(v48:String):
-          v50:RegexpExact = ToRegexp v28, v48, MULTILINE|IGNORECASE|EXTENDED|NOENCODING
+          v34:StringExact = AnyToString v24
+          Jump bb9(v34)
+        bb9(v36:String):
+          v38:RegexpExact = ToRegexp v22, v36, MULTILINE|IGNORECASE|EXTENDED|NOENCODING
           CheckInterrupts
-          Return v50
+          Return v38
         ");
     }
 
@@ -5881,6 +5839,7 @@ pub(crate) mod hir_build_tests {
     fn test_checkkeyword_tests_fixnum_bit() {
         eval(r#"
             def test(kw: 1 + 1) = kw
+            test
         "#);
         assert_contains_opcode("test", YARVINSN_checkkeyword);
         assert_snapshot!(hir_string("test"), @"
@@ -6093,9 +6052,7 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:BasicObject = GetConstantPath 0x1000
-          v12:BasicObject = Send v10, :induce_side_exit! # SendFallbackReason: Uncategorized(opt_send_without_block)
-          v16:BasicObject = GetConstantPath 0x1010
-          SideExit DirectiveInduced
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -6103,6 +6060,7 @@ pub(crate) mod hir_build_tests {
     fn test_induce_side_exit_sensitive_to_constant_state() {
         eval("
           def test = ::RubyVM::ZJIT.induce_side_exit!
+          test
         ");
         assert!(hir_string("test").contains("SideExit DirectiveInduced"));
         eval("
@@ -6162,9 +6120,7 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:BasicObject = GetConstantPath 0x1000
-          v12:BasicObject = Send v10, :induce_compile_failure! # SendFallbackReason: Uncategorized(opt_send_without_block)
-          CheckInterrupts
-          Return v12
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -6183,9 +6139,7 @@ pub(crate) mod hir_build_tests {
           Jump bb3(v4)
         bb3(v6:BasicObject):
           v10:BasicObject = GetConstantPath 0x1000
-          v12:BasicObject = Send v10, :induce_compile_failure! # SendFallbackReason: Uncategorized(opt_send_without_block)
-          CheckInterrupts
-          Return v12
+          SideExit NoProfileSend recompile
         ");
     }
 
@@ -6208,6 +6162,7 @@ pub(crate) mod hir_build_tests {
             x = ::RubyVM::ZJIT.induce_breakpoint!
             x
           end
+          test
         ");
         let hir = hir_string("test");
         assert!(hir.contains("BreakPoint"));
@@ -6221,6 +6176,7 @@ pub(crate) mod hir_build_tests {
           a =~/(hello)/
           $1
         end
+        test('hello')
       ");
       assert_snapshot!(hir_string("test"), @"
       fn test@<compiled>:3:
@@ -6251,6 +6207,7 @@ pub(crate) mod hir_build_tests {
           a =~/(hello)/
           $&
         end
+        test('hello')
       ");
       assert_snapshot!(hir_string("test"), @"
       fn test@<compiled>:3:

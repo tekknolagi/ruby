@@ -2753,6 +2753,11 @@ struct CompilePolicy {
     /// side-exit, and instead use fallback paths (e.g. C calls) on mismatch.
     /// Set when this is the final version of an ISEQ after recompilation.
     no_side_exits: bool,
+
+    /// When true, this is the last version we will compile for the ISEQ, so a side exit taken to
+    /// trigger recompilation with fresh profile data can never pay off: it would fire every time
+    /// without benefit. Emit interpreter fallbacks instead.
+    no_recompile: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2764,17 +2769,17 @@ struct SetIvarSpec {
 
 impl CompilePolicy {
     fn new(iseq: *const rb_iseq_t) -> Self {
+        if iseq.is_null() {
+            return Self { no_side_exits: false, no_recompile: false };
+        }
+        let payload = get_or_create_iseq_payload(iseq);
+        let no_recompile = payload.versions.len() + 1 >= max_iseq_versions();
         // When a previous version was invalidated and we've reached the version
         // limit, avoid speculative optimizations that may side-exit.
-        let no_side_exits = if iseq.is_null() {
-            false
-        } else {
-            let payload = get_or_create_iseq_payload(iseq);
-            payload.versions.iter().any(
-                |v| unsafe { v.as_ref() }.is_invalidated()
-            ) && payload.versions.len() + 1 >= max_iseq_versions()
-        };
-        Self { no_side_exits }
+        let no_side_exits = no_recompile && payload.versions.iter().any(
+            |v| unsafe { v.as_ref() }.is_invalidated()
+        );
+        Self { no_side_exits, no_recompile }
     }
 }
 
@@ -3468,8 +3473,7 @@ impl Function {
     /// Update DynamicSendReason for the instruction at insn_id
     fn set_dynamic_send_reason(&mut self, insn_id: InsnId, dynamic_send_reason: SendFallbackReason) {
         use Insn::*;
-        // Always set the reason: convert_no_profile_sends depends on it to identify
-        // sends that should be converted to side exits for exit-based recompilation.
+        // Always set the reason so stats can attribute the fallback.
         match &mut self.insns[insn_id] {
             Send { reason, .. }
             | SendForward { reason, .. }
@@ -4180,6 +4184,13 @@ impl Function {
         let Some(profiles) = self.profiles.as_ref() else {
             return ReceiverTypeResolution::NoProfile;
         };
+        self.resolve_receiver_type_in(profiles, recv, state)
+    }
+
+    /// Core of [`Self::resolve_receiver_type_from_profile`], with the oracle passed in explicitly.
+    /// HIR build assigns `self.profiles` only once translation is done, so it consults the oracle
+    /// it is still populating.
+    fn resolve_receiver_type_in(&self, profiles: &ProfileOracle, recv: InsnId, state: InsnId) -> ReceiverTypeResolution {
         let Some(entries) = profiles.get(state) else {
             return ReceiverTypeResolution::NoProfile;
         };
@@ -4205,6 +4216,27 @@ impl Function {
         }
 
         ReceiverTypeResolution::NoProfile
+    }
+
+    /// If a send's receiver was never profiled at `state`, emit a `SideExit` that triggers
+    /// recompilation and return true; the caller must then end the block, since `SideExit` is a
+    /// terminator. Called from HIR build, so it takes the [`ProfileOracle`] being populated rather
+    /// than reading `self.profiles`, which is assigned only once translation is done.
+    ///
+    /// A missing profile means the interpreter never ran this bytecode, so the exit is cold; if it
+    /// is ever reached, recompiling gives us a profiled receiver type to work with.
+    fn try_exit_no_profile_send(&mut self, profiles: &ProfileOracle, block: BlockId, recv: InsnId, state: InsnId) -> bool {
+        // On the final version, recompilation is not possible, so exiting would just add overhead
+        // (the exit fires every time without benefit). Keep the send so the interpreter handles it;
+        // type_specialize marks it with SendNoProfiles.
+        if self.policy.no_recompile {
+            return false;
+        }
+        if !matches!(self.resolve_receiver_type_in(profiles, recv, state), ReceiverTypeResolution::NoProfile) {
+            return false;
+        }
+        self.push_insn(block, Insn::SideExit { state, reason: Box::new(SideExitReason::NoProfileSend), recompile: Some(Recompile) });
+        true
     }
 
     pub fn assume_expected_cfunc(&mut self, block: BlockId, class: VALUE, method_id: ID, cfunc: *mut c_void, state: InsnId) -> bool {
@@ -6068,37 +6100,6 @@ impl Function {
         self.push_insn(block, Insn::IncrCounterPtr { counter_ptr });
     }
 
-    /// Convert `Send` instructions with no profile data into `SideExit` with recompile info.
-    /// This runs after strength reduction passes (type_specialize, inline) so
-    /// that sends that can be optimized without profiling (e.g. known CFUNCs) are already handled.
-    /// The remaining no-profile sends are turned into side exits that trigger recompilation with
-    /// fresh profile data.
-    fn convert_no_profile_sends(&mut self) {
-        // On the final version, recompilation is not possible, so converting sends to
-        // SideExits would just add overhead (the exit fires every time without benefit).
-        // Keep them as Send fallbacks so the interpreter handles them directly.
-        let payload = get_or_create_iseq_payload(self.iseq);
-        if payload.versions.len() + 1 >= crate::codegen::max_iseq_versions() {
-            return;
-        }
-        for block in self.reverse_post_order() {
-            let old_insns = std::mem::take(&mut self.blocks[block].insns);
-            assert!(self.blocks[block].insns.is_empty());
-            for insn_id in old_insns {
-                match self.resolve(insn_id).insn(self) {
-                    &Insn::Send { state, reason: SendFallbackReason::SendNoProfiles, .. } => {
-                        self.push_insn(block, Insn::SideExit { state, reason: Box::new(SideExitReason::NoProfileSend), recompile: Some(Recompile) });
-                        // SideExit is a terminator; don't add remaining instructions
-                        break;
-                    }
-                    _ => {
-                        self.push_insn_id(block, insn_id);
-                    }
-                }
-            }
-        }
-    }
-
     /// ZJIT uses block parameters in HIR SSA representation.
     /// Sometimes, we can prove that a block param is only called with a single value.
     /// This pass identifies such trivial block params and replaces them with the concretized value.
@@ -7201,7 +7202,6 @@ impl Function {
         macro_rules! counter_for {
             // Bucket all strength reduction together
             (type_specialize) => { Counter::compile_hir_strength_reduce_time_ns };
-            (convert_no_profile_sends) => { Counter::compile_hir_strength_reduce_time_ns };
             // End strength reduction bucket
             (inline_methods) => { Counter::compile_hir_inline_methods_time_ns };
             (remove_trivial_block_params) => { Counter::compile_hir_remove_trivial_block_params_time_ns };
@@ -7256,7 +7256,6 @@ impl Function {
                 false
             };
             run_pass!(remove_trivial_block_params);
-            run_pass!(convert_no_profile_sends);
             run_pass!(optimize_load_store);
             run_pass!(canonicalize);
             run_pass!(fold_constants);
@@ -9761,6 +9760,9 @@ fn add_iseq_to_hir(
                     }
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
+                    if fun.try_exit_no_profile_send(&profiles, block, recv, exit_id) {
+                        break;  // End the block
+                    }
                     let send = fun.push_insn(block, Insn::Send { recv, cd, block: None, args, state: exit_id, reason: Uncategorized(opcode.into()) });
                     state.stack_push(send);
                 }
@@ -9852,6 +9854,10 @@ fn add_iseq_to_hir(
                     let argc = crate::profile::num_arguments_on_stack(cd);
                     let mid = unsafe { rb_vm_ci_mid(call_info) };
 
+                    // Set when a directive replaces the receiver on the stack, which leaves the
+                    // fall-through send with a receiver that no profile entry can ever match.
+                    let mut receiver_replaced = false;
+
                     // Check for calls to directives
                     if argc == 0
                         && (mid == ID!(induce_side_exit_bang) || mid == ID!(induce_compile_failure_bang) || mid == ID!(induce_breakpoint_bang))
@@ -9877,6 +9883,7 @@ fn add_iseq_to_hir(
                             fun.push_insn(block, Insn::BreakPoint);
                             state.stack_pop()?; // pop the receiver (::RubyVM::ZJIT)
                             state.stack_push(fun.push_insn(block, Insn::Const { val: Const::Value(Qnil) }));
+                            receiver_replaced = true;
                         }
                     }
 
@@ -9888,6 +9895,12 @@ fn add_iseq_to_hir(
 
                     let args = state.stack_pop_n(argc as usize)?;
                     let recv = state.stack_pop()?;
+
+                    // Skip the exit when a directive swapped the receiver out: no profile can name
+                    // the new one, so recompiling would land here again and exit again.
+                    if !receiver_replaced && fun.try_exit_no_profile_send(&profiles, block, recv, exit_id) {
+                        break;  // End the block
+                    }
 
                     if let Some(summary) = fun.polymorphic_summary(&profiles, recv, exit_id) {
                         let join_block = fun.new_block(insn_idx);
@@ -9958,6 +9971,9 @@ fn add_iseq_to_hir(
 
                     let args = state.stack_pop_n(crate::profile::num_arguments_on_stack(cd))?;
                     let recv = state.stack_pop()?;
+                    if fun.try_exit_no_profile_send(&profiles, block, recv, exit_id) {
+                        break;  // End the block
+                    }
                     let block_handler = if !blockiseq.is_null() {
                         Some(BlockHandler::BlockIseq(blockiseq))
                     } else if block_arg {
@@ -10432,8 +10448,12 @@ fn add_iseq_to_hir(
                         fun.push_insn(iftrue_block, Insn::Jump(BranchEdge { target: join_block, args: vec![refined] }));
                         // false block
                         let refined = fun.push_insn(iffalse_block, Insn::RefineType { val: recv, new_type: types::NotString });
-                        let send = fun.push_insn(iffalse_block, Insn::Send { recv: refined, cd, block: None, args: vec![], state: exit_id, reason: ObjToStringNotString });
-                        fun.push_insn(iffalse_block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+                        // With no profile there is nothing to specialize the #to_s call on, so exit
+                        // and recompile. The String fast path above still stands on HasType alone.
+                        if !fun.try_exit_no_profile_send(&profiles, iffalse_block, refined, exit_id) {
+                            let send = fun.push_insn(iffalse_block, Insn::Send { recv: refined, cd, block: None, args: vec![], state: exit_id, reason: ObjToStringNotString });
+                            fun.push_insn(iffalse_block, Insn::Jump(BranchEdge { target: join_block, args: vec![send] }));
+                        }
                         // join block
                         block = join_block;
                         fun.push_insn(join_block, Insn::Param)

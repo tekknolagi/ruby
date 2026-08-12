@@ -6406,6 +6406,10 @@ fn test_opt_case_dispatch() {
             false
           end
         end
+        # The interpreter runs the `:foo === x` comparison only for receivers opt_case_dispatch's
+        # hash table cannot dispatch on, so warm up with one of those; otherwise the send compiled
+        # for that comparison never gets a receiver profile.
+        test(Object.new)
         test(:warmup)
     ");
     assert_contains_opcode("test", YARVINSN_opt_case_dispatch);
