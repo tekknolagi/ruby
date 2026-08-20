@@ -2269,8 +2269,9 @@ impl Assembler
 
     /// Record a preferred physical register on vregs that should reuse one, such as a
     /// newborn vreg immediately moved into a preg in the next instruction.
-    pub fn preferred_register_assignments(&self, intervals: &mut [Interval], regs: &mut RegPool) {
-        for block in &self.basic_blocks {
+    pub fn preferred_register_assignments(&self, block_order: &[BlockId], intervals: &mut [Interval], regs: &mut RegPool) {
+        for block_id in block_order {
+            let block = &self.basic_blocks[block_id.0];
             let mut prev_insn: Option<(InsnId, &Insn)> = None;
 
             for (insn, insn_id) in block.insns.iter().zip(block.insn_ids.iter()) {
@@ -2668,6 +2669,7 @@ impl Assembler
     /// and the pops after the call must read back the exact slots the pushes wrote.
     pub fn handle_caller_saved_regs(
         &mut self,
+        block_order: &[BlockId],
         intervals: &[Interval],
         alloc_regs: &RegPool,
         c_arg_regs: &[Reg],
@@ -2675,7 +2677,7 @@ impl Assembler
         use crate::backend::parcopy;
         use crate::backend::current::{C_RET_OPND, SCRATCH_REG, NATIVE_STACK_PTR};
 
-        for block_id in self.block_order() {
+        for &block_id in block_order {
             let block = &mut self.basic_blocks[block_id.0];
             let old_insns = take(&mut block.insns);
             let old_ids = take(&mut block.insn_ids);
@@ -2918,8 +2920,8 @@ impl Assembler
 
     /// Return the maximum number of stack-map entries that any side exit needs
     /// to copy into reserved native stack slots.
-    pub fn side_exit_stack_map_slots(&self, intervals: &[Interval]) -> usize {
-        self.block_order().into_iter().fold(0, |max_slots, block_id| {
+    pub fn side_exit_stack_map_slots(&self, block_order: &[BlockId], intervals: &[Interval]) -> usize {
+        block_order.into_iter().fold(0, |max_slots, block_id| {
             let block = &self.basic_blocks[block_id.0];
             block.insns.iter().fold(max_slots, |max_slots, insn| {
                 let slots = insn.target().map(|target| Self::side_exit_target_stack_map_slots(target, intervals)).unwrap_or(0);
@@ -3368,10 +3370,9 @@ impl Assembler
     /// This assigns a unique InsnId to each instruction across all blocks, skipping labels.
     /// Also sets the from/to range on each block.
     /// Returns the next available instruction ID after numbering.
-    pub fn number_instructions(&mut self, start: usize) -> usize {
-        let block_ids = self.block_order();
+    pub fn number_instructions(&mut self, block_order: &[BlockId], start: usize) -> usize {
         let mut insn_id = start;
-        for block_id in block_ids {
+        for &block_id in block_order {
             let block = &mut self.basic_blocks[block_id.0];
             let block_start = insn_id;
             insn_id += 2;
@@ -3452,15 +3453,13 @@ impl Assembler
     }
 
     /// Calculate live intervals for each VReg.
-    pub fn build_intervals(&self, live_in: Vec<BitSet<usize>>) -> Vec<Interval> {
+    pub fn build_intervals(&self, block_order: &[BlockId], live_in: Vec<BitSet<usize>>) -> Vec<Interval> {
         let num_vregs = self.num_vregs;
         let mut intervals: Vec<Interval> = (0..num_vregs)
             .map(|i| Interval::new(i.into()))
             .collect();
 
-        let blocks = self.block_order();
-
-        for block_id in blocks {
+        for block_id in block_order {
             let block = &self.basic_blocks[block_id.0];
 
             // live = union of successor.liveIn for each successor
@@ -3506,18 +3505,9 @@ impl Assembler
     /// Analyze liveness for all blocks using a fixed-point algorithm.
     /// Returns live_in sets for each block, indexed by block ID.
     /// A VReg is live-in to a block if it may be used before being defined.
-    pub fn analyze_liveness(&self) -> Vec<BitSet<usize>> {
-        // Get blocks in postorder
-        let po_blocks = {
-            let entry_blocks: Vec<BlockId> = self.basic_blocks.iter()
-                .filter(|block| block.is_entry)
-                .map(|block| block.id)
-                .collect();
-            self.po_from(entry_blocks)
-        };
-
+    pub fn analyze_liveness(&self, block_order: &[BlockId]) -> Vec<BitSet<usize>> {
         // Compute initial gen/kill sets
-        let (kill_sets, gen_sets) = self.compute_initial_liveness_sets(&po_blocks);
+        let (kill_sets, gen_sets) = self.compute_initial_liveness_sets(block_order);
 
         let num_blocks = self.basic_blocks.len();
         let num_vregs = self.num_vregs;
@@ -3530,8 +3520,8 @@ impl Assembler
         while changed {
             changed = false;
 
-            // Iterate over blocks in postorder
-            for &block_id in &po_blocks {
+            // Blocks arrive in reverse postorder in `block_order`; iterate over blocks in postorder
+            for &block_id in block_order.iter().rev() {
                 let block = &self.basic_blocks[block_id.0];
 
                 // block_live = union of live_in[succ] for all successors

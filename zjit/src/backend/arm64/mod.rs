@@ -1650,11 +1650,12 @@ impl Assembler {
 
         asm_dump!(asm, split);
 
+        let block_order = asm.block_order();
         trace_compile_phase("regalloc", || {
-            trace_compile_phase("number_instructions", || asm.number_instructions(0));
+            trace_compile_phase("number_instructions", || asm.number_instructions(&block_order, 0));
 
-            let live_in = trace_compile_phase("analyze_liveness", || asm.analyze_liveness());
-            let mut intervals = trace_compile_phase("build_intervals", || asm.build_intervals(live_in));
+            let live_in = trace_compile_phase("analyze_liveness", || asm.analyze_liveness(&block_order));
+            let mut intervals = trace_compile_phase("build_intervals", || asm.build_intervals(&block_order, live_in));
 
             // Dump live intervals if requested
             if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
@@ -1663,11 +1664,11 @@ impl Assembler {
                 }
             }
 
-            trace_compile_phase("preferred_registers", || asm.preferred_register_assignments(&mut intervals, &mut regs));
+            trace_compile_phase("preferred_registers", || asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs));
             let num_stack_slots = trace_compile_phase("linear_scan", || asm.linear_scan(&intervals, &regs));
 
             asm.stack_state.num_spill_slots = num_stack_slots;
-            asm.stack_state.num_side_exit_stack_map_slots = asm.side_exit_stack_map_slots(&intervals);
+            asm.stack_state.num_side_exit_stack_map_slots = asm.side_exit_stack_map_slots(&block_order, &intervals);
             let stack_slot_count = asm.stack_state.stack_slot_count();
 
             // Dump vreg-to-physical-register mapping if requested
@@ -1691,7 +1692,8 @@ impl Assembler {
             // Update FrameSetup slot_count now that StackState knows the
             // register allocator spill and side-exit capture counts.
             trace_compile_phase("count_stack_slots", || {
-                for block in asm.basic_blocks.iter_mut() {
+                for &block_id in &block_order {
+                    let block = &mut asm.basic_blocks[block_id.0];
                     for insn in block.insns.iter_mut() {
                         if let Insn::FrameSetup { slot_count, .. } = insn {
                             *slot_count = stack_slot_count;
@@ -1701,7 +1703,7 @@ impl Assembler {
             });
 
             trace_compile_phase("resolve_ssa", || {
-                asm.handle_caller_saved_regs(&intervals, &regs, &C_ARG_REGREGS);
+                asm.handle_caller_saved_regs(&block_order, &intervals, &regs, &C_ARG_REGREGS);
                 asm.resolve_ssa(&intervals, &regs);
             });
 
@@ -1719,7 +1721,7 @@ impl Assembler {
 
             // Append exit instructions to the last reachable block so they are
             // included in linearize_instructions and processed by scratch_split.
-            if let Some(&last_block) = asm.block_order().last() {
+            if let Some(&last_block) = block_order.last() {
                 for insn in exit_insns {
                     asm.basic_blocks[last_block.0].insns.push(insn);
                     asm.basic_blocks[last_block.0].insn_ids.push(None);
@@ -1736,6 +1738,10 @@ impl Assembler {
             asm = trace_compile_phase("resolve_parallel_mov", || asm.resolve_parallel_mov_pass());
             asm_dump!(asm, resolve_parallel_mov);
         }
+        // It doesn't make sense to refer to `block_order` after this point; instructions have been
+        // linearized into one big block.
+        debug_assert_eq!(asm.basic_blocks.len(), 1, "should have linearized instructions into one block");
+        let _ = block_order;
 
         trace_compile_phase("emit", || {
             // Create label instances in the code block
