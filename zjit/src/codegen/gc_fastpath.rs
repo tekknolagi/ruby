@@ -1,4 +1,4 @@
-use crate::backend::lir::{self, Assembler, EC, Opnd, Target, asm_comment};
+use crate::backend::lir::{self, Assembler, EC, Mem, Opnd, Target, asm_comment};
 use crate::cruby::{
     RB_GC_ZJIT_FASTPATH_DEFAULT, RB_GC_ZJIT_FASTPATH_MMTK,
     RUBY_OFFSET_EC_THREAD_PTR, RUBY_OFFSET_RBASIC_FLAGS, RUBY_OFFSET_RBASIC_KLASS,
@@ -172,28 +172,28 @@ fn emit_default_new_obj_fastpath(
     let slot_size: u64 = fastpath.slot_size.try_into().ok()?;
     let total_allocated_objects_offset: i32 = fastpath.total_allocated_objects_offset.try_into().ok()?;
 
-    let thread = asm.load(Opnd::mem(64, EC, RUBY_OFFSET_EC_THREAD_PTR as i32));
-    let ractor = asm.load(Opnd::mem(64, thread, RUBY_OFFSET_THREAD_RACTOR as i32));
+    let thread = asm.load_mem(Mem::new(64, EC, RUBY_OFFSET_EC_THREAD_PTR as i32));
+    let ractor = asm.load_mem(Mem::new(64, thread, RUBY_OFFSET_THREAD_RACTOR as i32));
     let ractor_objspace_offset = unsafe { rb_zjit_runtime_offsets.ractor_objspace };
-    let gc_cache = asm.load(Opnd::mem(64, ractor, ractor_objspace_offset));
+    let gc_cache = asm.load_mem(Mem::new(64, ractor, ractor_objspace_offset));
 
-    let cursor = asm.load(Opnd::mem(64, gc_cache, cursor_offset));
-    let cursor_end = asm.load(Opnd::mem(64, gc_cache, cursor_end_offset));
+    let cursor = asm.load_mem(Mem::new(64, gc_cache, cursor_offset));
+    let cursor_end = asm.load_mem(Mem::new(64, gc_cache, cursor_end_offset));
 
     let new_cursor = asm.add(cursor, Opnd::UImm(slot_size));
     asm.cmp(cursor_end, new_cursor);
     asm.jl(jit, miss.clone());
 
-    asm.store(Opnd::mem(64, gc_cache, cursor_offset), new_cursor);
-    let total_allocated = asm.load(Opnd::mem(64, gc_cache, total_allocated_objects_offset));
+    asm.store(Mem::new(64, gc_cache, cursor_offset), new_cursor);
+    let total_allocated = asm.load_mem(Mem::new(64, gc_cache, total_allocated_objects_offset));
     let new_total = asm.add(total_allocated, Opnd::UImm(1));
-    asm.store(Opnd::mem(64, gc_cache, total_allocated_objects_offset), new_total);
+    asm.store(Mem::new(64, gc_cache, total_allocated_objects_offset), new_total);
     asm.store(
-        Opnd::mem(VALUE_BITS, cursor, RUBY_OFFSET_RBASIC_FLAGS),
+        Mem::new(VALUE_BITS, cursor, RUBY_OFFSET_RBASIC_FLAGS),
         fastpath.flags.as_u64().into(),
     );
     asm.store(
-        Opnd::mem(VALUE_BITS, cursor, RUBY_OFFSET_RBASIC_KLASS),
+        Mem::new(VALUE_BITS, cursor, RUBY_OFFSET_RBASIC_KLASS),
         fastpath.klass.into(),
     );
 
@@ -249,12 +249,12 @@ fn emit_mmtk_new_obj_fastpath(
     asm.jnz(jit, miss.clone());
 
     let objspace = asm.load(objspace_const);
-    let thread = asm.load(Opnd::mem(64, EC, RUBY_OFFSET_EC_THREAD_PTR as i32));
-    let ractor = asm.load(Opnd::mem(64, thread, RUBY_OFFSET_THREAD_RACTOR as i32));
+    let thread = asm.load_mem(Mem::new(64, EC, RUBY_OFFSET_EC_THREAD_PTR as i32));
+    let ractor = asm.load_mem(Mem::new(64, thread, RUBY_OFFSET_THREAD_RACTOR as i32));
     let ractor_newobj_cache_offset = unsafe { rb_zjit_runtime_offsets.ractor_newobj_cache };
-    let ractor_cache = asm.load(Opnd::mem(64, ractor, ractor_newobj_cache_offset));
+    let ractor_cache = asm.load_mem(Mem::new(64, ractor, ractor_newobj_cache_offset));
 
-    let bump_pointer = asm.load(Opnd::mem(
+    let bump_pointer = asm.load_mem(Mem::new(
         64,
         ractor_cache,
         ractor_cache_bump_pointer_offset,
@@ -262,7 +262,7 @@ fn emit_mmtk_new_obj_fastpath(
     asm.test(bump_pointer, bump_pointer);
     asm.jz(jit, miss.clone());
 
-    let obj_free_count = asm.load(Opnd::mem(
+    let obj_free_count = asm.load_mem(Mem::new(
         64,
         ractor_cache,
         ractor_cache_obj_free_parallel_count_offset,
@@ -270,7 +270,7 @@ fn emit_mmtk_new_obj_fastpath(
     asm.cmp(obj_free_count, Opnd::UImm(obj_free_buf_capacity_minus_one));
     asm.jge(jit, miss.clone());
 
-    let cursor = asm.load(Opnd::mem(
+    let cursor = asm.load_mem(Mem::new(
         64,
         bump_pointer,
         bump_pointer_cursor_offset,
@@ -279,7 +279,7 @@ fn emit_mmtk_new_obj_fastpath(
     let adjusted = asm.add(cursor, Opnd::UImm(align_mask as u64));
     let aligned = asm.and(adjusted, Opnd::Imm(!align_mask));
     let new_cursor = asm.add(aligned, Opnd::UImm(total_alloc_size));
-    let limit = asm.load(Opnd::mem(
+    let limit = asm.load_mem(Mem::new(
         64,
         bump_pointer,
         bump_pointer_limit_offset,
@@ -288,7 +288,7 @@ fn emit_mmtk_new_obj_fastpath(
     asm.jl(jit, miss.clone());
 
     asm.store(
-        Opnd::mem(
+        Mem::new(
             64,
             bump_pointer,
             bump_pointer_cursor_offset,
@@ -298,19 +298,19 @@ fn emit_mmtk_new_obj_fastpath(
 
     let value_size: u64 = std::mem::size_of::<VALUE>().try_into().ok()?;
     let obj = asm.add(aligned, Opnd::UImm(value_size));
-    asm.store(Opnd::mem(VALUE_BITS, aligned, 0), Opnd::UImm(payload_size));
+    asm.store(Mem::new(VALUE_BITS, aligned, 0), Opnd::UImm(payload_size));
     asm.store(
-        Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RBASIC_FLAGS),
+        Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RBASIC_FLAGS),
         fastpath.flags.as_u64().into(),
     );
     asm.store(
-        Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RBASIC_KLASS),
+        Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RBASIC_KLASS),
         fastpath.klass.into(),
     );
 
     init(asm, obj);
 
-    let mutator = asm.load(Opnd::mem(
+    let mutator = asm.load_mem(Mem::new(
         64,
         ractor_cache,
         ractor_cache_mutator_offset,
@@ -331,10 +331,10 @@ fn emit_mmtk_new_obj_fastpath(
         Opnd::UImm(ractor_cache_obj_free_parallel_buf_offset),
     );
     let obj_free_slot = asm.add(obj_free_buf, obj_free_index);
-    asm.store(Opnd::mem(64, obj_free_slot, 0), obj);
+    asm.store(Mem::new(64, obj_free_slot, 0), obj);
     let new_obj_free_count = asm.add(obj_free_count, Opnd::UImm(1));
     asm.store(
-        Opnd::mem(
+        Mem::new(
             64,
             ractor_cache,
             ractor_cache_obj_free_parallel_count_offset,
@@ -342,14 +342,14 @@ fn emit_mmtk_new_obj_fastpath(
         new_obj_free_count,
     );
 
-    let total_allocated_objects = asm.load(Opnd::mem(
+    let total_allocated_objects = asm.load_mem(Mem::new(
         64,
         objspace,
         objspace_total_allocated_objects_offset,
     ));
     let new_total_allocated_objects = asm.add(total_allocated_objects, Opnd::UImm(1));
     asm.store(
-        Opnd::mem(
+        Mem::new(
             64,
             objspace,
             objspace_total_allocated_objects_offset,

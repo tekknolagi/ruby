@@ -28,7 +28,7 @@ fn test_compile()
 
     let out = asm.add(Opnd::Reg(regs[0]), Opnd::UImm(2));
     let out2 = asm.add(out, Opnd::UImm(2));
-    asm.store(Opnd::mem(64, SP, 0), out2);
+    asm.store(Mem::new(64, SP, 0), out2);
 
     asm.compile_with_num_regs(&mut cb, 1);
 }
@@ -40,7 +40,8 @@ fn test_mov_mem2mem()
     let (mut asm, mut cb) = setup_asm();
 
     asm_comment!(asm, "check that comments work too");
-    asm.mov(Opnd::mem(64, SP, 0), Opnd::mem(64, SP, 8));
+    let val = asm.load_mem(Mem::new(64, SP, 8));
+    asm.store(Mem::new(64, SP, 0), val);
 
     asm.compile_with_num_regs(&mut cb, 1);
 }
@@ -52,7 +53,7 @@ fn test_load_reg()
     let (mut asm, mut cb) = setup_asm();
 
     let out = asm.load(SP);
-    asm.mov(Opnd::mem(64, SP, 0), out);
+    asm.store(Mem::new(64, SP, 0), out);
 
     asm.compile_with_num_regs(&mut cb, 1);
 }
@@ -67,7 +68,7 @@ fn test_load_value()
     assert!(!gcd_value.special_const_p());
 
     let out = asm.load(Opnd::Value(gcd_value));
-    asm.mov(Opnd::mem(64, SP, 0), out);
+    asm.store(Mem::new(64, SP, 0), out);
 
     asm.compile_with_num_regs(&mut cb, 1);
 }
@@ -78,14 +79,16 @@ fn test_reuse_reg()
 {
     let (mut asm, mut cb) = setup_asm();
 
-    let v0 = asm.add(Opnd::mem(64, SP, 0), Opnd::UImm(1));
-    let v1 = asm.add(Opnd::mem(64, SP, 8), Opnd::UImm(1));
+    let m0 = asm.load_mem(Mem::new(64, SP, 0));
+    let m1 = asm.load_mem(Mem::new(64, SP, 8));
+    let v0 = asm.add(m0, Opnd::UImm(1));
+    let v1 = asm.add(m1, Opnd::UImm(1));
 
     let v2 = asm.add(v1, Opnd::UImm(1)); // Reuse v1 register
     let v3 = asm.add(v0, v2);
 
-    asm.store(Opnd::mem(64, SP, 0), v2);
-    asm.store(Opnd::mem(64, SP, 8), v3);
+    asm.store(Mem::new(64, SP, 0), v2);
+    asm.store(Mem::new(64, SP, 8), v3);
 
     asm.compile_with_num_regs(&mut cb, 2);
 }
@@ -96,7 +99,7 @@ fn test_reuse_reg()
 fn test_store_u64()
 {
     let (mut asm, mut cb) = setup_asm();
-    asm.store(Opnd::mem(64, SP, 0), u64::MAX.into());
+    asm.store(Mem::new(64, SP, 0), u64::MAX.into());
 
     asm.compile_with_num_regs(&mut cb, 1);
 }
@@ -109,10 +112,8 @@ fn test_base_insn_out()
 
     // Forced register to be reused
     // This also causes the insn sequence to change length
-    asm.mov(
-        Opnd::mem(64, SP, 8),
-        Opnd::mem(64, SP, 0)
-    );
+    let val = asm.load_mem(Mem::new(64, SP, 0));
+    asm.store(Mem::new(64, SP, 8), val);
 
     // Load the pointer into a register
     let ptr_opnd = Opnd::const_ptr(4351776248 as *const u8);
@@ -132,13 +133,14 @@ fn test_c_call()
 
     let (mut asm, mut cb) = setup_asm();
 
+    let arg0 = asm.load_mem(Mem::new(64, SP, 0));
     let ret_val = asm.ccall(
         dummy_c_fun as *const u8,
-        vec![Opnd::mem(64, SP, 0), Opnd::UImm(1)]
+        vec![arg0, Opnd::UImm(1)]
     );
 
     // Make sure that the call's return value is usable
-    asm.mov(Opnd::mem(64, SP, 0), ret_val);
+    asm.store(Mem::new(64, SP, 0), ret_val);
 
     asm.compile(&mut cb).unwrap();
 }
@@ -157,7 +159,7 @@ fn test_lea_ret()
 {
     let (mut asm, mut cb) = setup_asm();
 
-    let addr = asm.lea(Opnd::mem(64, SP, 0));
+    let addr = asm.lea(Mem::new(64, SP, 0));
     asm.cret(addr);
 
     asm.compile_with_num_regs(&mut cb, 1);
@@ -182,11 +184,10 @@ fn test_jcc_ptr()
     let (mut asm, mut cb) = setup_asm();
 
     let side_exit = Target::CodePtr(cb.get_write_ptr().add_bytes(4));
-    let not_mask = asm.not(Opnd::mem(32, EC, RUBY_OFFSET_EC_INTERRUPT_MASK));
-    asm.test(
-        Opnd::mem(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG),
-        not_mask,
-    );
+    let mask = asm.load_mem(Mem::new(32, EC, RUBY_OFFSET_EC_INTERRUPT_MASK));
+    let not_mask = asm.not(mask);
+    let flag = asm.load_mem(Mem::new(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG));
+    asm.test(flag, not_mask);
     asm.push_insn(Insn::Jnz(side_exit));
 
     asm.compile_with_num_regs(&mut cb, 2);
@@ -211,14 +212,14 @@ fn test_jo()
 
     let side_exit = Target::CodePtr(cb.get_write_ptr().add_bytes(4));
 
-    let arg1 = Opnd::mem(64, SP, 0);
-    let arg0 = Opnd::mem(64, SP, 8);
+    let arg1 = asm.load_mem(Mem::new(64, SP, 0));
+    let arg0 = asm.load_mem(Mem::new(64, SP, 8));
 
     let arg0_untag = asm.sub(arg0, Opnd::Imm(1));
     let out_val = asm.add(arg0_untag, arg1);
     asm.push_insn(Insn::Jo(side_exit));
 
-    asm.mov(Opnd::mem(64, SP, 0), out_val);
+    asm.store(Mem::new(64, SP, 0), out_val);
 
     asm.compile_with_num_regs(&mut cb, 2);
 }
@@ -253,7 +254,7 @@ fn test_no_pos_marker_callback_when_compile_fails() {
     asm.pos_marker(fail_if_called);
     let zero = asm.load(0.into());
     let sum = asm.add(zero, 500.into());
-    asm.store(Opnd::mem(64, SP, 8), sum);
+    asm.store(Mem::new(64, SP, 8), sum);
     asm.pos_marker(fail_if_called);
 
     let cb = &mut CodeBlock::new_dummy_sized(8);

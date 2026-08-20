@@ -22,7 +22,7 @@ use crate::state::ZJITState;
 use crate::stats::{CompileError, exit_counter_for_compile_error, exit_counter_for_unhandled_hir_insn, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_for_super_method_type, send_fallback_counter_ptr_for_opcode, send_fallback_counter_for_optimized_method_type};
 use crate::stats::{counter_ptr, with_time_stat, trace_compile_phase, Counter, Counter::{compile_time_ns, exit_compile_error}};
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
-use crate::backend::lir::{self, Assembler, CArgLocation, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_BASE_PTR, NATIVE_STACK_PTR, Opnd, SP, SideExit, SideExitRecompile, SideExitTarget, StackMap, StackMapEntry, Target, asm_ccall, asm_comment};
+use crate::backend::lir::{self, Assembler, CArgLocation, Mem, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_BASE_PTR, NATIVE_STACK_PTR, Opnd, SP, SideExit, SideExitRecompile, SideExitTarget, StackMap, StackMapEntry, Target, asm_ccall, asm_comment};
 use crate::hir::{self, iseq_to_hir, BlockId, Invariant, RangeType, SideExitReason::{self, *}, SpecialBackrefSymbol, SpecialObjectType};
 use crate::hir::{BlockHandler, CCallVariadicData, CCallWithFrameData, Const, FieldName, FrameState, Function, Insn, InsnId, Recompile, SendDirectData, SendFallbackReason, qualified_method_name};
 use crate::hir_type::{types, Type};
@@ -819,8 +819,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
 // Get EP at `level` from CFP
 fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
     // Load environment pointer EP from CFP into a register
-    let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
-    let mut ep_opnd = asm.load(ep_opnd);
+    let mut ep_opnd = asm.load_mem(Mem::new(64, CFP, RUBY_OFFSET_CFP_EP));
 
     for _ in 0..level {
         // Get the previous EP from the current EP
@@ -828,7 +827,7 @@ fn gen_get_ep(asm: &mut Assembler, level: u32) -> Opnd {
         // VALUE *prev_ep = ((VALUE *)((ep)[VM_ENV_DATA_INDEX_SPECVAL] & ~0x03))
         const UNTAGGING_MASK: Opnd = Opnd::Imm(!0x03);
         let offset = SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL;
-        ep_opnd = asm.load(Opnd::mem(64, ep_opnd, offset));
+        ep_opnd = asm.load_mem(Mem::new(64, ep_opnd, offset));
         ep_opnd = asm.and(ep_opnd, UNTAGGING_MASK);
     }
 
@@ -841,7 +840,7 @@ fn gen_defined(jit: &JITState, asm: &mut Assembler, function: &Function, op_type
             // `lep_level` was precomputed at HIR construction so we can materialize the local EP
             // inline without walking the parent iseq chain here.
             let lep = gen_get_ep(asm, lep_level);
-            let block_handler = asm.load(Opnd::mem(64, lep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
+            let block_handler = asm.load_mem(Mem::new(64, lep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
             let pushval = asm.load(pushval.into());
             asm.cmp(block_handler, VM_BLOCK_HANDLER_NONE.into());
             asm.csel_e(Qnil.into(), pushval)
@@ -884,7 +883,7 @@ fn gen_setlocal(asm: &mut Assembler, val: Opnd, val_type: Type, local_ep_offset:
     // we can skip the write barrier.
     if val_type.is_immediate() {
         let offset = -(SIZEOF_VALUE_I32 * local_ep_offset);
-        asm.mov(Opnd::mem(64, ep, offset), val);
+        asm.store(Mem::new(64, ep, offset), val);
     } else {
         // We're potentially writing a reference to an IMEMO/env object,
         // so take care of the write barrier with a function.
@@ -905,26 +904,26 @@ fn gen_getblockparam(jit: &mut JITState, asm: &mut Assembler, function: &Functio
     gen_prepare_leaf_call_with_gc(asm, state);
     // Bail out if write barrier is required.
     let ep = gen_get_ep(asm, level);
-    let flags = Opnd::mem(VALUE_BITS, ep, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32));
+    let flags = asm.load_mem(Mem::new(VALUE_BITS, ep, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32)));
     asm.test(flags, VM_ENV_FLAG_WB_REQUIRED.into());
     asm.jnz(jit, side_exit(jit, function, state, SideExitReason::BlockParamWbRequired));
 
     // Convert block handler to Proc.
-    let block_handler = asm.load(Opnd::mem(VALUE_BITS, ep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
+    let block_handler = asm.load_mem(Mem::new(VALUE_BITS, ep, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL));
     let proc = asm_ccall!(asm, rb_vm_bh_to_procval, EC, block_handler);
 
     let local_ep_offset = c_int::try_from(ep_offset).unwrap_or_else(|_| {
         panic!("Could not convert local_ep_offset {ep_offset} to i32")
     });
     let offset = -(SIZEOF_VALUE_I32 * local_ep_offset);
-    asm.mov(Opnd::mem(VALUE_BITS, ep, offset), proc);
+    asm.store(Mem::new(VALUE_BITS, ep, offset), proc);
 
-    let flags = Opnd::mem(VALUE_BITS, ep, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32));
-    let flags_val = asm.load(flags);
+    let flags = Mem::new(VALUE_BITS, ep, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32));
+    let flags_val = asm.load_mem(flags);
     let modified = asm.or(flags_val, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM.into());
     asm.store(flags, modified);
 
-    asm.load(Opnd::mem(VALUE_BITS, ep, offset))
+    asm.load_mem(Mem::new(VALUE_BITS, ep, offset))
 }
 
 fn gen_guard_less(jit: &mut JITState, asm: &mut Assembler, function: &Function, left: Opnd, right: Opnd, reason: SideExitReason, state: &FrameState) -> Opnd {
@@ -1069,8 +1068,8 @@ fn gen_ccall_with_frame(
         // Change cfp->block_code in the current frame. See vm_caller_setup_arg_block().
         // VM_CFP_TO_CAPTURED_BLOCK then turns &cfp->self into a block handler.
         // rb_captured_block->code.iseq aliases with cfp->block_code.
-        asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(block_iseq).into());
-        let cfp_self_addr = asm.lea(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF));
+        asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(block_iseq).into());
+        let cfp_self_addr = asm.lea(Mem::new(64, CFP, RUBY_OFFSET_CFP_SELF));
         asm.or(cfp_self_addr, Opnd::Imm(1))
     } else {
         VM_BLOCK_HANDLER_NONE.into()
@@ -1093,7 +1092,7 @@ fn gen_ccall_with_frame(
     asm_comment!(asm, "switch to new CFP");
     let new_cfp = asm.sub(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     let mut cfunc_args = vec![recv];
     cfunc_args.extend(args);
@@ -1103,7 +1102,7 @@ fn gen_ccall_with_frame(
     asm_comment!(asm, "pop C frame");
     let new_cfp = asm.add(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     asm_comment!(asm, "restore SP register for the caller");
     let new_sp = asm.sub(SP, sp_offset.into());
@@ -1125,8 +1124,8 @@ fn gen_ccall(asm: &mut Assembler, cfunc: *const u8, name: ID, owner: VALUE, recv
 // VM_CFP_TO_CAPTURED_BLOCK then turns &cfp->self into a block handler.
 // rb_captured_block->code.iseq aliases with cfp->block_code.
 fn gen_block_handler_specval(asm: &mut Assembler, blockiseq: IseqPtr) -> lir::Opnd {
-    asm.store(Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(blockiseq).into());
-    let cfp_self_addr = asm.lea(Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
+    asm.store(Mem::new(VALUE_BITS, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), VALUE::from(blockiseq).into());
+    let cfp_self_addr = asm.lea(Mem::new(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
     asm.or(cfp_self_addr, Opnd::Imm(1))
 }
 
@@ -1183,7 +1182,7 @@ fn gen_ccall_variadic(
     asm_comment!(asm, "switch to new CFP");
     let new_cfp = asm.sub(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     let argv_ptr = gen_push_opnds(jit, asm, &args);
     asm.count_call_to_with(|| qualified_method_name(unsafe { (*cme).owner }, name));
@@ -1192,7 +1191,7 @@ fn gen_ccall_variadic(
     asm_comment!(asm, "pop C frame");
     let new_cfp = asm.add(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     asm_comment!(asm, "restore SP register for the caller");
     let new_sp = asm.sub(SP, sp_offset.into());
@@ -1272,8 +1271,7 @@ fn gen_putspecialobject(jit: &JITState, asm: &mut Assembler, function: &Function
     gen_prepare_non_leaf_call(jit, asm, function, state);
 
     // Get the EP of the current CFP and load it into a register
-    let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
-    let ep_reg = asm.load(ep_opnd);
+    let ep_reg = asm.load_mem(Mem::new(64, CFP, RUBY_OFFSET_CFP_EP));
 
     asm_ccall!(asm, rb_vm_get_special_object, ep_reg, Opnd::UImm(u64::from(value_type)))
 }
@@ -1319,7 +1317,7 @@ fn gen_check_interrupts(jit: &mut JITState, asm: &mut Assembler, function: &Func
     asm_comment!(asm, "RUBY_VM_CHECK_INTS(ec)");
     // Not checking interrupt_mask since it's zero outside finalize_deferred_heap_pages,
     // signal_exec, or rb_postponed_job_flush.
-    let interrupt_flag = asm.load(Opnd::mem(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG));
+    let interrupt_flag = asm.load_mem(Mem::new(32, EC, RUBY_OFFSET_EC_INTERRUPT_FLAG));
     asm.test(interrupt_flag, interrupt_flag);
     asm.jnz(jit, side_exit(jit, function, state, SideExitReason::Interrupt));
 }
@@ -1346,14 +1344,14 @@ fn gen_hash_dup(
 
             return gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, flags.into(), klass,
                 |asm, obj| {
-                    asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RHASH_IFNONE), Opnd::Value(ifnone));
-                    asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RHASH_AR_HINT), Opnd::UImm(hint_word));
+                    asm.store(Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RHASH_IFNONE), Opnd::Value(ifnone));
+                    asm.store(Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RHASH_AR_HINT), Opnd::UImm(hint_word));
                     for i in 0..bound {
                         let pair = unsafe { pairs_base.add(2 * (i as usize)) };
                         let (key, value) = unsafe { (pair.read(), pair.add(1).read()) };
                         let offset = RUBY_OFFSET_RHASH_AR_PAIRS + (i as i32) * 2 * SIZEOF_VALUE_I32;
-                        asm.store(Opnd::mem(VALUE_BITS, obj, offset), Opnd::Value(key));
-                        asm.store(Opnd::mem(VALUE_BITS, obj, offset + SIZEOF_VALUE_I32), Opnd::Value(value));
+                        asm.store(Mem::new(VALUE_BITS, obj, offset), Opnd::Value(key));
+                        asm.store(Mem::new(VALUE_BITS, obj, offset + SIZEOF_VALUE_I32), Opnd::Value(value));
                     }
                 },
                 |asm| {
@@ -1416,7 +1414,7 @@ fn gen_array_extend(jit: &mut JITState, asm: &mut Assembler, function: &Function
 }
 
 fn gen_load_pc(asm: &mut Assembler) -> Opnd {
-    asm.load(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC))
+    asm.load_mem(Mem::new(64, CFP, RUBY_OFFSET_CFP_PC))
 }
 
 fn gen_load_ec() -> Opnd {
@@ -1428,21 +1426,21 @@ fn gen_load_sp() -> Opnd {
 }
 
 fn gen_load_self(asm: &mut Assembler) -> Opnd {
-    asm.load(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF))
+    asm.load_mem(Mem::new(64, CFP, RUBY_OFFSET_CFP_SELF))
 }
 
 fn gen_load_field(asm: &mut Assembler, recv: Opnd, id: FieldName, offset: i32, num_bits: u8) -> Opnd {
     gen_incr_counter(asm, Counter::load_field_count);
     asm_comment!(asm, "Load field id={id} offset={offset}");
-    let recv = asm.load_mem(recv);
-    asm.load(Opnd::mem(num_bits, recv, offset))
+    let recv = asm.into_reg(recv);
+    asm.load_mem(Mem::new(num_bits, recv, offset))
 }
 
 fn gen_store_field(asm: &mut Assembler, recv: Opnd, id: FieldName, offset: i32, val: Opnd, num_bits: u8) {
     gen_incr_counter(asm, Counter::store_field_count);
     asm_comment!(asm, "Store field id={id} offset={offset}");
-    let recv = asm.load_mem(recv);
-    asm.store(Opnd::mem(num_bits, recv, offset), val);
+    let recv = asm.into_reg(recv);
+    asm.store(Mem::new(num_bits, recv, offset), val);
 }
 
 fn gen_write_barrier(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, val: Opnd, val_type: Type) {
@@ -1450,7 +1448,7 @@ fn gen_write_barrier(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, val: O
     // rb_obj_written() does: if (!RB_SPECIAL_CONST_P(val)) { rb_gc_writebarrier(recv, val); }
     if !val_type.is_immediate() {
         asm_comment!(asm, "Write barrier");
-        let recv = asm.load_mem(recv);
+        let recv = asm.into_reg(recv);
 
         // Create a result block that all paths converge to
         let hir_block_id = asm.current_block().hir_block_id;
@@ -1488,7 +1486,7 @@ fn gen_entry_prologue(asm: &mut Assembler) {
     asm.mov(CFP, C_ARG_OPNDS[1]);
 
     // Load the current SP from the CFP into REG_SP
-    asm.mov(SP, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP));
+    asm.load_mem_into(SP, Mem::new(64, CFP, RUBY_OFFSET_CFP_SP));
 }
 
 /// Compile a constant
@@ -1701,16 +1699,16 @@ fn gen_push_inline_frame(
     // inlined body (reached via gen_prepare_call_with_gc or gen_prepare_leaf_call_with_gc
     // before any GC-triggering operation) installs the correct value. Side-exits write
     // cfp->sp themselves via compile_exit_save_state in lir.rs before returning Qundef.
-    fn cfp_opnd(offset: i32) -> Opnd {
-        Opnd::mem(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
+    fn cfp_opnd(offset: i32) -> Mem {
+        Mem::new(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
     }
     let callee_depth = state.depth + 1;
     let callee_entry_pc = unsafe { rb_iseq_pc_at_idx(iseq, 0) };
     let callee_entry_frame = JITFrame::new_iseq(callee_entry_pc, iseq, 0);
     asm_comment!(asm, "install entry JITFrame for inlined callee");
-    asm.mov(Opnd::mem(64, NATIVE_BASE_PTR, jit_frame_slot_offset(callee_depth)), Opnd::const_ptr(callee_entry_frame));
+    asm.store(Mem::new(64, NATIVE_BASE_PTR, jit_frame_slot_offset(callee_depth)), Opnd::const_ptr(callee_entry_frame));
     let callee_jit_return = cfp_jit_return_for_depth(asm, callee_depth);
-    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), callee_jit_return);
+    asm.store(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), callee_jit_return);
 
     // The callee's hidden `kw_bits` local does not need a runtime store here:
     // the inliner aliases the local to a `Const::Value` carrying the
@@ -1730,7 +1728,7 @@ fn gen_push_inline_frame(
     asm_comment!(asm, "switch to inlined callee CFP");
     let new_cfp = asm.sub(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP as i32), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP as i32), CFP);
 }
 
 /// Pop the interpreter frame for an inlined callee, restoring the caller's SP and CFP.
@@ -1748,7 +1746,7 @@ fn gen_pop_inline_frame(
 
     asm_comment!(asm, "restore caller CFP after inline");
     asm.add_into(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP as i32), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP as i32), CFP);
 }
 
 /// Compile a direct call to an ISEQ method.
@@ -1830,7 +1828,7 @@ fn gen_send_iseq_direct(
         let unspecified_bits = VALUE::fixnum_from_usize(kw_bits as usize);
         let bits_offset = (state.stack().len() - args.len() + bits_start) * SIZEOF_VALUE;
         asm_comment!(asm, "write keyword bits to callee frame");
-        asm.store(Opnd::mem(64, SP, bits_offset as i32), unspecified_bits.into());
+        asm.store(Mem::new(64, SP, bits_offset as i32), unspecified_bits.into());
     }
 
     asm_comment!(asm, "switch to new SP register");
@@ -2000,9 +1998,9 @@ fn gen_invoke_block_iseq_direct(
     // `captured` is the guarded `struct rb_captured_block *` (block handler with the ISEQ tag
     // masked off). The HIR builder loaded it from the LEP and guarded the tag + iseq identity.
     // TODO: During inlining, captured->self can be known. It should be put into HIR.
-    let captured_self = asm.load(Opnd::mem(64, captured, 0)); // captured->self
+    let captured_self = asm.load_mem(Mem::new(64, captured, 0)); // captured->self
     // TODO: During inlining, captured->ep can sometimes also be known.
-    let captured_ep = asm.load(Opnd::mem(64, captured, SIZEOF_VALUE_I32)); // captured->ep
+    let captured_ep = asm.load_mem(Mem::new(64, captured, SIZEOF_VALUE_I32)); // captured->ep
     // specval = VM_GUARDED_PREV_EP(captured->ep) = captured->ep | 0x01
     let specval = asm.or(captured_ep, Opnd::Imm(0x1));
 
@@ -2031,7 +2029,7 @@ fn gen_invoke_block_iseq_direct(
     asm_comment!(asm, "switch to new CFP");
     let new_cfp = asm.sub(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, new_cfp);
-    asm.store(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     // JIT-to-JIT convention: self as c_args[0], then positional args. The block is
     // gated to simple + lead-only + exact arity, so there are no optionals/kw/block.
@@ -2140,10 +2138,10 @@ fn gen_string_copy(jit: &mut JITState, asm: &mut Assembler, function: &Function,
     if byte_size > STR_INLINE_STORE_MAX_BYTES {
         return gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, full_flags, klass,
             |asm, obj| {
-                asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
+                asm.store(Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
                 let src_obj = asm.load(Opnd::Value(src));
-                let src_ptr = asm.lea(Opnd::mem(64, src_obj, RUBY_OFFSET_RSTRING_AS_ARY));
-                let dst_ptr = asm.lea(Opnd::mem(64, obj, RUBY_OFFSET_RSTRING_AS_ARY));
+                let src_ptr = asm.lea(Mem::new(64, src_obj, RUBY_OFFSET_RSTRING_AS_ARY));
+                let dst_ptr = asm.lea(Mem::new(64, obj, RUBY_OFFSET_RSTRING_AS_ARY));
                 asm.ccall(memcpy as *const u8, vec![dst_ptr, src_ptr, Opnd::UImm(byte_size as u64)]);
             },
             slow_path);
@@ -2162,11 +2160,11 @@ fn gen_string_copy(jit: &mut JITState, asm: &mut Assembler, function: &Function,
 
     gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, full_flags, klass,
         |asm, obj| {
-            asm.store(Opnd::mem(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
+            asm.store(Mem::new(VALUE_BITS, obj, RUBY_OFFSET_RSTRING_LEN), Opnd::Imm(len));
             for (i, chunk) in string_bytes.chunks_exact(8).enumerate() {
                 let word = u64::from_le_bytes(chunk.try_into().unwrap());
                 let offset = RUBY_OFFSET_RSTRING_AS_ARY + (i as i32) * 8;
-                asm.store(Opnd::mem(64, obj, offset), Opnd::UImm(word));
+                asm.store(Mem::new(64, obj, offset), Opnd::UImm(word));
             }
         },
         slow_path)
@@ -2203,7 +2201,7 @@ fn gen_array_dup(
                 for i in 0..len {
                     let elem = unsafe { rb_ary_entry(src, i) };
                     let offset = RUBY_OFFSET_RARRAY_AS_ARY + (i as i32) * SIZEOF_VALUE_I32;
-                    asm.store(Opnd::mem(VALUE_BITS, obj, offset), Opnd::Value(elem));
+                    asm.store(Mem::new(VALUE_BITS, obj, offset), Opnd::Value(elem));
                 }
             },
             |asm| {
@@ -2242,7 +2240,7 @@ fn gen_new_array(
             |asm, ary| {
                 for (i, &elem) in elements.iter().enumerate() {
                     let offset = RUBY_OFFSET_RARRAY_AS_ARY + (i as i32) * SIZEOF_VALUE_I32;
-                    asm.store(Opnd::mem(VALUE_BITS, ary, offset), elem);
+                    asm.store(Mem::new(VALUE_BITS, ary, offset), elem);
                 }
             },
             |asm| {
@@ -2275,12 +2273,12 @@ fn gen_array_aref(
     array: Opnd,
     index: Opnd,
 ) -> lir::Opnd {
-    let unboxed_idx = asm.load_mem(index);
-    let array = asm.load_mem(array);
+    let unboxed_idx = asm.into_reg(index);
+    let array = asm.into_reg(array);
     let array_ptr = gen_array_ptr(asm, array);
     let elem_offset = asm.lshift(unboxed_idx, Opnd::UImm(SIZEOF_VALUE.trailing_zeros() as u64));
     let elem_ptr = asm.add(array_ptr, elem_offset);
-    asm.load(Opnd::mem(VALUE_BITS, elem_ptr, 0))
+    asm.load_mem(Mem::new(VALUE_BITS, elem_ptr, 0))
 }
 
 fn gen_array_aset(
@@ -2289,12 +2287,12 @@ fn gen_array_aset(
     index: Opnd,
     val: Opnd,
 ) {
-    let unboxed_idx = asm.load_mem(index);
-    let array = asm.load_mem(array);
+    let unboxed_idx = asm.into_reg(index);
+    let array = asm.into_reg(array);
     let array_ptr = gen_array_ptr(asm, array);
     let elem_offset = asm.lshift(unboxed_idx, Opnd::UImm(SIZEOF_VALUE.trailing_zeros() as u64));
     let elem_ptr = asm.add(array_ptr, elem_offset);
-    asm.store(Opnd::mem(VALUE_BITS, elem_ptr, 0), val);
+    asm.store(Mem::new(VALUE_BITS, elem_ptr, 0), val);
 }
 
 fn gen_array_pop(asm: &mut Assembler, array: Opnd, state: &FrameState) -> lir::Opnd {
@@ -2303,21 +2301,22 @@ fn gen_array_pop(asm: &mut Assembler, array: Opnd, state: &FrameState) -> lir::O
 }
 
 fn gen_array_length(asm: &mut Assembler, array: Opnd) -> lir::Opnd {
-    let array = asm.load_mem(array);
-    let flags = Opnd::mem(VALUE_BITS, array, RUBY_OFFSET_RBASIC_FLAGS);
+    let array = asm.into_reg(array);
+    let flags = asm.load_mem(Mem::new(VALUE_BITS, array, RUBY_OFFSET_RBASIC_FLAGS));
     let embedded_len = asm.and(flags, (RARRAY_EMBED_LEN_MASK as u64).into());
     let embedded_len = asm.rshift(embedded_len, (RARRAY_EMBED_LEN_SHIFT as u64).into());
     // cmov between the embedded length and heap length depending on the embed flag
     asm.test(flags, (RARRAY_EMBED_FLAG as u64).into());
-    let heap_len = Opnd::mem(c_long::BITS as u8, array, RUBY_OFFSET_RARRAY_AS_HEAP_LEN);
+    let heap_len = asm.load_mem(Mem::new(c_long::BITS as u8, array, RUBY_OFFSET_RARRAY_AS_HEAP_LEN));
     asm.csel_nz(embedded_len, heap_len)
 }
 
 fn gen_array_ptr(asm: &mut Assembler, array: Opnd) -> lir::Opnd {
-    let flags = Opnd::mem(VALUE_BITS, array, RUBY_OFFSET_RBASIC_FLAGS);
+    let array = asm.into_reg(array);
+    let flags = asm.load_mem(Mem::new(VALUE_BITS, array, RUBY_OFFSET_RBASIC_FLAGS));
     asm.test(flags, (RARRAY_EMBED_FLAG as u64).into());
-    let heap_ptr = Opnd::mem(usize::BITS as u8, array, RUBY_OFFSET_RARRAY_AS_HEAP_PTR);
-    let embedded_ptr = asm.lea(Opnd::mem(VALUE_BITS, array, RUBY_OFFSET_RARRAY_AS_ARY));
+    let heap_ptr = asm.load_mem(Mem::new(usize::BITS as u8, array, RUBY_OFFSET_RARRAY_AS_HEAP_PTR));
+    let embedded_ptr = asm.lea(Mem::new(VALUE_BITS, array, RUBY_OFFSET_RARRAY_AS_ARY));
     asm.csel_nz(embedded_ptr, heap_ptr)
 }
 
@@ -2337,7 +2336,7 @@ fn gen_opt_newarray_hash(
     // After gen_prepare_non_leaf_call, the elements are spilled to the Ruby stack.
     // Get a pointer to the first element on the Ruby stack.
     let stack_bottom = state.stack().len() - elements.len();
-    let elements_ptr = asm.lea(Opnd::mem(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
+    let elements_ptr = asm.lea(Mem::new(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
 
     unsafe extern "C" {
         fn rb_vm_opt_newarray_hash(ec: EcPtr, array_len: u32, elts: *const VALUE) -> VALUE;
@@ -2364,7 +2363,7 @@ fn gen_array_max(
     // After gen_prepare_non_leaf_call, the elements are spilled to the Ruby stack.
     // Get a pointer to the first element on the Ruby stack.
     let stack_bottom = state.stack().len() - elements.len();
-    let elements_ptr = asm.lea(Opnd::mem(VALUE_BITS, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
+    let elements_ptr = asm.lea(Mem::new(VALUE_BITS, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
 
     unsafe extern "C" {
         fn rb_vm_opt_newarray_max(ec: EcPtr, num: u32, elts: *const VALUE) -> VALUE;
@@ -2391,7 +2390,7 @@ fn gen_array_min(
     // After gen_prepare_non_leaf_call, the elements are spilled to the Ruby stack.
     // Get a pointer to the first element on the Ruby stack.
     let stack_bottom = state.stack().len() - elements.len();
-    let elements_ptr = asm.lea(Opnd::mem(VALUE_BITS, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
+    let elements_ptr = asm.lea(Mem::new(VALUE_BITS, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
 
     unsafe extern "C" {
         fn rb_vm_opt_newarray_min(ec: EcPtr, num: u32, elts: *const VALUE) -> VALUE;
@@ -2419,7 +2418,7 @@ fn gen_array_include(
     // The elements are at the bottom of the virtual stack, followed by the target.
     // Get a pointer to the first element on the Ruby stack.
     let stack_bottom = state.stack().len() - elements.len() - 1;
-    let elements_ptr = asm.lea(Opnd::mem(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
+    let elements_ptr = asm.lea(Mem::new(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
 
     unsafe extern "C" {
         fn rb_vm_opt_newarray_include_p(ec: EcPtr, num: c_long, elts: *const VALUE, target: VALUE) -> VALUE;
@@ -2452,7 +2451,7 @@ fn gen_array_pack_buffer(
     } else {
         state.stack().len() - elements.len() - 1
     };
-    let elements_ptr = asm.lea(Opnd::mem(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
+    let elements_ptr = asm.lea(Mem::new(64, SP, stack_bottom as i32 * SIZEOF_VALUE_I32));
 
     unsafe extern "C" {
         fn rb_vm_opt_newarray_pack_buffer(ec: EcPtr, num: c_long, elts: *const VALUE, fmt: VALUE, buffer: VALUE) -> VALUE;
@@ -2504,7 +2503,7 @@ fn gen_is_a(jit: &mut JITState, asm: &mut Assembler, obj: Opnd, class: Opnd) -> 
             args: vec![v],
         }));
 
-        let val = asm.load_mem(obj);
+        let val = asm.into_reg(obj);
 
         // Immediate -> definitely not String/Array/Hash
         asm.test(val, Opnd::UImm(RUBY_IMMEDIATE_MASK as u64));
@@ -2515,7 +2514,7 @@ fn gen_is_a(jit: &mut JITState, asm: &mut Assembler, obj: Opnd, class: Opnd) -> 
         asm.je(jit, result_edge(Qfalse.into()));
 
         // Heap object -> check builtin type
-        let flags = asm.load(Opnd::mem(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
+        let flags = asm.load_mem(Mem::new(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
         let obj_builtin_type = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
         asm.cmp(obj_builtin_type, Opnd::UImm(builtin_type as u64));
         let result = asm.csel_e(Qtrue.into(), Qfalse.into());
@@ -2551,7 +2550,7 @@ fn gen_new_hash(
 
         gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, flags.into(), klass,
             |asm, hash| {
-                asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
+                asm.store(Mem::new(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
             },
             |asm| {
                 asm_ccall!(asm, rb_hash_new,)
@@ -2570,7 +2569,7 @@ fn gen_new_hash(
 
             gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, flags.into(), klass,
                 |asm, hash| {
-                    asm.store(Opnd::mem(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
+                    asm.store(Mem::new(VALUE_BITS, hash, RUBY_OFFSET_RHASH_IFNONE), Qnil.into());
                 },
                 |asm| {
                     asm_ccall!(asm, rb_hash_new_capa, num_pairs.into())
@@ -2664,9 +2663,9 @@ fn gen_new_range_fixnum(
     let klass = unsafe { rb_cRange };
     gc_fastpath::gc_fastpath_new_obj(jit, asm, function, state, alloc_size, flags.into(), klass,
         |asm, range| {
-            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_FIELDS_OBJ), Opnd::UImm(0));
-            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY), low);
-            asm.store(Opnd::mem(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY + SIZEOF_VALUE_I32), high);
+            asm.store(Mem::new(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_FIELDS_OBJ), Opnd::UImm(0));
+            asm.store(Mem::new(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY), low);
+            asm.store(Mem::new(VALUE_BITS, range, RUBY_OFFSET_RSTRUCT_AS_ARY + SIZEOF_VALUE_I32), high);
         },
         |asm| {
             gen_prepare_leaf_call_with_gc(asm, state);
@@ -2736,13 +2735,13 @@ fn gen_entry_point(jit: &mut JITState, asm: &mut Assembler, jit_entry_idx: Optio
     // always the top-level frame (depth 0). Inlined frames get their own deeper
     // slots in gen_push_inline_frame().
     let jit_frame = JITFrame::new_iseq(entry_pc(jit.iseq(), jit_entry_idx), jit.iseq(), 0);
-    asm.mov(Opnd::mem(64, NATIVE_BASE_PTR, -SIZEOF_VALUE_I32), Opnd::const_ptr(jit_frame));
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), NATIVE_BASE_PTR);
+    asm.store(Mem::new(64, NATIVE_BASE_PTR, -SIZEOF_VALUE_I32), Opnd::const_ptr(jit_frame));
+    asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), NATIVE_BASE_PTR);
 
     // Direct JIT-to-JIT callers switch the CFP register before calling this entry
     // point, but they leave ec->cfp pointing at the caller until cfp->jit_return
     // is valid so signal-based frame walkers never observe a half-published callee.
-    asm.mov(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 }
 
 /// Compile code that exits from JIT code with a return value
@@ -2752,7 +2751,7 @@ fn gen_return(asm: &mut Assembler, val: lir::Opnd) {
     asm_comment!(asm, "pop stack frame");
     let incr_cfp = asm.add(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
     asm.mov(CFP, incr_cfp);
-    asm.mov(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
+    asm.store(Mem::new(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
     // Order here is important. Because we're about to tear down the frame,
     // we need to load the return value, which might be part of the frame.
@@ -2956,7 +2955,7 @@ fn gen_box_bool(asm: &mut Assembler, val: lir::Opnd) -> lir::Opnd {
 
 fn gen_box_fixnum(jit: &mut JITState, asm: &mut Assembler, function: &Function, val: lir::Opnd, state: &FrameState) -> lir::Opnd {
     // Load the value, then test for overflow and tag it
-    let val = asm.load_mem(val);
+    let val = asm.into_reg(val);
     let shifted = asm.lshift(val, Opnd::UImm(1));
     asm.jo(jit, side_exit(jit, function, state, BoxFixnumOverflow));
     asm.or(shifted, Opnd::UImm(RUBY_FIXNUM_FLAG as u64))
@@ -3020,7 +3019,7 @@ fn gen_has_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, val_typ
 
         // If val isn't in a register, load it to use it as the base of Opnd::mem later.
         // TODO: Max thinks codegen should not care about the shapes of the operands except to create them. (Shopify/ruby#685)
-        let val = asm.load_mem(val);
+        let val = asm.into_reg(val);
 
         let is_known_heap_basic_object = val_type.is_subtype(types::HeapBasicObject);
         if !is_known_heap_basic_object {
@@ -3034,7 +3033,7 @@ fn gen_has_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, val_typ
         }
 
         // Heap object -> check klass field
-        let klass = asm.load(Opnd::mem(64, val, RUBY_OFFSET_RBASIC_KLASS));
+        let klass = asm.load_mem(Mem::new(64, val, RUBY_OFFSET_RBASIC_KLASS));
         asm.cmp(klass, Opnd::Value(expected_class));
         let result = asm.csel_e(Opnd::UImm(1), Opnd::Imm(0));
         asm.jmp(result_edge(result));
@@ -3058,7 +3057,7 @@ fn gen_has_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, val_typ
         }));
 
         // If val isn't in a register, load it to use it as the base of Opnd::mem later.
-        let val = asm.load_mem(val);
+        let val = asm.into_reg(val);
 
         let is_known_heap_basic_object = val_type.is_subtype(types::HeapBasicObject);
         if !is_known_heap_basic_object {
@@ -3073,7 +3072,7 @@ fn gen_has_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, val_typ
 
         // Heap object
         // Mask and check the builtin type
-        let flags = asm.load(Opnd::mem(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
+        let flags = asm.load_mem(Mem::new(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
         let tag   = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
         asm.cmp(tag, Opnd::UImm(builtin_type as u64));
         let result = asm.csel_e(Opnd::UImm(1), Opnd::Imm(0));
@@ -3127,7 +3126,7 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, function: &Function, 
 
         // If val isn't in a register, load it to use it as the base of Opnd::mem later.
         // TODO: Max thinks codegen should not care about the shapes of the operands except to create them. (Shopify/ruby#685)
-        let val = asm.load_mem(val);
+        let val = asm.into_reg(val);
 
         let side_exit = side_exit_with_recompile(jit, function, state, GuardType(guard_type), recompile);
         if !is_known_heap_basic_object {
@@ -3141,7 +3140,7 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, function: &Function, 
         }
 
         // Load the class from the object's klass field
-        let klass = asm.load(Opnd::mem(64, val, RUBY_OFFSET_RBASIC_KLASS));
+        let klass = asm.load_mem(Mem::new(64, val, RUBY_OFFSET_RBASIC_KLASS));
 
         asm.cmp(klass, Opnd::Value(expected_class));
         asm.jne(jit, side_exit);
@@ -3159,8 +3158,8 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, function: &Function, 
         }
 
         // Mask and check the builtin type
-        let val = asm.load_mem(val);
-        let flags = asm.load(Opnd::mem(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
+        let val = asm.into_reg(val);
+        let flags = asm.load_mem(Mem::new(VALUE_BITS, val, RUBY_OFFSET_RBASIC_FLAGS));
         let tag   = asm.and(flags, Opnd::UImm(RUBY_T_MASK as u64));
         asm.cmp(tag, Opnd::UImm(builtin_type as u64));
         asm.jne(jit, side);
@@ -3325,7 +3324,7 @@ fn cfp_jit_return_for_depth(asm: &mut Assembler, depth: InlineDepth) -> Opnd {
     if depth == 0 {
         NATIVE_BASE_PTR
     } else {
-        asm.lea(Opnd::mem(64, NATIVE_BASE_PTR, -(SIZEOF_VALUE_I32 * depth as i32)))
+        asm.lea(Mem::new(64, NATIVE_BASE_PTR, -(SIZEOF_VALUE_I32 * depth as i32)))
     }
 }
 
@@ -3345,7 +3344,7 @@ fn gen_write_jit_frame(asm: &mut Assembler, state: &FrameState, stack_map_size: 
     gen_incr_counter(asm, Counter::vm_write_jit_frame_count);
     asm_comment!(asm, "save JITFrame to CFP");
     let jit_frame = jit_frame_for_state(state, stack_map_size);
-    asm.mov(Opnd::mem(64, NATIVE_BASE_PTR, jit_frame_slot_offset(state.depth)), Opnd::const_ptr(jit_frame));
+    asm.store(Mem::new(64, NATIVE_BASE_PTR, jit_frame_slot_offset(state.depth)), Opnd::const_ptr(jit_frame));
 
     // CFP_PC for a live JIT frame routes through the JITFrame on the native
     // stack (cfp->jit_return points at this frame's slot), so we don't need to
@@ -3399,9 +3398,8 @@ fn gen_save_sp(asm: &mut Assembler, stack_size: usize) {
     // an extra register for asm.lea(), but you'll need to manage the SP offset like YJIT does.
     gen_incr_counter(asm, Counter::vm_write_sp_count);
     asm_comment!(asm, "save SP to CFP: {}", stack_size);
-    let sp_addr = asm.lea(Opnd::mem(64, SP, stack_size as i32 * SIZEOF_VALUE_I32));
-    let cfp_sp = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
-    asm.mov(cfp_sp, sp_addr);
+    let sp_addr = asm.lea(Mem::new(64, SP, stack_size as i32 * SIZEOF_VALUE_I32));
+    asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_SP), sp_addr);
 }
 
 /// Spill locals onto the stack.
@@ -3410,7 +3408,7 @@ fn gen_spill_locals(jit: &JITState, asm: &mut Assembler, state: &FrameState) {
     gen_incr_counter(asm, Counter::vm_write_locals_count);
     asm_comment!(asm, "spill locals");
     for (idx, &insn_id) in state.locals().enumerate() {
-        asm.mov(Opnd::mem(64, SP, (-local_idx_to_ep_offset(state.iseq, idx) - 1) * SIZEOF_VALUE_I32), jit.get_opnd(insn_id));
+        asm.store(Mem::new(64, SP, (-local_idx_to_ep_offset(state.iseq, idx) - 1) * SIZEOF_VALUE_I32), jit.get_opnd(insn_id));
     }
 }
 
@@ -3426,7 +3424,7 @@ fn gen_spill_stack(jit: &JITState, asm: &mut Assembler, function: &Function, sta
         match entry {
             StackMapEntry::Opnd(opnd) => {
                 offset -= 1;
-                asm.mov(Opnd::mem(64, SP, offset * SIZEOF_VALUE_I32), opnd);
+                asm.store(Mem::new(64, SP, offset * SIZEOF_VALUE_I32), opnd);
             }
             StackMapEntry::Skip(skip) => {
                 offset -= skip as i32;
@@ -3497,7 +3495,7 @@ fn gen_prepare_non_leaf_call(jit: &JITState, asm: &mut Assembler, function: &Fun
     // NOTE(alan): This store can be done once per CFP switch, but analysis is required
     //             to avoid the store in functions that make no non-leaf call.
     asm_comment!(asm, "save SP as the stack map anchor");
-    asm.mov(Opnd::mem(64, NATIVE_BASE_PTR, jit.base_ptr_slot_native_base_ptr_offset()), SP);
+    asm.store(Mem::new(64, NATIVE_BASE_PTR, jit.base_ptr_slot_native_base_ptr_offset()), SP);
 
     // Remember the stack map in case it raises an exception
     // and the interpreter uses the stack for handling the exception
@@ -3535,15 +3533,15 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
     };
     let ep_offset = state.stack().len() as i32 + local_size - argc as i32 + VM_ENV_DATA_SIZE as i32 - 1;
     // ep[-2]: CME
-    asm.store(Opnd::mem(64, SP, (ep_offset - 2) * SIZEOF_VALUE_I32), VALUE::from(frame.cme).into());
+    asm.store(Mem::new(64, SP, (ep_offset - 2) * SIZEOF_VALUE_I32), VALUE::from(frame.cme).into());
     // ep[-1]: specval
-    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), frame.specval);
+    asm.store(Mem::new(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), frame.specval);
     // ep[0]: ENV_FLAGS
-    asm.store(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32), frame.frame_type.into());
+    asm.store(Mem::new(64, SP, ep_offset * SIZEOF_VALUE_I32), frame.frame_type.into());
 
     // Write to the callee CFP
-    fn cfp_opnd(offset: i32) -> Opnd {
-        Opnd::mem(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
+    fn cfp_opnd(offset: i32) -> Mem {
+        Mem::new(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
     }
 
     asm_comment!(asm, "push callee control frame");
@@ -3553,31 +3551,31 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
         // cfp->jit_return will be written by gen_entry_point() on the callee after this frame push.
         if frame.write_block_code {
             asm_comment!(asm, "write block_code for iseq that may use it");
-            asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
+            asm.store(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
         }
     } else {
         // C frames don't have a PC and ISEQ in normal operation. ISEQ frames set PC on gen_write_jit_frame().
         // When runtime checks are enabled we poison the PC for C frames so accidental reads stand out.
         if let (None, Some(pc)) = (frame.iseq, PC_POISON) {
-            asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(pc));
+            asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(pc));
         }
-        let new_sp = asm.lea(Opnd::mem(64, SP, (ep_offset + 1) * SIZEOF_VALUE_I32));
-        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SP), new_sp);
+        let new_sp = asm.lea(Mem::new(64, SP, (ep_offset + 1) * SIZEOF_VALUE_I32));
+        asm.store(cfp_opnd(RUBY_OFFSET_CFP_SP), new_sp);
         // block_code must be written explicitly because the interpreter reads
         // captured->code.ifunc directly from cfp->block_code (not through JITFrame).
         // Without this, stale data from a previous frame occupying this CFP slot
         // can be used as an ifunc pointer, causing a segfault.
-        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
+        asm.store(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
         // C frames share a single static JITFrame (rb_zjit_c_frame). Setting
         // cfp->jit_return to the ZJIT_JIT_RETURN_C_FRAME sentinel tells
         // CFP_ZJIT_FRAME() to use that shared frame, so we don't need to
         // allocate a per-call JITFrame for C method pushes.
-        asm.mov(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), (ZJIT_JIT_RETURN_C_FRAME as usize).into());
+        asm.store(cfp_opnd(RUBY_OFFSET_CFP_JIT_RETURN), (ZJIT_JIT_RETURN_C_FRAME as usize).into());
     }
 
-    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);
-    let ep = asm.lea(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32));
-    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
+    asm.store(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);
+    let ep = asm.lea(Mem::new(64, SP, ep_offset * SIZEOF_VALUE_I32));
+    asm.store(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
 }
 
 /// Stack overflow check: fails if CFP<=SP at any point in the callee.
@@ -3588,7 +3586,7 @@ fn gen_stack_overflow_check(jit: &mut JITState, asm: &mut Assembler, function: &
     const { assert!(RUBY_SIZEOF_CONTROL_FRAME % SIZEOF_VALUE == 0, "sizeof(rb_control_frame_t) is a multiple of sizeof(VALUE)"); }
     let cfp_growth = 2 * (RUBY_SIZEOF_CONTROL_FRAME / SIZEOF_VALUE);
     let peak_offset = (cfp_growth + stack_growth) * SIZEOF_VALUE;
-    let stack_limit = asm.lea(Opnd::mem(64, SP, peak_offset as i32));
+    let stack_limit = asm.lea(Mem::new(64, SP, peak_offset as i32));
     asm.cmp(CFP, stack_limit);
     asm.jbe(jit, side_exit(jit, function, state, StackOverflow));
 }
@@ -3950,12 +3948,12 @@ fn gen_function_stub(cb: &mut CodeBlock, iseq_call: IseqCallRef) -> Result<CodeP
                 // sit right above the return address (x86_64) or right at the
                 // native SP (arm64, where the return address is in a register).
                 let ret_addr_bytes = if cfg!(target_arch = "x86_64") { SIZEOF_VALUE_I32 } else { 0 };
-                asm.load_into(scratch_reg, Opnd::mem(64, NATIVE_STACK_PTR, ret_addr_bytes + slot as i32 * SIZEOF_VALUE_I32));
+                asm.load_mem_into(scratch_reg, Mem::new(64, NATIVE_STACK_PTR, ret_addr_bytes + slot as i32 * SIZEOF_VALUE_I32));
                 scratch_reg
             }
         };
         asm.store(
-            Opnd::mem(64, SP, -local_size_and_idx_to_bp_offset(local_size, arg_idx) * SIZEOF_VALUE_I32),
+            Mem::new(64, SP, -local_size_and_idx_to_bp_offset(local_size, arg_idx) * SIZEOF_VALUE_I32),
             src,
         );
     }
@@ -4068,11 +4066,11 @@ pub fn gen_materialize_exit_trampoline(cb: &mut CodeBlock, exit_trampoline: Code
     asm.new_block_without_id("materialize_exit_trampoline");
 
     asm_comment!(asm, "clear JITFrame materialized by exit code");
-    asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
+    asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
     // Clear cfp->block_code since it may have been left uninitialized by JITFrame mechanisms.
     // Zero is the right value because we're dealing with the top most frame.
     // Non-zero values are only set before pushing a frame.
-    asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
+    asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
 
     asm_comment!(asm, "materialize ZJIT frames");
     asm_ccall!(asm, rb_zjit_materialize_frames, EC, CFP);
@@ -4120,7 +4118,7 @@ fn gen_push_opnds(jit: &JITState, asm: &mut Assembler, opnds: &[Opnd]) -> lir::O
 /// Write operands into stack slots previously reserved by asm.alloc_stack().
 fn gen_write_operands(asm: &mut Assembler, opnds: &[Opnd], stack: lir::Opnd) {
     for (idx, &opnd) in opnds.iter().enumerate() {
-        asm.mov(Opnd::mem(VALUE_BITS, stack, idx as i32 * SIZEOF_VALUE_I32), opnd);
+        asm.store(Mem::new(VALUE_BITS, stack, idx as i32 * SIZEOF_VALUE_I32), opnd);
     }
 }
 
@@ -4141,17 +4139,17 @@ fn gen_string_concat(jit: &mut JITState, asm: &mut Assembler, function: &Functio
 // Generate RSTRING_PTR
 fn get_string_ptr(asm: &mut Assembler, string: Opnd) -> Opnd {
     asm_comment!(asm, "get string pointer for embedded or heap");
-    let string = asm.load_mem(string);
-    let flags = Opnd::mem(VALUE_BITS, string, RUBY_OFFSET_RBASIC_FLAGS);
+    let string = asm.into_reg(string);
+    let flags = asm.load_mem(Mem::new(VALUE_BITS, string, RUBY_OFFSET_RBASIC_FLAGS));
     asm.test(flags, (RSTRING_NOEMBED as u64).into());
-    let heap_ptr = asm.load(Opnd::mem(
+    let heap_ptr = asm.load_mem(Mem::new(
         usize::BITS as u8,
         string,
         RUBY_OFFSET_RSTRING_AS_HEAP_PTR,
     ));
     // Load the address of the embedded array
     // (struct RString *)(obj)->as.ary
-    let ary = asm.lea(Opnd::mem(VALUE_BITS, string, RUBY_OFFSET_RSTRING_AS_ARY));
+    let ary = asm.lea(Mem::new(VALUE_BITS, string, RUBY_OFFSET_RSTRING_AS_ARY));
     asm.csel_nz(heap_ptr, ary)
 }
 
@@ -4159,7 +4157,7 @@ fn gen_string_getbyte(asm: &mut Assembler, string: Opnd, index: Opnd) -> Opnd {
     let string_ptr = get_string_ptr(asm, string);
     // TODO(max): Use SIB indexing here once the backend supports it
     let string_ptr = asm.add(string_ptr, index);
-    let byte = asm.load(Opnd::mem(8, string_ptr, 0));
+    let byte = asm.load_mem(Mem::new(8, string_ptr, 0));
     // Zero-extend the byte to 64 bits
     let byte = byte.with_num_bits(64);
     let byte = asm.and(byte, 0xFF.into());
@@ -4183,12 +4181,11 @@ fn gen_string_append(jit: &mut JITState, asm: &mut Assembler, function: &Functio
     // Take receiver's object flags XOR arg's flags. If any
     // string-encoding flags are different between the two,
     // the encodings don't match.
-    let string_reg = asm.load_mem(string);
-    let val_reg = asm.load_mem(val);
-    let flags_xor = asm.xor(
-        Opnd::mem(VALUE_BITS, string_reg, RUBY_OFFSET_RBASIC_FLAGS),
-        Opnd::mem(VALUE_BITS, val_reg, RUBY_OFFSET_RBASIC_FLAGS)
-    );
+    let string_reg = asm.into_reg(string);
+    let val_reg = asm.into_reg(val);
+    let string_flags = asm.load_mem(Mem::new(VALUE_BITS, string_reg, RUBY_OFFSET_RBASIC_FLAGS));
+    let val_flags = asm.load_mem(Mem::new(VALUE_BITS, val_reg, RUBY_OFFSET_RBASIC_FLAGS));
+    let flags_xor = asm.xor(string_flags, val_flags);
     asm.test(flags_xor, Opnd::UImm(RUBY_ENCODING_MASK as u64));
 
     let hir_block_id = asm.current_block().hir_block_id;
@@ -4269,9 +4266,8 @@ impl Assembler {
         self.sub(NATIVE_BASE_PTR, (SIZEOF_VALUE * total_stack_size).into())
     }
 
-    /// Emits a load for memory based operands and returns a vreg,
-    /// otherwise returns recv.
-    fn load_mem(&mut self, recv: Opnd) -> Opnd {
+    /// Materialize an operand into a register if it isn't one already.
+    fn into_reg(&mut self, recv: Opnd) -> Opnd {
         match recv {
             Opnd::VReg { .. } | Opnd::Reg(_) => recv,
             _ => self.load(recv),

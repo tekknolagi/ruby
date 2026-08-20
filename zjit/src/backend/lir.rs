@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::mem::take;
+use std::mem::{replace, take};
 use std::rc::Rc;
 use crate::bitset::BitSet;
 use crate::codegen::{perf_symbol_range_start, perf_symbol_range_end, register_with_perf};
@@ -26,7 +26,7 @@ type BlockSet = BitSet<BlockId>;
 
 /// Underlying integer width of a virtual-register id. Narrow to keep `Opnd`/`Mem` small.
 pub type VRegIdBase = u32;
-/// Width of a stack-slot index inside `MemBase`. Separate id space from `VRegId`.
+/// Width of a register-allocator spill-slot index. Separate id space from `VRegId`.
 pub type StackIdx = u32;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
@@ -248,8 +248,7 @@ impl BasicBlock {
 }
 
 pub use crate::backend::current::{
-    mem_base_reg,
-    Reg,
+    Reg, SCRATCH_REG,
     EC, CFP, SP,
     NATIVE_BASE_PTR, NATIVE_STACK_PTR,
     C_ARG_OPNDS, C_RET_OPND,
@@ -278,32 +277,17 @@ pub fn c_arg_location(idx: usize) -> CArgLocation {
     }
 }
 
-// Memory operand base
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
-pub enum MemBase
-{
-    /// Register: Every Opnd::Mem should have MemBase::Reg as of emit.
-    Reg(u8),
-    /// Virtual register: Lowered to MemBase::Reg or MemBase::Stack during register assignment.
-    VReg(VRegId),
-    /// Stack slot: a direct stack access. `stack_membase_to_mem()` turns this
-    /// into `[NATIVE_BASE_PTR + disp]`, so scratch splitting can use it as a
-    /// normal memory operand without first loading a pointer from the stack.
-    Stack { stack_idx: StackIdx, num_bits: u8 },
-    /// A pointer stored in a stack slot, used as a memory base.
-    /// Unlike Stack, this first loads the pointer value from the stack slot
-    /// into a scratch register, then uses that register as the base for the
-    /// memory access with the Mem's displacement.
-    /// Created when a VReg used as MemBase is spilled to the stack.
-    StackIndirect { stack_idx: StackIdx },
-}
-
-// Memory location
+/// Memory location: `[base + disp]`, accessed `num_bits` wide.
+///
+/// This is deliberately *not* an [`Opnd`] variant: only the instructions that actually touch
+/// memory ([`Insn::LoadMem`], [`Insn::LoadSExt`], [`Insn::Store`], [`Insn::Lea`],
+/// [`Insn::IncrCounter`]) carry one, so every other instruction operates on registers and
+/// immediates alone.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Mem
 {
-    // Base register number or instruction index
-    pub base: MemBase,
+    /// Base address. `Opnd::Reg` as of emit, `Opnd::VReg` before register allocation.
+    pub base: Opnd,
 
     // Offset relative to the base pointer
     pub disp: i32,
@@ -312,19 +296,24 @@ pub struct Mem
     pub num_bits: u8,
 }
 
+impl Mem {
+    /// Convenience constructor. Argument order matches the `[num_bits] base + disp` reading.
+    pub fn new(num_bits: u8, base: Opnd, disp: i32) -> Self {
+        match base {
+            Opnd::Reg(base_reg) => assert!(base_reg.num_bits == 64),
+            Opnd::VReg { num_bits: base_num_bits, .. } => assert!(num_bits <= base_num_bits),
+            _ => unreachable!("memory operand with non-register base: {base:?}"),
+        }
+        Mem { base, disp, num_bits }
+    }
+}
+
 impl fmt::Display for Mem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.num_bits != 64 {
             write!(f, "Mem{}", self.num_bits)?;
         }
-        write!(f, "[")?;
-        match self.base {
-            MemBase::Reg(reg_no) => write!(f, "{}", mem_base_reg(reg_no))?,
-            MemBase::VReg(idx) => write!(f, "{idx}")?,
-            MemBase::Stack { stack_idx, num_bits } if num_bits == 64 => write!(f, "Stack[{stack_idx}]")?,
-            MemBase::StackIndirect { stack_idx } => write!(f, "*Stack[{stack_idx}]")?,
-            MemBase::Stack { stack_idx, num_bits } => write!(f, "Stack{num_bits}[{stack_idx}]")?,
-        }
+        write!(f, "[{}", self.base)?;
         if self.disp != 0 {
             let sign = if self.disp > 0 { '+' } else { '-' };
             write!(f, " {sign} ")?;
@@ -358,13 +347,13 @@ pub enum Opnd
     // Immediate Ruby value, may be GC'd, movable
     Value(VALUE),
 
-    /// Virtual register. Lowered to Reg or Mem during register assignment.
+    /// Virtual register. Lowered to Reg during register assignment. A VReg that survives
+    /// register allocation was spilled; the scratch-split pass reloads it from its stack slot.
     VReg{ idx: VRegId, num_bits: u8 },
 
     // Low-level operands, for lowering
     Imm(i64),           // Raw signed immediate
     UImm(u64),          // Raw unsigned immediate
-    Mem(Mem),           // Memory location
     Reg(Reg),           // Machine register
 }
 
@@ -383,8 +372,7 @@ impl Ord for Opnd {
                 Opnd::VReg { .. } => 2,
                 Opnd::Imm(_) => 3,
                 Opnd::UImm(_) => 4,
-                Opnd::Mem(_) => 5,
-                Opnd::Reg(_) => 6,
+                Opnd::Reg(_) => 5,
             }
         }
         match (self, other) {
@@ -393,7 +381,6 @@ impl Ord for Opnd {
             (Opnd::VReg { idx: lidx, num_bits: lnum_bits }, Opnd::VReg { idx: ridx, num_bits: rnum_bits }) => (lidx, lnum_bits).cmp(&(ridx, rnum_bits)),
             (Opnd::Imm(l), Opnd::Imm(r)) => l.cmp(&r),
             (Opnd::UImm(l), Opnd::UImm(r)) => l.cmp(&r),
-            (Opnd::Mem(l), Opnd::Mem(r)) => l.cmp(&r),
             (Opnd::Reg(l), Opnd::Reg(r)) => l.cmp(&r),
             (l, r) => {
                 case_order(l).cmp(&case_order(r))
@@ -415,7 +402,6 @@ impl fmt::Display for Opnd {
             Imm(value) => write!(f, "Imm(0x{value:x})"),
             UImm(value) if *value < 10 => write!(f, "{value:x}"),
             UImm(value) => write!(f, "0x{value:x}"),
-            Mem(mem) => write!(f, "{mem}"),
             Reg(reg) => write!(f, "{reg}"),
         }
     }
@@ -431,8 +417,7 @@ impl fmt::Debug for Opnd {
             VReg { idx, num_bits } => write!(fmt, "VReg{num_bits}({})", idx.0),
             Imm(signed) => write!(fmt, "{signed:x}_i64"),
             UImm(unsigned) => write!(fmt, "{unsigned:x}_u64"),
-            // Say Mem and Reg only once
-            Mem(mem) => write!(fmt, "{mem:?}"),
+            // Say Reg only once
             Reg(reg) => write!(fmt, "{reg:?}"),
         }
     }
@@ -443,31 +428,6 @@ impl Opnd
     /// Returns true if this operand is a virtual register
     pub fn is_vreg(&self) -> bool {
         matches!(self, Opnd::VReg { .. })
-    }
-
-    /// Convenience constructor for memory operands
-    pub fn mem(num_bits: u8, base: Opnd, disp: i32) -> Self {
-        match base {
-            Opnd::Reg(base_reg) => {
-                assert!(base_reg.num_bits == 64);
-                Opnd::Mem(Mem {
-                    base: MemBase::Reg(base_reg.reg_no),
-                    disp,
-                    num_bits,
-                })
-            },
-
-            Opnd::VReg{idx, num_bits: out_num_bits } => {
-                assert!(num_bits <= out_num_bits);
-                Opnd::Mem(Mem {
-                    base: MemBase::VReg(idx),
-                    disp,
-                    num_bits,
-                })
-            },
-
-            _ => unreachable!("memory operand with non-register base: {base:?}")
-        }
     }
 
     /// Constructor for constant pointer operand
@@ -502,7 +462,6 @@ impl Opnd
         let mut ids = [None, None];
         match self {
             Opnd::VReg { idx, .. } => { ids[0] = Some(*idx); }
-            Opnd::Mem(Mem { base: MemBase::VReg(idx), .. }) => { ids[0] = Some(*idx); }
             _ => {}
         }
         ids.into_iter().flatten()
@@ -512,7 +471,6 @@ impl Opnd
     pub fn num_bits(&self) -> Option<u8> {
         match *self {
             Opnd::Reg(Reg { num_bits, .. }) => Some(num_bits),
-            Opnd::Mem(Mem { num_bits, .. }) => Some(num_bits),
             Opnd::VReg { num_bits, .. } => Some(num_bits),
             _ => None
         }
@@ -524,7 +482,6 @@ impl Opnd
         assert!(num_bits == 8 || num_bits == 16 || num_bits == 32 || num_bits == 64);
         match *self {
             Opnd::Reg(reg) => Opnd::Reg(reg.with_num_bits(num_bits)),
-            Opnd::Mem(Mem { base, disp, .. }) => Opnd::Mem(Mem { base, disp, num_bits }),
             Opnd::VReg { idx, .. } => Opnd::VReg { idx, num_bits },
             _ => unreachable!("with_num_bits should not be used for: {self:?}"),
         }
@@ -542,9 +499,6 @@ impl Opnd
             Opnd::VReg { idx, num_bits } => {
                 Opnd::VReg { idx: indices[idx].into(), num_bits }
             }
-            Opnd::Mem(Mem { base: MemBase::VReg(idx), disp, num_bits }) => {
-                Opnd::Mem(Mem { base: MemBase::VReg(indices[idx].into()), disp, num_bits })
-            },
             _ => self
         }
     }
@@ -847,9 +801,9 @@ pub enum Insn {
     FrameTeardown { preserved: &'static [Opnd], },
 
     // Atomically increment a counter
-    // Input: memory operand, increment value
+    // Input: memory location, increment value
     // Produces no output
-    IncrCounter { mem: Opnd, value: Opnd },
+    IncrCounter { mem: Mem, value: Opnd },
 
     /// Jump if below or equal (unsigned)
     Jbe(Target),
@@ -903,17 +857,23 @@ pub enum Insn {
     LeaJumpTarget { target: Target, out: Opnd },
 
     // Load effective address
-    Lea { opnd: Opnd, out: Opnd },
+    Lea { mem: Mem, out: Opnd },
 
-    // A low-level instruction that loads a value into a register.
+    // A low-level instruction that loads a register or immediate into a register.
     Load { opnd: Opnd, out: Opnd },
 
-    // A low-level instruction that loads a value into a specified register.
+    // A low-level instruction that loads a register or immediate into a specified register.
     LoadInto { dest: Opnd, opnd: Opnd },
 
-    // A low-level instruction that loads a value into a register and
+    // A low-level instruction that loads a value from memory into a register.
+    LoadMem { mem: Mem, out: Opnd },
+
+    // A low-level instruction that loads a value from memory into a specified register.
+    LoadMemInto { dest: Opnd, mem: Mem },
+
+    // A low-level instruction that loads a value from memory into a register and
     // sign-extends it to a 64-bit value.
-    LoadSExt { opnd: Opnd, out: Opnd },
+    LoadSExt { mem: Mem, out: Opnd },
 
     /// Shift a value left by a certain amount.
     LShift { opnd: Opnd, shift: Opnd, out: Opnd },
@@ -966,7 +926,7 @@ pub enum Insn {
     RShift { opnd: Opnd, shift: Opnd, out: Opnd },
 
     // Low-level instruction to store a value to memory.
-    Store { dest: Opnd, src: Opnd },
+    Store { mem: Mem, src: Opnd },
 
     // This is the same as the add instruction, except for subtraction.
     Sub { left: Opnd, right: Opnd, out: Opnd },
@@ -1053,10 +1013,21 @@ macro_rules! for_each_operand_impl {
             Insn::CPush(opnd) |
             Insn::CRet(opnd) |
             Insn::JmpOpnd(opnd) |
-            Insn::Lea { opnd, .. } |
             Insn::Load { opnd, .. } |
-            Insn::LoadSExt { opnd, .. } |
             Insn::Not { opnd, .. } => {
+                visit_one!(opnd);
+            }
+            // The base of a memory location is a regular operand: it takes part in liveness
+            // and gets rewritten to a physical register like any other.
+            Insn::Lea { mem, .. } |
+            Insn::LoadMem { mem, .. } |
+            Insn::LoadSExt { mem, .. } => {
+                visit_one!($reborrow!(mem.base));
+            }
+            Insn::IncrCounter { mem, value: opnd } |
+            Insn::LoadMemInto { dest: opnd, mem } |
+            Insn::Store { mem, src: opnd } => {
+                visit_one!($reborrow!(mem.base));
                 visit_one!(opnd);
             }
             Insn::CPushPair(opnd0, opnd1) => {
@@ -1077,13 +1048,11 @@ macro_rules! for_each_operand_impl {
             Insn::CSelNE { truthy: opnd0, falsy: opnd1, .. } |
             Insn::CSelNZ { truthy: opnd0, falsy: opnd1, .. } |
             Insn::CSelZ { truthy: opnd0, falsy: opnd1, .. } |
-            Insn::IncrCounter { mem: opnd0, value: opnd1, .. } |
             Insn::LoadInto { dest: opnd0, opnd: opnd1 } |
             Insn::LShift { opnd: opnd0, shift: opnd1, .. } |
             Insn::Mov { dest: opnd0, src: opnd1 } |
             Insn::Or { left: opnd0, right: opnd1, .. } |
             Insn::RShift { opnd: opnd0, shift: opnd1, .. } |
-            Insn::Store { dest: opnd0, src: opnd1 } |
             Insn::Sub { left: opnd0, right: opnd1, .. } |
             Insn::Mul { left: opnd0, right: opnd1, .. } |
             Insn::Test { left: opnd0, right: opnd1 } |
@@ -1228,6 +1197,8 @@ impl Insn {
             Insn::Lea { .. } => "Lea",
             Insn::Load { .. } => "Load",
             Insn::LoadInto { .. } => "LoadInto",
+            Insn::LoadMem { .. } => "LoadMem",
+            Insn::LoadMemInto { .. } => "LoadMemInto",
             Insn::LoadSExt { .. } => "LoadSExt",
             Insn::LShift { .. } => "LShift",
             Insn::Mov { .. } => "Mov",
@@ -1265,6 +1236,7 @@ impl Insn {
             Insn::Lea { out, .. } |
             Insn::LeaJumpTarget { out, .. } |
             Insn::Load { out, .. } |
+            Insn::LoadMem { out, .. } |
             Insn::LoadSExt { out, .. } |
             Insn::LShift { out, .. } |
             Insn::Not { out, .. } |
@@ -1297,6 +1269,7 @@ impl Insn {
             Insn::Lea { out, .. } |
             Insn::LeaJumpTarget { out, .. } |
             Insn::Load { out, .. } |
+            Insn::LoadMem { out, .. } |
             Insn::LoadSExt { out, .. } |
             Insn::LShift { out, .. } |
             Insn::Not { out, .. } |
@@ -1354,6 +1327,19 @@ impl Insn {
     }
 
     /// Returns true if this instruction is a jump.
+    /// The memory location this instruction reads or writes, if it touches memory at all.
+    pub fn mem(&self) -> Option<&Mem> {
+        match self {
+            Insn::IncrCounter { mem, .. } |
+            Insn::Lea { mem, .. } |
+            Insn::LoadMem { mem, .. } |
+            Insn::LoadMemInto { mem, .. } |
+            Insn::LoadSExt { mem, .. } |
+            Insn::Store { mem, .. } => Some(mem),
+            _ => None,
+        }
+    }
+
     pub fn is_jump(&self) -> bool {
         match self {
             Insn::Jbe(_) |
@@ -1762,15 +1748,9 @@ impl StackState {
         (self.stack_base_idx + stack_idx.to_usize() + 1) as i32 * -SIZEOF_VALUE_I32
     }
 
-    /// Convert MemBase::Stack to Mem
-    pub(super) fn stack_membase_to_mem(&self, membase: MemBase) -> Mem {
-        match membase {
-            MemBase::Stack { stack_idx, num_bits } => {
-                let disp = self.stack_idx_to_disp(stack_idx);
-                Mem { base: MemBase::Reg(NATIVE_BASE_PTR.unwrap_reg().reg_no), disp, num_bits }
-            }
-            _ => unreachable!(),
-        }
+    /// The frame slot holding a spilled VReg, as a memory location.
+    pub(super) fn frame_slot_mem(&self, stack_idx: StackIdx, num_bits: u8) -> Mem {
+        Mem { base: NATIVE_BASE_PTR, disp: self.stack_idx_to_disp(stack_idx), num_bits }
     }
 }
 
@@ -1868,6 +1848,10 @@ pub struct Assembler {
     /// Native stack layout state.
     pub(crate) stack_state: StackState,
 
+    /// Frame slot of each spilled VReg, indexed by [`VRegId`]. Filled in after `linear_scan`;
+    /// `None` for VRegs that got a register. Read by [`Self::spill_slot`].
+    pub(super) spill_slots: Vec<Option<StackIdx>>,
+
     /// If Some, the next ccall should verify its leafness
     leaf_ccall_stack_size: Option<usize>,
 
@@ -1888,6 +1872,7 @@ impl Assembler
             label_names: Vec::default(),
             accept_scratch_reg: false,
             stack_state: StackState::new(),
+            spill_slots: Vec::default(),
             leaf_ccall_stack_size: None,
             basic_blocks: Vec::default(),
             current_block_id: BlockId(0),
@@ -1928,6 +1913,7 @@ impl Assembler
             label_names: old_asm.label_names.clone(),
             accept_scratch_reg: old_asm.accept_scratch_reg,
             stack_state: old_asm.stack_state.clone(),
+            spill_slots: old_asm.spill_slots.clone(),
             ..Self::new()
         };
 
@@ -2008,7 +1994,6 @@ impl Assembler
     pub fn has_reg(opnd: Opnd, reg: Reg) -> bool {
         match opnd {
             Opnd::Reg(opnd_reg) => opnd_reg == reg,
-            Opnd::Mem(Mem { base: MemBase::Reg(reg_no), .. }) => reg_no == reg.reg_no,
             _ => false,
         }
     }
@@ -2166,19 +2151,19 @@ impl Assembler
         self.leaf_ccall_stack_size = Some(stack_size);
     }
 
-    fn set_stack_canary(&mut self) -> Option<Opnd> {
+    fn set_stack_canary(&mut self) -> Option<Mem> {
         if cfg!(feature = "runtime_checks") {
             if let Some(stack_size) = self.leaf_ccall_stack_size.take() {
-                let canary_addr = self.lea(Opnd::mem(64, SP, (stack_size as i32) * SIZEOF_VALUE_I32));
-                let canary_opnd = Opnd::mem(64, canary_addr, 0);
-                self.mov(canary_opnd, vm_stack_canary().into());
+                let canary_addr = self.lea(Mem::new(64, SP, (stack_size as i32) * SIZEOF_VALUE_I32));
+                let canary_opnd = Mem::new(64, canary_addr, 0);
+                self.store(canary_opnd, vm_stack_canary().into());
                 return Some(canary_opnd)
             }
         }
         None
     }
 
-    fn clear_stack_canary(&mut self, canary_opnd: Option<Opnd>){
+    fn clear_stack_canary(&mut self, canary_opnd: Option<Mem>){
         if let Some(canary_opnd) = canary_opnd {
             self.store(canary_opnd, 0.into());
         };
@@ -2486,7 +2471,6 @@ impl Assembler
     /// registers/stack slots, we lower block parameter passing to explicit moves.
     pub fn resolve_ssa(&mut self, intervals: &[Interval], regs: &RegPool) {
         use crate::backend::parcopy;
-        use crate::backend::current::SCRATCH_REG;
 
         // Count predecessors for each block
         let mut num_predecessors: HashMap<BlockId, usize> = HashMap::new();
@@ -2528,8 +2512,8 @@ impl Assembler
                 // Sequentialize register copies.
                 // Copies must use physical registers, not VRegs, so the
                 // parcopy algorithm can detect physical register conflicts.
-                debug_assert!(reg_copies.iter().all(|c| !c.source.is_vreg() && !c.destination.is_vreg()),
-                    "parcopy must operate on physical registers, not VRegs");
+                debug_assert!(reg_copies.iter().all(|c| self.is_physical_location(c.source) && self.is_physical_location(c.destination)),
+                    "parcopy must operate on physical locations, not unassigned VRegs");
                 let sequentialized = parcopy::sequentialize_register(&reg_copies, Opnd::Reg(SCRATCH_REG));
                 let moves: Vec<Insn> = sequentialized
                     .iter()
@@ -2597,19 +2581,34 @@ impl Assembler
 
             // Rewrite VRegs to physical registers or stack slots before sequentialization
             // so the parcopy algorithm can detect conflicts between them.
+            // Stack-passed arguments are not Opnds, so they can't take part in the parallel
+            // move. They are only ever sources, and every destination belongs to exactly one
+            // parameter, so loading them after the parallel move is safe: by then the copies
+            // have finished reading the argument registers.
+            let mut stack_loads: Vec<Insn> = vec![];
             let copies: Vec<parcopy::RegisterCopy<Opnd>> = params.iter().enumerate()
-                .map(|(i, param)| parcopy::RegisterCopy::<Opnd> {
-                    source: match c_arg_location(i) {
-                        CArgLocation::Reg(reg) => reg,
-                        CArgLocation::StackSlot(slot) => Opnd::mem(64, NATIVE_BASE_PTR, Self::frame_size() + slot as i32 * SIZEOF_VALUE_I32),
-                    },
-                    destination: Self::rewritten_opnd(*param, intervals, regs),
+                .filter_map(|(i, param)| {
+                    let destination = Self::rewritten_opnd(*param, intervals, regs);
+                    match c_arg_location(i) {
+                        CArgLocation::Reg(reg) => Some(parcopy::RegisterCopy::<Opnd> { source: reg, destination }),
+                        CArgLocation::StackSlot(slot) => {
+                            let mem = Mem::new(64, NATIVE_BASE_PTR, Self::frame_size() + slot as i32 * SIZEOF_VALUE_I32);
+                            if let Opnd::Reg(_) = destination {
+                                stack_loads.push(Insn::LoadMemInto { dest: destination, mem });
+                            } else {
+                                // Spilled: bounce through the scratch register.
+                                stack_loads.push(Insn::LoadMemInto { dest: Opnd::Reg(SCRATCH_REG), mem });
+                                stack_loads.push(Insn::Store { mem: self.spill_slot(destination), src: Opnd::Reg(SCRATCH_REG) });
+                            }
+                            None
+                        }
+                    }
                 })
                 .filter(|copy| copy.source != copy.destination)
                 .collect();
 
-            debug_assert!(copies.iter().all(|c| !c.source.is_vreg() && !c.destination.is_vreg()),
-                "parcopy must operate on physical locations, not VRegs");
+            debug_assert!(copies.iter().all(|c| self.is_physical_location(c.source) && self.is_physical_location(c.destination)),
+                "parcopy must operate on physical locations, not unassigned VRegs");
             let sequentialized = parcopy::sequentialize_register(&copies, Opnd::Reg(SCRATCH_REG));
             let moves: Vec<Insn> = sequentialized
                 .iter()
@@ -2623,6 +2622,7 @@ impl Assembler
                         src: copy.source,
                     },
                 })
+                .chain(stack_loads)
                 .collect();
 
             // Find the position after FrameSetup to insert moves. They must come
@@ -2673,7 +2673,7 @@ impl Assembler
         c_arg_regs: &[Reg],
     ) {
         use crate::backend::parcopy;
-        use crate::backend::current::{C_RET_OPND, SCRATCH_REG, NATIVE_STACK_PTR};
+        use crate::backend::current::{C_RET_OPND, NATIVE_STACK_PTR};
 
         for block_id in self.block_order() {
             let block = &mut self.basic_blocks[block_id.0];
@@ -2790,7 +2790,7 @@ impl Assembler
                     // happen before the register-argument copies below clobber
                     // `c_arg_regs`, which may hold some of the source operands.
                     // Sources spilled by the register allocator are
-                    // frame-pointer-relative (MemBase::Stack), so moving the
+                    // frame-pointer-relative, so moving the
                     // native SP doesn't invalidate them.
                     let num_stack_args = opnds.len().saturating_sub(c_arg_regs.len());
                     let stack_arg_bytes = SIZEOF_VALUE_I32 * ((num_stack_args + 1) & !1) as i32;
@@ -2820,8 +2820,8 @@ impl Assembler
                         .filter(|copy| copy.source != copy.destination)
                         .collect();
 
-                    debug_assert!(reg_copies.iter().all(|c| !c.source.is_vreg() && !c.destination.is_vreg()),
-                        "parcopy must operate on physical registers, not VRegs");
+                    debug_assert!(reg_copies.iter().all(|c| self.is_physical_location(c.source) && self.is_physical_location(c.destination)),
+                        "parcopy must operate on physical locations, not unassigned VRegs");
                     let sequentialized = parcopy::sequentialize_register(&reg_copies, Opnd::Reg(SCRATCH_REG));
 
                     for copy in sequentialized {
@@ -2970,48 +2970,56 @@ impl Assembler
         opnd
     }
 
+    /// Rewrite a VReg to the physical register it was assigned. A VReg assigned to a stack
+    /// slot is deliberately left alone: after register allocation, a surviving VReg *means*
+    /// "spilled", and the scratch-split pass reloads it from [`Assembler::spill_slot`].
     fn rewrite_opnd(opnd: &mut Opnd, intervals: &[Interval], regs: &RegPool) {
-        match opnd {
-            Opnd::VReg { idx, num_bits } => {
-                if let Some(assignment) = intervals[*idx].assigned.get() {
-                    match assignment {
-                        Allocation::Reg(n) => {
-                            let mut reg = regs.reg_at(n);
-                            reg.num_bits = *num_bits;
-                            *opnd = Opnd::Reg(reg);
-                        }
-                        Allocation::Stack(n) => {
-                            let num_bits = *num_bits;
-                            *opnd = Opnd::Mem(Mem {
-                                base: MemBase::Stack { stack_idx: n.try_into().unwrap(), num_bits },
-                                disp: 0,
-                                num_bits,
-                            });
-                        }
-                    }
-                } else {
-                    panic!("Expected assignment for {opnd}");
-                }
+        let Opnd::VReg { idx, num_bits } = opnd else { return };
+        match intervals[*idx].assigned.get() {
+            Some(Allocation::Reg(n)) => {
+                let mut reg = regs.reg_at(n);
+                reg.num_bits = *num_bits;
+                *opnd = Opnd::Reg(reg);
             }
-            Opnd::Mem(Mem { base: MemBase::VReg(idx), .. }) => {
-                match intervals[*idx].assigned.get().unwrap() {
-                    Allocation::Reg(n) => {
-                        if let Opnd::Mem(mem) = opnd {
-                            mem.base = MemBase::Reg(regs.reg_at(n).reg_no);
-                        }
-                    }
-                    Allocation::Stack(n) => {
-                        // The VReg used as a memory base was spilled to a stack slot.
-                        // Mark it as StackIndirect so arm64_scratch_split can load
-                        // the pointer from the stack into a scratch register.
-                        if let Opnd::Mem(mem) = opnd {
-                            mem.base = MemBase::StackIndirect { stack_idx: n.try_into().unwrap() };
-                        }
-                    }
-                }
-            }
-            _ => {}
+            Some(Allocation::Stack(_)) => {}
+            None => panic!("Expected assignment for {opnd}"),
         }
+    }
+
+    /// Remember which frame slot each spilled VReg was assigned, so passes that run after
+    /// register allocation can reload it. Call right after `linear_scan`.
+    pub fn record_spill_slots(&mut self, intervals: &[Interval]) {
+        self.spill_slots = vec![None; self.num_vregs];
+        for interval in intervals {
+            if let Some(Allocation::Stack(n)) = interval.assigned.get() {
+                self.spill_slots[interval.vreg_id.to_usize()] = Some(n.try_into().unwrap());
+            }
+        }
+    }
+
+    /// Whether an operand names a location the parallel-move sequentializer can work with:
+    /// a physical register, an immediate, or a spilled VReg (which stands for its frame slot).
+    fn is_physical_location(&self, opnd: Opnd) -> bool {
+        match opnd {
+            Opnd::VReg { idx, .. } => self.spill_slots.get(idx.to_usize()).copied().flatten().is_some(),
+            _ => true,
+        }
+    }
+
+    /// The frame slot index a spilled VReg was assigned.
+    pub(super) fn spill_slot_idx(&self, opnd: Opnd) -> StackIdx {
+        let Opnd::VReg { idx, .. } = opnd else {
+            unreachable!("not a spilled VReg: {opnd:?}");
+        };
+        self.spill_slots[idx.to_usize()]
+            .unwrap_or_else(|| unreachable!("VReg without a spill slot: {opnd:?}"))
+    }
+
+    /// The frame slot a spilled VReg lives in. Panics if the VReg got a register instead;
+    /// callers reach here only for operands that survived [`Self::rewrite_opnd`].
+    pub(super) fn spill_slot(&self, opnd: Opnd) -> Mem {
+        let num_bits = opnd.num_bits().unwrap_or(Opnd::DEFAULT_NUM_BITS);
+        self.stack_state.frame_slot_mem(self.spill_slot_idx(opnd), num_bits)
     }
 
     /// Compile the instructions down to machine code.
@@ -3069,11 +3077,7 @@ impl Assembler
         fn capture_stack_map_opnd(asm: &mut Assembler, opnd: Opnd, capture_idx: &mut usize, frame_depth: usize) -> VALUE {
             let stack_idx = asm.stack_state.stack_idx_for_side_exit_stack_map(*capture_idx);
             *capture_idx += 1;
-            let capture_slot = Opnd::Mem(Mem {
-                base: MemBase::Stack { stack_idx: stack_idx.try_into().unwrap(), num_bits: 64 },
-                disp: 0,
-                num_bits: 64,
-            });
+            let capture_slot = asm.stack_state.frame_slot_mem(stack_idx.try_into().unwrap(), 64);
             let opnd = if matches!(opnd, Opnd::Reg(_)) { opnd.with_num_bits(64) } else { opnd };
             asm.store(capture_slot, opnd);
             encode_stack_map_index(asm, stack_idx, frame_depth)
@@ -3097,9 +3101,11 @@ impl Assembler
                         debug_assert!(!VALUE(encoded).special_const_p(), "encoded StackMap skip should not look like an immediate VALUE");
                         VALUE(encoded)
                     }
-                    StackMapEntry::Opnd(Opnd::Mem(Mem { base: MemBase::Stack { stack_idx, .. }, disp, .. })) => {
-                        assert_eq!(disp, 0, "StackMap stack slot should not have a displacement");
-                        encode_stack_map_index(asm, stack_idx.to_usize(), *frame_depth)
+                    // A VReg that survived register allocation was spilled; point the stack
+                    // map at the frame slot it lives in.
+                    StackMapEntry::Opnd(opnd @ Opnd::VReg { .. }) => {
+                        let stack_idx = asm.spill_slot_idx(opnd);
+                        encode_stack_map_index(asm, stack_idx as usize, *frame_depth)
                     }
                     StackMapEntry::Opnd(Opnd::Reg(_)) => {
                         let StackMapEntry::Opnd(opnd) = *stack_entry else { unreachable!() };
@@ -3112,7 +3118,7 @@ impl Assembler
 
             assert!(capture_idx <= asm.stack_state.num_side_exit_stack_map_slots);
             asm_comment!(asm, "install side-exit JITFrame for caller depth {}", frame_depth);
-            let jit_frame_slot = Opnd::mem(64, NATIVE_BASE_PTR, -((*frame_depth as i32 + 1) * SIZEOF_VALUE_I32));
+            let jit_frame_slot = Mem::new(64, NATIVE_BASE_PTR, -((*frame_depth as i32 + 1) * SIZEOF_VALUE_I32));
             asm.store(jit_frame_slot, Opnd::const_ptr(jit_frame));
         }
 
@@ -3126,27 +3132,30 @@ impl Assembler
             asm.boundary_pad();
 
             asm_comment!(asm, "save cfp->pc");
-            asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), *pc);
+            asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_PC), *pc);
 
             asm_comment!(asm, "save cfp->sp");
-            asm.lea_into(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP), Opnd::mem(64, SP, stack.len() as i32 * SIZEOF_VALUE_I32));
+            // compile_exits runs after register allocation, so there is no VReg to hold the
+            // address: compute it into the scratch register and store that.
+            asm.lea_into(Opnd::Reg(SCRATCH_REG), Mem::new(64, SP, stack.len() as i32 * SIZEOF_VALUE_I32));
+            asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_SP), Opnd::Reg(SCRATCH_REG));
 
             asm_comment!(asm, "save cfp->iseq");
-            asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_ISEQ), VALUE::from(*iseq).into());
+            asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_ISEQ), VALUE::from(*iseq).into());
 
             // cfp->block_code and cfp->jit_return are cleared by the materialize_exit trampoline
 
             if !stack.is_empty() {
                 asm_comment!(asm, "write stack slots: {}", join_opnds(&stack, ", "));
                 for (idx, &opnd) in stack.iter().enumerate() {
-                    asm.store(Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32), opnd);
+                    asm.store(Mem::new(64, SP, idx as i32 * SIZEOF_VALUE_I32), opnd);
                 }
             }
 
             if !locals.is_empty() {
                 asm_comment!(asm, "write locals: {}", join_opnds(&locals, ", "));
                 for (idx, &opnd) in locals.iter().enumerate() {
-                    asm.store(Opnd::mem(64, SP, (-local_size_and_idx_to_ep_offset(locals.len(), idx) - 1) * SIZEOF_VALUE_I32), opnd);
+                    asm.store(Mem::new(64, SP, (-local_size_and_idx_to_ep_offset(locals.len(), idx) - 1) * SIZEOF_VALUE_I32), opnd);
                 }
             }
 
@@ -3191,7 +3200,7 @@ impl Assembler
                 // is cleared by the materialize_exit trampoline, but if we're about to
                 // make a C call, we need to clear any stale JITFrame.
                 asm_comment!(asm, "clear cfp->jit_return");
-                asm.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
+                asm.store(Mem::new(64, CFP, RUBY_OFFSET_CFP_JIT_RETURN), 0.into());
             }
             if let Some(reason) = trace_reason {
                 // Leak a CString with the reason so it's available at runtime
@@ -3207,6 +3216,10 @@ impl Assembler
         fn join_opnds(opnds: &Vec<Opnd>, delimiter: &str) -> String {
             opnds.iter().map(|opnd| format!("{opnd}")).collect::<Vec<_>>().join(delimiter)
         }
+
+        // Exit code is emitted after register allocation, so it can't allocate VRegs for
+        // addresses it needs to materialize; it uses the scratch register directly instead.
+        let saved_accept_scratch_reg = replace(&mut self.accept_scratch_reg, true);
 
         // Extract targets first so that we can update instructions while referencing part of them.
         let mut targets = HashMap::new();
@@ -3323,6 +3336,7 @@ impl Assembler
         // Extract exit instructions and restore the previous current block
         let exit_insns = take(&mut self.basic_blocks[exit_block.0].insns);
         self.set_current_block(saved_block);
+        self.accept_scratch_reg = saved_accept_scratch_reg;
         exit_insns
     }
 
@@ -3847,6 +3861,15 @@ impl fmt::Display for Assembler {
                                 }
                                 _ => {}
                             }
+                        } else if let Some(mem) = insn.mem() {
+                            // for_each_operand only yields the base register of a Mem,
+                            // so print these in source order with the full address.
+                            match insn {
+                                Insn::IncrCounter { value: opnd, .. } |
+                                Insn::Store { src: opnd, .. } => write!(f, " {mem}, {opnd}")?,
+                                Insn::LoadMemInto { dest, .. } => write!(f, " {dest}, {mem}")?,
+                                _ => write!(f, " {mem}")?,
+                            }
                         } else if insn.opnd_count() > 0 {
                             let mut sep = " ";
                             insn.try_for_each_operand(|opnd| {
@@ -4148,8 +4171,19 @@ impl Assembler {
         self.push_insn(Insn::FrameTeardown { preserved: preserved_regs });
     }
 
-    pub fn incr_counter(&mut self, mem: Opnd, value: Opnd) {
-        self.push_insn(Insn::IncrCounter { mem, value });
+    /// Atomically add `value` to the counter at `counter_ptr`, which must be an immediate
+    /// address. The address is materialized into a register first, since only registers can
+    /// be memory bases.
+    pub fn incr_counter(&mut self, counter_ptr: Opnd, value: Opnd) {
+        assert!(matches!(counter_ptr, Opnd::UImm(_)), "counter address must be an immediate, got: {counter_ptr:?}");
+        let base = if self.accept_scratch_reg {
+            // Past register allocation (side exits): no VReg to allocate, use the scratch register.
+            self.load_into(Opnd::Reg(SCRATCH_REG), counter_ptr);
+            Opnd::Reg(SCRATCH_REG)
+        } else {
+            self.load(counter_ptr)
+        };
+        self.push_insn(Insn::IncrCounter { mem: Mem::new(64, base, 0), value });
     }
 
     pub fn jb(&mut self, target: Target) {
@@ -4171,15 +4205,15 @@ impl Assembler {
 
 
     #[must_use]
-    pub fn lea(&mut self, opnd: Opnd) -> Opnd {
-        let out = self.new_vreg(Opnd::match_num_bits(&[opnd]));
-        self.push_insn(Insn::Lea { opnd, out });
+    pub fn lea(&mut self, mem: Mem) -> Opnd {
+        let out = self.new_vreg(Opnd::DEFAULT_NUM_BITS);
+        self.push_insn(Insn::Lea { mem, out });
         out
     }
 
-    pub fn lea_into(&mut self, out: Opnd, opnd: Opnd) {
-        assert!(matches!(out, Opnd::Reg(_) | Opnd::Mem(_)), "Destination of lea_into must be a register or memory, got: {out:?}");
-        self.push_insn(Insn::Lea { opnd, out });
+    pub fn lea_into(&mut self, out: Opnd, mem: Mem) {
+        assert!(matches!(out, Opnd::Reg(_)), "Destination of lea_into must be a register, got: {out:?}");
+        self.push_insn(Insn::Lea { mem, out });
     }
 
     #[must_use]
@@ -4205,9 +4239,21 @@ impl Assembler {
     }
 
     #[must_use]
-    pub fn load_sext(&mut self, opnd: Opnd) -> Opnd {
-        let out = self.new_vreg(Opnd::match_num_bits(&[opnd]));
-        self.push_insn(Insn::LoadSExt { opnd, out });
+    pub fn load_mem(&mut self, mem: Mem) -> Opnd {
+        let out = self.new_vreg(mem.num_bits);
+        self.push_insn(Insn::LoadMem { mem, out });
+        out
+    }
+
+    pub fn load_mem_into(&mut self, dest: Opnd, mem: Mem) {
+        assert!(matches!(dest, Opnd::Reg(_)), "Destination of load_mem_into must be a register, got: {dest:?}");
+        self.push_insn(Insn::LoadMemInto { dest, mem });
+    }
+
+    #[must_use]
+    pub fn load_sext(&mut self, mem: Mem) -> Opnd {
+        let out = self.new_vreg(Opnd::DEFAULT_NUM_BITS);
+        self.push_insn(Insn::LoadSExt { mem, out });
         out
     }
 
@@ -4302,9 +4348,8 @@ impl Assembler {
         self.stack_map = Some(StackMap::new(stack, jit_frame, frame_depth));
     }
 
-    pub fn store(&mut self, dest: Opnd, src: Opnd) {
-        assert!(!matches!(dest, Opnd::VReg { .. }), "Destination of store must not be Opnd::VReg, got: {dest:?}");
-        self.push_insn(Insn::Store { dest, src });
+    pub fn store(&mut self, mem: Mem, src: Opnd) {
+        self.push_insn(Insn::Store { mem, src });
     }
 
     #[must_use]
@@ -4435,8 +4480,7 @@ mod tests {
     #[test]
     fn test_size_of_opnd() {
         assert_eq!(std::mem::size_of::<VRegId>(), 4);
-        assert_eq!(std::mem::size_of::<MemBase>(), 8);
-        assert_eq!(std::mem::size_of::<Mem>(), 16);
+        assert_eq!(std::mem::size_of::<Mem>(), 24);
         assert_eq!(std::mem::size_of::<Opnd>(), 16);
         assert_eq!(std::mem::size_of::<Target>(), 16);
     }
@@ -4463,14 +4507,6 @@ mod tests {
         let mut result = vec![];
         insn.for_each_operand(|opnd| result.push(opnd));
         assert_eq!(result, vec![Opnd::Imm(0), Opnd::Imm(1)]);
-    }
-
-    #[test]
-    #[should_panic]
-    fn load_into_memory_is_invalid() {
-        let mut asm = Assembler::new();
-        let mem = Opnd::mem(64, SP, 0);
-        asm.load_into(mem, mem);
     }
 
     #[test]
@@ -4510,43 +4546,33 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parallel_moves_break_memory_memory_cycle() {
+    fn test_resolve_parallel_moves_break_spill_spill_cycle() {
         let scratch_reg = scratch_reg();
+        let spilled = Opnd::VReg { idx: VRegId(0), num_bits: 64 };
         let result = Assembler::resolve_parallel_moves(&[
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), C_ARG_OPNDS[1]),
-            (C_ARG_OPNDS[1], Opnd::mem(64, C_ARG_OPNDS[0], 0)),
+            (spilled, C_ARG_OPNDS[1]),
+            (C_ARG_OPNDS[1], spilled),
         ], Some(scratch_reg));
         assert_eq!(result, Some(vec![
             (scratch_reg, C_ARG_OPNDS[1]),
-            (C_ARG_OPNDS[1], Opnd::mem(64, C_ARG_OPNDS[0], 0)),
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), scratch_reg),
+            (C_ARG_OPNDS[1], spilled),
+            (spilled, scratch_reg),
         ]));
     }
 
     #[test]
-    fn test_resolve_parallel_moves_break_register_memory_cycle() {
+    fn test_resolve_parallel_moves_spill_slot_does_not_alias_registers() {
+        // A spill slot is frame-relative, so writing a register can never disturb it.
+        // The only ordering constraint here is that x0 reads x1 before x1 is overwritten.
         let scratch_reg = scratch_reg();
+        let spilled = Opnd::VReg { idx: VRegId(0), num_bits: 64 };
         let result = Assembler::resolve_parallel_moves(&[
             (C_ARG_OPNDS[0], C_ARG_OPNDS[1]),
-            (C_ARG_OPNDS[1], Opnd::mem(64, C_ARG_OPNDS[0], 0)),
+            (C_ARG_OPNDS[1], spilled),
         ], Some(scratch_reg));
         assert_eq!(result, Some(vec![
-            (scratch_reg, C_ARG_OPNDS[1]),
-            (C_ARG_OPNDS[1], Opnd::mem(64, C_ARG_OPNDS[0], 0)),
-            (C_ARG_OPNDS[0], scratch_reg),
-        ]));
-    }
-
-    #[test]
-    fn test_resolve_parallel_moves_reorder_memory_destination() {
-        let scratch_reg = scratch_reg();
-        let result = Assembler::resolve_parallel_moves(&[
-            (C_ARG_OPNDS[0], SP),
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), CFP),
-        ], Some(scratch_reg));
-        assert_eq!(result, Some(vec![
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), CFP),
-            (C_ARG_OPNDS[0], SP),
+            (C_ARG_OPNDS[0], C_ARG_OPNDS[1]),
+            (C_ARG_OPNDS[1], spilled),
         ]));
     }
 
@@ -4561,10 +4587,11 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_resolve_parallel_moves_into_same_memory() {
+    fn test_resolve_parallel_moves_into_same_spill_slot() {
+        let spilled = Opnd::VReg { idx: VRegId(0), num_bits: 64 };
         Assembler::resolve_parallel_moves(&[
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), SP),
-            (Opnd::mem(64, C_ARG_OPNDS[0], 0), CFP),
+            (spilled, SP),
+            (spilled, CFP),
         ], Some(scratch_reg()));
     }
 
@@ -4722,26 +4749,6 @@ mod tests {
         // b4 has no edges (terminates with CRet)
         let out_b4 = asm.basic_blocks[b4.0].out_vregs();
         assert_eq!(out_b4.len(), 0);
-    }
-
-    #[test]
-    fn test_out_vregs_includes_memory_base_vregs() {
-        let mut asm = Assembler::new();
-
-        let base = asm.new_vreg(64);
-        let b1 = asm.new_block(hir::BlockId(0), true, 0);
-        let b2 = asm.new_block(hir::BlockId(1), false, 1);
-
-        asm.set_current_block(b1);
-        let label_b1 = asm.new_label("bb0");
-        asm.write_label(label_b1);
-        asm.basic_blocks[b1.0].push_insn(Insn::Jmp(Target::Block(Box::new(BranchEdge {
-            target: b2,
-            args: vec![Opnd::mem(64, base, 8)],
-        }))));
-
-        let out_vregs = asm.basic_blocks[b1.0].out_vregs();
-        assert_eq!(out_vregs, vec![base.vreg_idx()]);
     }
 
     #[test]
@@ -5083,6 +5090,7 @@ mod tests {
         let mut regs = alloc_reg_pool(5);
         asm.preferred_register_assignments(&mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
+        asm.record_spill_slots(&intervals);
 
         asm.resolve_ssa(&intervals, &regs);
 
@@ -5128,6 +5136,7 @@ mod tests {
         let mut regs = alloc_reg_pool(5);
         asm.preferred_register_assignments(&mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
+        asm.record_spill_slots(&intervals);
 
         // Entry block b1 has parameters [v0, v1].
         // With 5 registers: v0 -> Reg(0) = regs[0], arrival = C_ARG_OPNDS[0] = regs[0] -> self-move, filtered
@@ -5184,6 +5193,7 @@ mod tests {
         let mut regs = alloc_reg_pool(5);
         asm.preferred_register_assignments(&mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
+        asm.record_spill_slots(&intervals);
 
         asm.resolve_ssa(&intervals, &regs);
 
@@ -5192,10 +5202,10 @@ mod tests {
         // return address and saved frame pointer.
         let insns = &asm.basic_blocks[block.0].insns;
         assert!(!insns.iter().any(|insn| matches!(insn, Insn::Abort)), "no entry should abort");
-        let expected_src = Opnd::mem(64, NATIVE_BASE_PTR, Assembler::frame_size());
+        let expected_mem = Mem::new(64, NATIVE_BASE_PTR, Assembler::frame_size());
         assert!(
-            insns.iter().any(|insn| matches!(insn, Insn::Mov { src, .. } if *src == expected_src)),
-            "expected a load from {expected_src:?}, got: {insns:?}"
+            insns.iter().any(|insn| matches!(insn, Insn::LoadMemInto { mem, .. } if *mem == expected_mem)),
+            "expected a load from {expected_mem:?}, got: {insns:?}"
         );
     }
 
@@ -5252,6 +5262,7 @@ mod tests {
         let mut regs = alloc_reg_pool(5);
         asm.preferred_register_assignments(&mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
+        asm.record_spill_slots(&intervals);
 
         assert_eq!(asm.basic_blocks.len(), 3);
 
@@ -5358,6 +5369,7 @@ mod tests {
         asm.preferred_register_assignments(&mut intervals, &mut regs);
         let num_stack_slots = asm.linear_scan(&intervals, &regs);
         asm.stack_state.num_spill_slots = num_stack_slots;
+        asm.record_spill_slots(&intervals);
 
         // Stand in for the C calling convention's argument registers. These
         // deliberately overlap the allocatable pool so that arguments clobber
@@ -5396,15 +5408,11 @@ mod tests {
             assert!(data.opnds.is_empty(), "CCall opnds should be empty after handle_caller_saved_regs");
         }
 
-        // v0 should be rewritten to a Stack operand
-        // Find an Add that uses a Stack operand (the v0+v4 add)
-        let has_stack_opnd = insns.iter().any(|i| {
-            if let Insn::Add { left: Opnd::Mem(Mem { base: MemBase::Stack { .. }, .. }), .. } = i {
-                true
-            } else {
-                false
-            }
+        // v0 should have been spilled, so it stays an Opnd::VReg after register allocation.
+        // Find an Add that uses a spilled operand (the v0+v4 add)
+        let has_spilled_opnd = insns.iter().any(|i| {
+            matches!(i, Insn::Add { left: Opnd::VReg { .. }, .. })
         });
-        assert!(has_stack_opnd, "v0 should be rewritten to a Stack memory operand");
+        assert!(has_spilled_opnd, "v0 should have been spilled");
     }
 }
