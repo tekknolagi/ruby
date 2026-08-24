@@ -6158,6 +6158,7 @@ impl Function {
             changed = false;
 
             for (row, block) in param_values.iter_mut().zip(&self.blocks) {
+                row.clear();
                 row.resize(block.params.len(), ParamValue::None);
             }
 
