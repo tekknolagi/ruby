@@ -646,7 +646,7 @@ impl Assembler {
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so this
     /// splits them and uses scratch registers for it.
     /// Linearizes all blocks into a single giant block.
-    fn arm64_scratch_split(self) -> Assembler {
+    fn arm64_scratch_split(self, block_order: &[BlockId]) -> Assembler {
         /// If opnd is Opnd::Mem with a too large disp, make the disp smaller using lea.
         fn split_large_disp(asm: &mut Assembler, opnd: Opnd, scratch_opnd: Opnd) -> Opnd {
             match opnd {
@@ -739,7 +739,7 @@ impl Assembler {
         let asm = &mut asm_local;
 
         // Get linearized instructions with branch parameters expanded into ParallelMov
-        let linearized_insns = self.linearize_instructions();
+        let linearized_insns = self.linearize_instructions(block_order);
 
         // Process each linearized instruction
         for (idx, insn) in linearized_insns.iter().enumerate() {
@@ -1713,6 +1713,10 @@ impl Assembler {
 
         // We are moved out of SSA after resolve_ssa
 
+        // resolve_ssa() splits critical edges, adding blocks, so the order computed
+        // before register allocation is stale from here on.
+        let block_order = asm.block_order();
+
         // We put compile_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
         // Exit code is compiled into a separate list of instructions that we append
         // to the last reachable block before scratch_split, so it gets linearized and split.
@@ -1731,11 +1735,11 @@ impl Assembler {
         asm_dump!(asm, compile_exits);
 
         if use_scratch_reg {
-            asm = trace_compile_phase("scratch_split", || asm.arm64_scratch_split());
+            asm = trace_compile_phase("scratch_split", || asm.arm64_scratch_split(&block_order));
             asm_dump!(asm, scratch_split);
         } else {
             // For trampolines that use scratch registers, resolve ParallelMov without scratch_reg.
-            asm = trace_compile_phase("resolve_parallel_mov", || asm.resolve_parallel_mov_pass());
+            asm = trace_compile_phase("resolve_parallel_mov", || asm.resolve_parallel_mov_pass(&block_order));
             asm_dump!(asm, resolve_parallel_mov);
         }
         // It doesn't make sense to refer to `block_order` after this point; instructions have been

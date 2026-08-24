@@ -2033,7 +2033,7 @@ impl Assembler
         iter
     }
 
-    pub fn linearize_instructions(&self) -> Vec<Insn> {
+    pub fn linearize_instructions(&self, block_order: &[BlockId]) -> Vec<Insn> {
         // Wrap instructions emitted by `push_insns` with PosMarkers and record
         // the emitted byte range under `symbol_name` in the perf map.
         fn push_insns_with_perf_symbol(
@@ -2073,7 +2073,7 @@ impl Assembler
 
         // Emit instructions with labels, expanding branch parameters
         let mut insns = Vec::with_capacity(ASSEMBLER_INSNS_CAPACITY);
-        let block_ids = self.block_order();
+        let block_ids = block_order;
 
         for (i, block_id) in block_ids.iter().enumerate() {
             let block = &self.basic_blocks[block_id.0];
@@ -2269,8 +2269,9 @@ impl Assembler
 
     /// Record a preferred physical register on vregs that should reuse one, such as a
     /// newborn vreg immediately moved into a preg in the next instruction.
-    pub fn preferred_register_assignments(&self, intervals: &mut [Interval], regs: &mut RegPool) {
-        for block in &self.basic_blocks {
+    pub fn preferred_register_assignments(&self, block_order: &[BlockId], intervals: &mut [Interval], regs: &mut RegPool) {
+        for block_id in block_order {
+            let block = &self.basic_blocks[block_id.0];
             let mut prev_insn: Option<(InsnId, &Insn)> = None;
 
             for (insn, insn_id) in block.insns.iter().zip(block.insn_ids.iter()) {
@@ -2668,6 +2669,7 @@ impl Assembler
     /// and the pops after the call must read back the exact slots the pushes wrote.
     pub fn handle_caller_saved_regs(
         &mut self,
+        block_order: &[BlockId],
         intervals: &[Interval],
         alloc_regs: &RegPool,
         c_arg_regs: &[Reg],
@@ -2675,7 +2677,7 @@ impl Assembler
         use crate::backend::parcopy;
         use crate::backend::current::{C_RET_OPND, SCRATCH_REG, NATIVE_STACK_PTR};
 
-        for block_id in self.block_order() {
+        for &block_id in block_order {
             let block = &mut self.basic_blocks[block_id.0];
             let old_insns = take(&mut block.insns);
             let old_ids = take(&mut block.insn_ids);
@@ -2918,8 +2920,8 @@ impl Assembler
 
     /// Return the maximum number of stack-map entries that any side exit needs
     /// to copy into reserved native stack slots.
-    pub fn side_exit_stack_map_slots(&self, intervals: &[Interval]) -> usize {
-        self.block_order().into_iter().fold(0, |max_slots, block_id| {
+    pub fn side_exit_stack_map_slots(&self, block_order: &[BlockId], intervals: &[Interval]) -> usize {
+        block_order.into_iter().fold(0, |max_slots, block_id| {
             let block = &self.basic_blocks[block_id.0];
             block.insns.iter().fold(max_slots, |max_slots, insn| {
                 let slots = insn.target().map(|target| Self::side_exit_target_stack_map_slots(target, intervals)).unwrap_or(0);
@@ -3220,10 +3222,10 @@ impl Assembler
             }
         }
 
-        // Create a dedicated block for exit code. This block is not part of the
-        // CFG (DUMMY_RPO_INDEX), so it won't be included in block_order() or
-        // linearize_instructions(). Its instructions are returned to the caller
-        // for appending after scratch_split.
+        // Create a dedicated block to compile exit code into. It is torn down again
+        // below: its instructions are returned to the caller for appending after
+        // scratch_split, and the block itself is removed from the CFG so that a
+        // block_order() computed before compile_exits() stays valid afterward.
         let saved_block = self.current_block_id;
         let exit_block = self.new_block_without_id("side_exits");
 
@@ -3323,6 +3325,10 @@ impl Assembler
         // Extract exit instructions and restore the previous current block
         let exit_insns = take(&mut self.basic_blocks[exit_block.0].insns);
         self.set_current_block(saved_block);
+        // Remove the now-empty exit block. It is an entry block, so leaving it in place
+        // would put an instruction-less block into block_order().
+        assert_eq!(exit_block.0, self.basic_blocks.len() - 1, "exit block should be the last block");
+        self.basic_blocks.pop();
         exit_insns
     }
 
@@ -3368,10 +3374,9 @@ impl Assembler
     /// This assigns a unique InsnId to each instruction across all blocks, skipping labels.
     /// Also sets the from/to range on each block.
     /// Returns the next available instruction ID after numbering.
-    pub fn number_instructions(&mut self, start: usize) -> usize {
-        let block_ids = self.block_order();
+    pub fn number_instructions(&mut self, block_order: &[BlockId], start: usize) -> usize {
         let mut insn_id = start;
-        for block_id in block_ids {
+        for &block_id in block_order {
             let block = &mut self.basic_blocks[block_id.0];
             let block_start = insn_id;
             insn_id += 2;
@@ -3452,15 +3457,13 @@ impl Assembler
     }
 
     /// Calculate live intervals for each VReg.
-    pub fn build_intervals(&self, live_in: Vec<BitSet<usize>>) -> Vec<Interval> {
+    pub fn build_intervals(&self, block_order: &[BlockId], live_in: Vec<BitSet<usize>>) -> Vec<Interval> {
         let num_vregs = self.num_vregs;
         let mut intervals: Vec<Interval> = (0..num_vregs)
             .map(|i| Interval::new(i.into()))
             .collect();
 
-        let blocks = self.block_order();
-
-        for block_id in blocks {
+        for block_id in block_order {
             let block = &self.basic_blocks[block_id.0];
 
             // live = union of successor.liveIn for each successor
@@ -3506,18 +3509,9 @@ impl Assembler
     /// Analyze liveness for all blocks using a fixed-point algorithm.
     /// Returns live_in sets for each block, indexed by block ID.
     /// A VReg is live-in to a block if it may be used before being defined.
-    pub fn analyze_liveness(&self) -> Vec<BitSet<usize>> {
-        // Get blocks in postorder
-        let po_blocks = {
-            let entry_blocks: Vec<BlockId> = self.basic_blocks.iter()
-                .filter(|block| block.is_entry)
-                .map(|block| block.id)
-                .collect();
-            self.po_from(entry_blocks)
-        };
-
+    pub fn analyze_liveness(&self, block_order: &[BlockId]) -> Vec<BitSet<usize>> {
         // Compute initial gen/kill sets
-        let (kill_sets, gen_sets) = self.compute_initial_liveness_sets(&po_blocks);
+        let (kill_sets, gen_sets) = self.compute_initial_liveness_sets(block_order);
 
         let num_blocks = self.basic_blocks.len();
         let num_vregs = self.num_vregs;
@@ -3530,8 +3524,8 @@ impl Assembler
         while changed {
             changed = false;
 
-            // Iterate over blocks in postorder
-            for &block_id in &po_blocks {
+            // Blocks arrive in reverse postorder in `block_order`; iterate over blocks in postorder
+            for &block_id in block_order.iter().rev() {
                 let block = &self.basic_blocks[block_id.0];
 
                 // block_live = union of live_in[succ] for all successors
@@ -3869,7 +3863,7 @@ impl fmt::Debug for Assembler {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         writeln!(fmt, "Assembler")?;
 
-        for (idx, insn) in self.linearize_instructions().iter().enumerate() {
+        for (idx, insn) in self.linearize_instructions(&self.block_order()).iter().enumerate() {
             writeln!(fmt, "    {idx:03} {insn:?}")?;
         }
 
@@ -4353,14 +4347,14 @@ impl Assembler {
 
     /// This is used for trampolines that don't allow scratch registers.
     /// Linearizes all blocks into a single giant block.
-    pub fn resolve_parallel_mov_pass(self) -> Assembler {
+    pub fn resolve_parallel_mov_pass(self, block_order: &[BlockId]) -> Assembler {
         let mut asm_local = Assembler::new_with_asm_without_blocks(&self);
 
         // Create one giant block to linearize everything into
         asm_local.new_block_without_id("linearized");
 
         // Get linearized instructions with branch parameters expanded into ParallelMov
-        let linearized_insns = self.linearize_instructions();
+        let linearized_insns = self.linearize_instructions(block_order);
 
         // TODO: Aaron, this could be better. We don't need to do this, FIXME
         // Process each linearized instruction
@@ -4654,7 +4648,8 @@ mod tests {
         let TestFunc { asm, r10, r12, r13, b1, b2, b3, b4, .. } = build_func();
 
         let num_vregs = asm.num_vregs;
-        let live_in = asm.analyze_liveness();
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
 
         // b1: [] - entry block, no variables are live-in
         assert_eq!(bitset_to_vreg_indices(&live_in[b1.0], num_vregs), vec![]);
@@ -4875,13 +4870,14 @@ mod tests {
         let TestFunc { mut asm, r10, r11, r12, r13, r14, r15, .. } = build_func();
 
         // Analyze liveness
-        let live_in = asm.analyze_liveness();
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
 
         // Number instructions (starting from 16 to match Ruby test)
-        asm.number_instructions(16);
+        asm.number_instructions(&block_order, 16);
 
         // Build intervals
-        let intervals = asm.build_intervals(live_in);
+        let intervals = asm.build_intervals(&block_order, live_in);
 
         // Extract vreg indices
         let r10_idx = if let Opnd::VReg { idx, .. } = r10 { idx } else { panic!() };
@@ -4920,18 +4916,19 @@ mod tests {
         let TestFunc { mut asm, r10, r11, r12, r13, r14, r15, .. } = build_func();
 
         // Analyze liveness
-        let live_in = asm.analyze_liveness();
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
 
         // Number instructions (starting from 16 to match Ruby test)
-        asm.number_instructions(16);
+        asm.number_instructions(&block_order, 16);
 
         // Build intervals
-        let mut intervals = asm.build_intervals(live_in);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
 
         println!("LIR live_intervals:\n{}", crate::backend::lir::debug_intervals(&asm, &intervals));
 
         let mut regs = alloc_reg_pool(5);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         let num_stack_slots = asm.linear_scan(&intervals, &regs);
 
         // Extract vreg indices
@@ -4964,13 +4961,14 @@ mod tests {
     fn test_linear_scan_spill_less() {
         let TestFunc { mut asm, r10, r11, r12, r13, r14, r15, .. } = build_func();
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(16);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 16);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
 
         // 3 registers -- enough for every interval once holes are reused
         let mut regs = alloc_reg_pool(3);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         let num_stack_slots = asm.linear_scan(&intervals, &regs);
 
         let r10_idx = if let Opnd::VReg { idx, .. } = r10 { idx } else { panic!() };
@@ -4995,13 +4993,14 @@ mod tests {
     fn test_linear_scan_spill() {
         let TestFunc { mut asm, r10, r11, r12, r13, r14, r15, .. } = build_func();
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(16);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 16);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
 
         // Only 1 register available -- forces spills
         let mut regs = alloc_reg_pool(1);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         let num_stack_slots = asm.linear_scan(&intervals, &regs);
 
         let r10_idx = if let Opnd::VReg { idx, .. } = r10 { idx } else { panic!() };
@@ -5033,14 +5032,15 @@ mod tests {
         asm.mov(sp, new_sp);
         asm.cret(sp);
 
-        asm.number_instructions(0);
-        let live_in = asm.analyze_liveness();
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        asm.number_instructions(&block_order, 0);
+        let live_in = asm.analyze_liveness(&block_order);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         // Zero allocatable registers: the only register this interval can get
         // is the pinned one appended to the pool, so the preference is what
         // makes this succeed rather than spill.
         let mut regs = alloc_reg_pool(0);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
 
         let vreg_idx = new_sp.vreg_idx();
         let Some(Allocation::Reg(regno)) = intervals[vreg_idx].preferred else {
@@ -5059,11 +5059,12 @@ mod tests {
         let TestFunc { mut asm, .. } = build_func();
 
         // Number instructions
-        asm.number_instructions(16);
+        let block_order = asm.block_order();
+        asm.number_instructions(&block_order, 16);
 
         // Get the debug output
-        let live_in = asm.analyze_liveness();
-        let intervals = asm.build_intervals(live_in);
+        let live_in = asm.analyze_liveness(&block_order);
+        let intervals = asm.build_intervals(&block_order, live_in);
         let output = debug_intervals(&asm, &intervals);
 
         // Verify it contains the grid structure
@@ -5077,11 +5078,12 @@ mod tests {
     fn test_resolve_ssa() {
         let TestFunc { mut asm, b1, b3, .. } = build_func();
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(16);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 16);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         let mut regs = alloc_reg_pool(5);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
 
         asm.resolve_ssa(&intervals, &regs);
@@ -5122,11 +5124,12 @@ mod tests {
     fn test_resolve_ssa_entry_params() {
         let TestFunc { mut asm, b1, .. } = build_func();
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(16);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 16);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         let mut regs = alloc_reg_pool(5);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
 
         // Entry block b1 has parameters [v0, v1].
@@ -5178,11 +5181,12 @@ mod tests {
         }
         asm.basic_blocks[block.0].push_insn(Insn::CRet(acc));
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(0);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 0);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         let mut regs = alloc_reg_pool(5);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
 
         asm.resolve_ssa(&intervals, &regs);
@@ -5246,11 +5250,12 @@ mod tests {
     fn test_resolve_critical_edge() {
         let (mut asm, _v0, v1, _v2, v3, v4, b1, b2, b3) = build_critical_edge();
 
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(16);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 16);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         let mut regs = alloc_reg_pool(5);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         asm.linear_scan(&intervals, &regs);
 
         assert_eq!(asm.basic_blocks.len(), 3);
@@ -5350,12 +5355,13 @@ mod tests {
         asm.basic_blocks[b1.0].push_insn(Insn::CRet(v5));
 
         // Run liveness + numbering + intervals + linear scan with 2 registers
-        let live_in = asm.analyze_liveness();
-        asm.number_instructions(0);
-        let mut intervals = asm.build_intervals(live_in);
+        let block_order = asm.block_order();
+        let live_in = asm.analyze_liveness(&block_order);
+        asm.number_instructions(&block_order, 0);
+        let mut intervals = asm.build_intervals(&block_order, live_in);
         let num_regs = 2;
         let mut regs = alloc_reg_pool(num_regs);
-        asm.preferred_register_assignments(&mut intervals, &mut regs);
+        asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs);
         let num_stack_slots = asm.linear_scan(&intervals, &regs);
         asm.stack_state.num_spill_slots = num_stack_slots;
 
@@ -5372,7 +5378,7 @@ mod tests {
             "v1 should be in a register");
 
         // Run the pipeline: handle_caller_saved_regs then resolve_ssa
-        asm.handle_caller_saved_regs(&intervals, &regs, c_arg_regs);
+        asm.handle_caller_saved_regs(&block_order, &intervals, &regs, c_arg_regs);
         asm.resolve_ssa(&intervals, &regs);
 
         let insns = &asm.basic_blocks[b1.0].insns;

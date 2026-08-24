@@ -318,7 +318,7 @@ impl Assembler {
     /// for VRegs, most splits should happen in [`Self::x86_split`]. However, some instructions
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so
     /// this splits them and uses scratch registers for it.
-    pub fn x86_scratch_split(self) -> Assembler {
+    pub fn x86_scratch_split(self, block_order: &[BlockId]) -> Assembler {
         /// For some instructions, we want to be able to lower a 64-bit operand
         /// without requiring more registers to be available in the register
         /// allocator. So we just use the SCRATCH0_OPND register temporarily to hold
@@ -456,7 +456,7 @@ impl Assembler {
         let asm = &mut asm_local;
 
         // Get linearized instructions with branch parameters expanded into ParallelMov
-        let linearized_insns = self.linearize_instructions();
+        let linearized_insns = self.linearize_instructions(block_order);
 
         for insn in linearized_insns.iter() {
             let mut insn = insn.clone();
@@ -1175,11 +1175,12 @@ impl Assembler {
 
         asm_dump!(asm, split);
 
+        let block_order = asm.block_order();
         trace_compile_phase("regalloc", || {
-            trace_compile_phase("number_instructions", || asm.number_instructions(0));
+            trace_compile_phase("number_instructions", || asm.number_instructions(&block_order, 0));
 
-            let live_in = trace_compile_phase("analyze_liveness", || asm.analyze_liveness());
-            let mut intervals = trace_compile_phase("build_intervals", || asm.build_intervals(live_in));
+            let live_in = trace_compile_phase("analyze_liveness", || asm.analyze_liveness(&block_order));
+            let mut intervals = trace_compile_phase("build_intervals", || asm.build_intervals(&block_order, live_in));
 
             // Dump live intervals if requested
             if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
@@ -1188,11 +1189,11 @@ impl Assembler {
                 }
             }
 
-            trace_compile_phase("preferred_registers", || asm.preferred_register_assignments(&mut intervals, &mut regs));
+            trace_compile_phase("preferred_registers", || asm.preferred_register_assignments(&block_order, &mut intervals, &mut regs));
             let num_stack_slots = trace_compile_phase("linear_scan", || asm.linear_scan(&intervals, &regs));
 
             asm.stack_state.num_spill_slots = num_stack_slots;
-            asm.stack_state.num_side_exit_stack_map_slots = asm.side_exit_stack_map_slots(&intervals);
+            asm.stack_state.num_side_exit_stack_map_slots = asm.side_exit_stack_map_slots(&block_order, &intervals);
             let stack_slot_count = asm.stack_state.stack_slot_count();
             if stack_slot_count > Self::MAX_FRAME_STACK_SLOTS {
                 return Err(CompileError::NativeStackTooLarge);
@@ -1219,7 +1220,8 @@ impl Assembler {
             // Update FrameSetup slot_count now that StackState knows the
             // register allocator spill and side-exit capture counts.
             trace_compile_phase("count_stack_slots", || {
-                for block in asm.basic_blocks.iter_mut() {
+                for &block_id in &block_order {
+                    let block = &mut asm.basic_blocks[block_id.0];
                     for insn in block.insns.iter_mut() {
                         if let Insn::FrameSetup { slot_count, .. } = insn {
                             *slot_count = stack_slot_count;
@@ -1229,7 +1231,7 @@ impl Assembler {
             });
 
             trace_compile_phase("resolve_ssa", || {
-                asm.handle_caller_saved_regs(&intervals, &regs, &C_ARG_REGREGS);
+                asm.handle_caller_saved_regs(&block_order, &intervals, &regs, &C_ARG_REGREGS);
                 asm.resolve_ssa(&intervals, &regs);
             });
 
@@ -1239,6 +1241,10 @@ impl Assembler {
 
         // We are moved out of SSA after resolve_ssa
 
+        // resolve_ssa() splits critical edges, adding blocks, so the order computed
+        // before register allocation is stale from here on.
+        let block_order = asm.block_order();
+
         // We put compile_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
         // Exit code is compiled into a separate list of instructions that we append
         // to the last reachable block before scratch_split, so it gets linearized and split.
@@ -1247,7 +1253,7 @@ impl Assembler {
 
             // Append exit instructions to the last reachable block so they are
             // included in linearize_instructions and processed by scratch_split.
-            if let Some(&last_block) = asm.block_order().last() {
+            if let Some(&last_block) = block_order.last() {
                 for insn in exit_insns {
                     asm.basic_blocks[last_block.0].insns.push(insn);
                     asm.basic_blocks[last_block.0].insn_ids.push(None);
@@ -1257,13 +1263,17 @@ impl Assembler {
         asm_dump!(asm, compile_exits);
 
         if use_scratch_regs {
-            asm = trace_compile_phase("scratch_split", || asm.x86_scratch_split());
+            asm = trace_compile_phase("scratch_split", || asm.x86_scratch_split(&block_order));
             asm_dump!(asm, scratch_split);
         } else {
             // For trampolines that use scratch registers, resolve ParallelMov without scratch_reg.
-            asm = trace_compile_phase("resolve_parallel_mov", || asm.resolve_parallel_mov_pass());
+            asm = trace_compile_phase("resolve_parallel_mov", || asm.resolve_parallel_mov_pass(&block_order));
             asm_dump!(asm, resolve_parallel_mov);
         }
+        // It doesn't make sense to refer to `block_order` after this point; instructions have been
+        // linearized into one big block.
+        debug_assert_eq!(asm.basic_blocks.len(), 1, "should have linearized instructions into one block");
+        let _ = block_order;
 
         trace_compile_phase("emit", || {
             // Create label instances in the code block
@@ -1333,7 +1343,8 @@ mod tests {
             BinOpKind::Or => asm.push_insn(Insn::Or { left, right, out }),
             BinOpKind::Xor => asm.push_insn(Insn::Xor { left, right, out }),
         }
-        asm.x86_scratch_split()
+        let block_order = asm.block_order();
+        asm.x86_scratch_split(&block_order)
     }
 
     fn binop_mnemonic(kind: BinOpKind) -> &'static str {
@@ -2329,7 +2340,8 @@ mod tests {
         assert!(imitation_heap_value.heap_object_p());
         asm.store(Opnd::mem(VALUE_BITS, SP, 0), imitation_heap_value.into());
 
-        asm = asm.x86_scratch_split();
+        let block_order = asm.block_order();
+        asm = asm.x86_scratch_split(&block_order);
         for name in &asm.label_names {
             cb.new_label(name.to_string());
         }
