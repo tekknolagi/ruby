@@ -22285,4 +22285,81 @@ mod hir_opt_tests {
           Return v46
         ");
     }
+
+    #[test]
+    fn test_opt_case_dispatch_integer_eqq_redefined_not_specialized() {
+        eval(r#"
+            class Integer
+              def ===(other) = other.to_s == "1"
+            end
+
+            def test(x)
+              case x
+              when 1 then :a
+              when 2 then :b
+              else :c
+              end
+            end
+
+            test(1)
+            test(1)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:7:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v17:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Integer@0x1008, ===@0x1010, cme:0x1018)
+          PushInlineFrame :===, v17 (0x1040), num_args=1
+          PatchPoint MethodRedefined(Integer@0x1008, to_s@0x1068, cme:0x1070)
+          v125:Fixnum = GuardType v10, Fixnum recompile
+          v126:StringExact = CCallVariadic v125, :Integer#to_s@0x1098
+          v88:StringExact[VALUE(0x10a0)] = Const Value(VALUE(0x10a0))
+          v89:StringExact = StringCopy v88
+          PatchPoint NoSingletonClass(String@0x10a8)
+          PatchPoint MethodRedefined(String@0x10a8, ==@0x10b0, cme:0x10b8)
+          v131:BoolExact = StringEqual v126, v89
+          CheckInterrupts
+          PopInlineFrame
+          v22:CBool = Test v131
+          CondBranch v22, bb5(), bb7()
+        bb5():
+          v44:StaticSymbol[:a] = Const Value(VALUE(0x10e0))
+          CheckInterrupts
+          Return v44
+        bb7():
+          v27:Fixnum[2] = Const Value(2)
+          PatchPoint MethodRedefined(Integer@0x1008, ===@0x1010, cme:0x1018)
+          PushInlineFrame :===, v27 (0x1040), num_args=1
+          PatchPoint MethodRedefined(Integer@0x1008, to_s@0x1068, cme:0x1070)
+          v135:StringExact = CCallVariadic v125, :Integer#to_s@0x1098
+          v110:StringExact[VALUE(0x10a0)] = Const Value(VALUE(0x10a0))
+          v111:StringExact = StringCopy v110
+          PatchPoint NoSingletonClass(String@0x10a8)
+          PatchPoint MethodRedefined(String@0x10a8, ==@0x10b0, cme:0x10b8)
+          v140:BoolExact = StringEqual v135, v111
+          CheckInterrupts
+          PopInlineFrame
+          v32:CBool = Test v140
+          CondBranch v32, bb6(), bb8()
+        bb6():
+          v56:StaticSymbol[:b] = Const Value(VALUE(0x10e8))
+          CheckInterrupts
+          Return v56
+        bb8():
+          v68:StaticSymbol[:c] = Const Value(VALUE(0x10f0))
+          CheckInterrupts
+          Return v68
+        ");
+    }
 }
