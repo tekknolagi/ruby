@@ -326,6 +326,33 @@ pub const RSTRING_NOEMBED: ruby_rstring_flags = 8192;
 pub const RSTRING_FSTR: ruby_rstring_flags = 536870912;
 pub type ruby_rstring_flags = u32;
 pub type st_data_t = ::std::os::raw::c_ulong;
+pub type st_index_t = st_data_t;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct st_hash_type {
+    pub compare: ::std::option::Option<
+        unsafe extern "C" fn(arg1: st_data_t, arg2: st_data_t) -> ::std::os::raw::c_int,
+    >,
+    pub hash: ::std::option::Option<unsafe extern "C" fn(arg1: st_data_t) -> st_index_t>,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct st_table_entry {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct st_table {
+    pub entry_power: ::std::os::raw::c_uchar,
+    pub bin_power: ::std::os::raw::c_uchar,
+    pub size_ind: ::std::os::raw::c_uchar,
+    pub rebuilds_num: ::std::os::raw::c_uchar,
+    pub entries_start: ::std::os::raw::c_uint,
+    pub type_: *const st_hash_type,
+    pub num_entries: st_index_t,
+    pub entries_bound: st_index_t,
+    pub entries: *mut st_table_entry,
+}
 pub const ST_CONTINUE: st_retval = 0;
 pub const ST_STOP: st_retval = 1;
 pub const ST_DELETE: st_retval = 2;
@@ -1984,29 +2011,30 @@ pub const YARVINSN_zjit_objtostring: ruby_vminsn_type = 233;
 pub const YARVINSN_zjit_opt_nil_p: ruby_vminsn_type = 234;
 pub const YARVINSN_zjit_invokesuper: ruby_vminsn_type = 235;
 pub const YARVINSN_zjit_invokeblock: ruby_vminsn_type = 236;
-pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 237;
-pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 238;
-pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 239;
-pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 240;
-pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 241;
-pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 242;
-pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 243;
-pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 244;
-pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 245;
-pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 246;
-pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 247;
-pub const YARVINSN_zjit_opt_ltlt: ruby_vminsn_type = 248;
-pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 249;
-pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 250;
-pub const YARVINSN_zjit_opt_aref: ruby_vminsn_type = 251;
-pub const YARVINSN_zjit_opt_aset: ruby_vminsn_type = 252;
-pub const YARVINSN_zjit_opt_length: ruby_vminsn_type = 253;
-pub const YARVINSN_zjit_opt_size: ruby_vminsn_type = 254;
-pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 255;
-pub const YARVINSN_zjit_opt_succ: ruby_vminsn_type = 256;
-pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 257;
-pub const YARVINSN_zjit_opt_regexpmatch2: ruby_vminsn_type = 258;
-pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 259;
+pub const YARVINSN_zjit_opt_case_dispatch: ruby_vminsn_type = 237;
+pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 238;
+pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 239;
+pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 240;
+pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 241;
+pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 242;
+pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 243;
+pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 244;
+pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 245;
+pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 246;
+pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 247;
+pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 248;
+pub const YARVINSN_zjit_opt_ltlt: ruby_vminsn_type = 249;
+pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 250;
+pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 251;
+pub const YARVINSN_zjit_opt_aref: ruby_vminsn_type = 252;
+pub const YARVINSN_zjit_opt_aset: ruby_vminsn_type = 253;
+pub const YARVINSN_zjit_opt_length: ruby_vminsn_type = 254;
+pub const YARVINSN_zjit_opt_size: ruby_vminsn_type = 255;
+pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 256;
+pub const YARVINSN_zjit_opt_succ: ruby_vminsn_type = 257;
+pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 258;
+pub const YARVINSN_zjit_opt_regexpmatch2: ruby_vminsn_type = 259;
+pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 260;
 pub type ruby_vminsn_type = u32;
 pub type rb_iseq_callback = ::std::option::Option<
     unsafe extern "C" fn(arg1: *const rb_iseq_t, arg2: *mut ::std::os::raw::c_void),
@@ -2186,6 +2214,11 @@ unsafe extern "C" {
     pub fn rb_method_basic_definition_p(klass: VALUE, mid: ID) -> ::std::os::raw::c_int;
     pub fn rb_bug(fmt: *const ::std::os::raw::c_char, ...) -> !;
     pub fn rb_float_new(d: f64) -> VALUE;
+    pub fn rb_st_foreach(
+        arg1: *mut st_table,
+        arg2: st_foreach_callback_func,
+        arg3: st_data_t,
+    ) -> ::std::os::raw::c_int;
     pub fn rb_gc_mark(obj: VALUE);
     pub fn rb_gc_mark_movable(obj: VALUE);
     pub fn rb_gc_location(obj: VALUE) -> VALUE;
@@ -2395,6 +2428,7 @@ unsafe extern "C" {
     pub fn rb_zjit_profile_enable(iseq: *const rb_iseq_t);
     pub fn rb_zjit_hash_new_size(flags_out: *mut VALUE, size: usize) -> usize;
     pub fn rb_zjit_new_obj_shape(flags: VALUE, alloc_size: usize) -> VALUE;
+    pub fn rb_zjit_cdhash_tbl(cdhash: VALUE) -> *mut st_table;
     pub fn rb_zjit_class_allocate_instance_fastpath(
         klass: VALUE,
         size_out: *mut usize,

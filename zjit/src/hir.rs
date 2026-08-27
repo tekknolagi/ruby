@@ -8236,6 +8236,27 @@ fn insn_idx_at_offset(idx: u32, offset: i64) -> u32 {
     ((idx as isize) + (offset as isize)) as u32
 }
 
+/// Read the (literal, jump offset) pairs out of an `opt_case_dispatch` CDHASH operand.
+///
+/// The values are raw signed jump offsets relative to the instruction *after*
+/// `opt_case_dispatch` (see `cdhash_set_label_replace_i` in compile.c), not Fixnum `VALUE`s.
+fn cdhash_entries(cdhash: VALUE) -> Vec<(VALUE, i64)> {
+    // Rust closures never have the "C" ABI, so the st_foreach callback has to be a plain fn
+    // item. The output vector is threaded through the st_data_t argument.
+    unsafe extern "C" fn each_entry(key: st_data_t, offset: st_data_t, data: st_data_t) -> c_int {
+        let entries = data as *mut Vec<(VALUE, i64)>;
+        unsafe { (*entries).push((VALUE(key as usize), offset as i64)); }
+        ST_CONTINUE as c_int
+    }
+    let mut entries = vec![];
+    // The CDHASH operand is an imemo_cdhash, whose st_table is embedded after the flags word,
+    // so the VALUE cannot be cast to st_table * directly; go through the accessor.
+    unsafe {
+        rb_st_foreach(rb_zjit_cdhash_tbl(cdhash), Some(each_entry), &raw mut entries as st_data_t);
+    }
+    entries
+}
+
 struct BytecodeInfo {
     jump_targets: Vec<u32>,
 }
@@ -8265,6 +8286,15 @@ fn compute_bytecode_info(iseq: *const rb_iseq_t, opt_table: &[u32]) -> BytecodeI
             | YARVINSN_branchunless_without_ints | YARVINSN_jump_without_ints | YARVINSN_branchif_without_ints | YARVINSN_branchnil_without_ints => {
                 let offset = get_arg(pc, 0).as_i64();
                 jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
+            }
+            YARVINSN_opt_case_dispatch => {
+                // Every CDHASH target is also reachable from the `===` chain that follows, but
+                // `else_offset` sits at the *end* of that chain and is only ever reached by this
+                // instruction's jump, so it needs to be recorded as a block boundary here.
+                jump_targets.insert(insn_idx_at_offset(insn_idx, get_arg(pc, 1).as_i64()));
+                for (_, offset) in cdhash_entries(get_arg(pc, 0)) {
+                    jump_targets.insert(insn_idx_at_offset(insn_idx, offset));
+                }
             }
             YARVINSN_opt_new => {
                 let offset = get_arg(pc, 1).as_i64();
@@ -9251,10 +9281,68 @@ fn add_iseq_to_hir(
                     queue.push_back((state.clone(), target, target_idx, local_inval));
                 }
                 YARVINSN_opt_case_dispatch => {
-                    // TODO: Some keys are visible at compile time, so in the future we can
-                    // compile jump targets for certain cases
-                    // Pop the key from the stack and fallback to the === branches for now
-                    state.stack_pop()?;
+                    let else_offset = get_arg(pc, 1).as_i64();
+                    let entries = cdhash_entries(get_arg(pc, 0));
+                    let key = state.stack_pop()?;
+                    // A `case` over none-but-Fixnum literals becomes a chain of bit-equality
+                    // tests that jumps straight to the matching `when` body, skipping the linear
+                    // `===` chain this instruction otherwise falls into.
+                    //
+                    // This mirrors vm_case_dispatch(): with Integer#=== unredefined, a Fixnum key
+                    // is looked up in the CDHASH and *always* jumps -- to the hit's offset if
+                    // there is one, otherwise to else_offset.
+                    let specialized =
+                        // Bit equality is only the right test for a Fixnum key against Fixnum
+                        // literals. A Float key in particular must not take this path:
+                        // vm_case_dispatch() normalizes integral Floats to Fixnum before the
+                        // lookup, and for other receivers Integer#== falls back to calling
+                        // `other == self`. Neither is bit equality, so guard the key's type.
+                        fun.monomorphic_summary(&profiles, key, exit_id).is_some_and(|ty| ty.is_fixnum())
+                        // A non-Fixnum literal anywhere in the CDHASH (Symbol, String, Float,
+                        // ...) needs a different comparison, so leave the whole `case` alone.
+                        && entries.iter().all(|&(literal, _)| literal.fixnum_p())
+                        // rb_iseq_cdhash_cmp() compares immediate literals by identity, matching
+                        // IsBitEqual, but only as long as Integer#=== is the built-in. Use
+                        // assume_ rather than guard_ so a redefined Integer#=== leaves `block`
+                        // un-terminated and we can still fall back to the `===` chain.
+                        && fun.assume_bop_not_redefined(block, INTEGER_REDEFINED_OP_FLAG, BOP_EQQ, exit_id);
+                    if specialized {
+                        let guarded_key = fun.push_insn(block, Insn::GuardType { val: key, guard_type: types::Fixnum, state: exit_id, recompile: None });
+                        // The `dup` in front of this instruction means the copy the `===` chain
+                        // would have consumed is the same SSA value, as is the local the subject
+                        // was read from. Propagate the refinement to those slots so the `when`
+                        // bodies see a Fixnum instead of a BasicObject.
+                        state.replace(key, guarded_key);
+                        for (literal, offset) in entries {
+                            let literal = fun.push_insn(block, Insn::Const { val: Const::Value(literal) });
+                            let is_eq = fun.push_insn(block, Insn::IsBitEqual { left: guarded_key, right: literal });
+                            let target_idx = insn_idx_at_offset(insn_idx, offset);
+                            let target = insn_idx_to_block[&target_idx];
+                            // Each miss continues the chain in a fresh block. Reusing one block
+                            // for every miss would make the CondBranch branch to itself.
+                            let fall_through = fun.new_block(insn_idx);
+                            fun.push_insn(block, Insn::CondBranch {
+                                val: is_eq,
+                                if_true: BranchEdge { target, args: state.as_args(self_param) },
+                                if_false: BranchEdge { target: fall_through, args: vec![] }
+                            });
+                            queue.push_back((state.clone(), target, target_idx, local_inval));
+                            block = fall_through;
+                        }
+                        // Every literal missed, so take the `else` edge. The instruction we fall
+                        // into is the *start* of the `===` chain while else_offset is the label
+                        // past its end, so the default has to be an explicit jump. Like the
+                        // interpreter's JUMP(dst), and unlike branchif, this needs no interrupt
+                        // check: `case` bodies always follow the dispatch, so every offset here
+                        // is a forward jump.
+                        let target_idx = insn_idx_at_offset(insn_idx, else_offset);
+                        let target = insn_idx_to_block[&target_idx];
+                        fun.push_insn(block, Insn::Jump(BranchEdge { target, args: state.as_args(self_param) }));
+                        queue.push_back((state.clone(), target, target_idx, local_inval));
+                        break;  // Don't enqueue the next block as a successor
+                    }
+                    // Otherwise the key is simply dropped and we fall through to the `===` chain,
+                    // which computes the same answer without consulting the CDHASH.
                 }
                 YARVINSN_opt_new => {
                     let cd: *const rb_call_data = get_arg(pc, 0).as_ptr();

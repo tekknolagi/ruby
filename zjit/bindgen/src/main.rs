@@ -175,6 +175,8 @@ fn main() {
         .allowlist_function("rb_gc_writebarrier_remember")
         .allowlist_function("rb_gc_register_mark_object")
         .allowlist_function("rb_zjit_new_obj_shape")
+        .allowlist_function("rb_zjit_cdhash_tbl")
+        .allowlist_function("rb_st_foreach")
 
         // VALUE variables for Ruby class objects
         .allowlist_var("rb_cBasicObject")

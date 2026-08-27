@@ -2,6 +2,7 @@
 #include "internal/sanitizers.h"
 #include "internal/string.h"
 #include "internal/hash.h"
+#include "internal/imemo.h"
 #include "internal/variable.h"
 #include "internal/compile.h"
 #include "internal/class.h"
@@ -178,6 +179,16 @@ bool
 rb_zjit_singleton_class_p(VALUE klass)
 {
     return RCLASS_SINGLETON_P(klass);
+}
+
+// Get the st_table backing a CDHASH (an imemo_cdhash) operand, e.g. the hash
+// operand of opt_case_dispatch. The table is embedded after the flags word, so
+// the VALUE cannot be cast to st_table * directly. rb_imemo_cdhash_tbl() is a
+// static inline in internal/imemo.h, which bindgen cannot bind against.
+st_table *
+rb_zjit_cdhash_tbl(VALUE cdhash)
+{
+    return rb_imemo_cdhash_tbl(cdhash);
 }
 
 /* Sets all of the required shape flags for the object including the layout type,

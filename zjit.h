@@ -134,6 +134,7 @@ void rb_zjit_materialize_frames(const rb_execution_context_t *ec, rb_control_fra
 void rb_zjit_materialize_frames_for_longjmp(const rb_execution_context_t *ec, rb_control_frame_t *cfp);
 size_t rb_zjit_hash_new_size(VALUE *flags_out, size_t size);
 VALUE rb_zjit_new_obj_shape(VALUE flags, size_t alloc_size);
+st_table *rb_zjit_cdhash_tbl(VALUE cdhash);
 bool rb_zjit_class_allocate_instance_fastpath(VALUE klass, size_t *size_out, VALUE *flags_out);
 bool rb_zjit_str_resurrect_fastpath(VALUE str, bool chilled, size_t *size_out, VALUE *flags_out, long *len_out, size_t *byte_size_out);
 bool rb_zjit_array_dup_can_fastpath(VALUE ary, size_t *alloc_size_out, VALUE *flags_out, long *len_out);

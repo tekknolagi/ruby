@@ -21959,4 +21959,330 @@ mod hir_opt_tests {
           Return v19
         ");
     }
+
+    #[test]
+    fn test_opt_case_dispatch_fixnum() {
+        eval(r#"
+            def test(x)
+              case x
+              when 0 then :a
+              when 1 then :b
+              else :c
+              end
+            end
+
+            test(0)
+            test(0)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_EQQ)
+          v17:Fixnum = GuardType v10, Fixnum
+          v18:Fixnum[0] = Const Value(0)
+          v19:CBool = IsBitEqual v17, v18
+          CondBranch v19, bb5(), bb7()
+        bb5():
+          v32:StaticSymbol[:a] = Const Value(VALUE(0x1008))
+          CheckInterrupts
+          Return v32
+        bb7():
+          v21:Fixnum[1] = Const Value(1)
+          v22:CBool = IsBitEqual v17, v21
+          CondBranch v22, bb6(), bb8()
+        bb6():
+          v44:StaticSymbol[:b] = Const Value(VALUE(0x1010))
+          CheckInterrupts
+          Return v44
+        bb8():
+          v56:StaticSymbol[:c] = Const Value(VALUE(0x1018))
+          CheckInterrupts
+          Return v56
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_fixnum_no_else() {
+        eval(r#"
+            def test(x)
+              case x
+              when 5 then :five
+              end
+            end
+
+            test(5)
+            test(5)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_EQQ)
+          v17:Fixnum = GuardType v10, Fixnum
+          v18:Fixnum[5] = Const Value(5)
+          v19:CBool = IsBitEqual v17, v18
+          CondBranch v19, bb5(), bb6()
+        bb5():
+          v29:StaticSymbol[:five] = Const Value(VALUE(0x1008))
+          CheckInterrupts
+          Return v29
+        bb6():
+          v40:NilClass = Const Value(nil)
+          CheckInterrupts
+          Return v40
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_fixnum_shared_body() {
+        eval(r#"
+            def test(x)
+              case x
+              when 1, 2 then :low
+              else :high
+              end
+            end
+
+            test(1)
+            test(1)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_EQQ)
+          v17:Fixnum = GuardType v10, Fixnum
+          v18:Fixnum[1] = Const Value(1)
+          v19:CBool = IsBitEqual v17, v18
+          CondBranch v19, bb5(), bb6()
+        bb6():
+          v21:Fixnum[2] = Const Value(2)
+          v22:CBool = IsBitEqual v17, v21
+          CondBranch v22, bb5(), bb7()
+        bb5():
+          v32:StaticSymbol[:low] = Const Value(VALUE(0x1008))
+          CheckInterrupts
+          Return v32
+        bb7():
+          v44:StaticSymbol[:high] = Const Value(VALUE(0x1010))
+          CheckInterrupts
+          Return v44
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_refines_subject() {
+        eval(r#"
+            def test(x)
+              case x
+              when 1 then x + 10
+              else x + 20
+              end
+            end
+
+            test(1)
+            test(1)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_EQQ)
+          v17:Fixnum = GuardType v10, Fixnum
+          v18:Fixnum[1] = Const Value(1)
+          v19:CBool = IsBitEqual v17, v18
+          CondBranch v19, bb5(), bb6()
+        bb5():
+          v30:Fixnum[10] = Const Value(10)
+          PatchPoint MethodRedefined(Integer@0x1008, +@0x1010, cme:0x1018)
+          v58:Fixnum = FixnumAdd v17, v30
+          CheckInterrupts
+          Return v58
+        bb6():
+          v46:Fixnum[20] = Const Value(20)
+          PatchPoint MethodRedefined(Integer@0x1008, +@0x1010, cme:0x1018)
+          v61:Fixnum = FixnumAdd v17, v46
+          CheckInterrupts
+          Return v61
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_symbol_keys_not_specialized() {
+        eval(r#"
+            def test(x)
+              case x
+              when :a then 1
+              else 0
+              end
+            end
+
+            test(:a)
+            test(:a)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v17:StaticSymbol[:a] = Const Value(VALUE(0x1008))
+          PatchPoint MethodRedefined(Symbol@0x1010, ===@0x1018, cme:0x1020)
+          v54:CBool = IsBitEqual v17, v10
+          CondBranch v54, bb5(), bb6()
+        bb5():
+          v34:Fixnum[1] = Const Value(1)
+          CheckInterrupts
+          Return v34
+        bb6():
+          v46:Fixnum[0] = Const Value(0)
+          CheckInterrupts
+          Return v46
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_mixed_keys_not_specialized() {
+        eval(r#"
+            def test(x)
+              case x
+              when 1 then :int
+              when :s then :sym
+              else :other
+              end
+            end
+
+            test(1)
+            test(1)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v17:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Integer@0x1008, ===@0x1010, cme:0x1018)
+          v76:BasicObject = CCallWithFrame v17, :Integer#===@0x1040, v10
+          v22:CBool = Test v76
+          CondBranch v22, bb5(), bb7()
+        bb5():
+          v44:StaticSymbol[:int] = Const Value(VALUE(0x1048))
+          CheckInterrupts
+          Return v44
+        bb7():
+          v27:StaticSymbol[:s] = Const Value(VALUE(0x1050))
+          PatchPoint MethodRedefined(Symbol@0x1058, ===@0x1010, cme:0x1060)
+          v79:CBool = IsBitEqual v27, v10
+          CondBranch v79, bb6(), bb8()
+        bb6():
+          v56:StaticSymbol[:sym] = Const Value(VALUE(0x1088))
+          CheckInterrupts
+          Return v56
+        bb8():
+          v68:StaticSymbol[:other] = Const Value(VALUE(0x1090))
+          CheckInterrupts
+          Return v68
+        ");
+    }
+
+    #[test]
+    fn test_opt_case_dispatch_non_fixnum_receiver_not_specialized() {
+        eval(r#"
+            def test(x)
+              case x
+              when 1 then :a
+              else :b
+              end
+            end
+
+            test(1.5)
+            test(1.5)
+        "#);
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:3:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :x@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :x@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v17:Fixnum[1] = Const Value(1)
+          PatchPoint MethodRedefined(Integer@0x1008, ===@0x1010, cme:0x1018)
+          v54:BasicObject = CCallWithFrame v17, :Integer#===@0x1040, v10
+          v22:CBool = Test v54
+          CondBranch v22, bb5(), bb6()
+        bb5():
+          v34:StaticSymbol[:a] = Const Value(VALUE(0x1048))
+          CheckInterrupts
+          Return v34
+        bb6():
+          v46:StaticSymbol[:b] = Const Value(VALUE(0x1050))
+          CheckInterrupts
+          Return v46
+        ");
+    }
 }

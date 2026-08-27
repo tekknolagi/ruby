@@ -95,6 +95,7 @@ fn profile_insn_sample(
         YARVINSN_invokeblock   => profile_block_handler(profiler, profile),
         YARVINSN_getblockparamproxy => profile_getblockparamproxy(profiler, profile),
         YARVINSN_invokesuper   => profile_invokesuper(profiler, profile),
+        YARVINSN_opt_case_dispatch => profile_operands(profiler, profile, 1),
         YARVINSN_opt_send_without_block | YARVINSN_send => {
             let cd: *const rb_call_data = profiler.insn_opnd(0).as_ptr();
             let argc = num_arguments_on_stack(cd);
