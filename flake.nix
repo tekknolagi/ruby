@@ -24,6 +24,9 @@
           # the Nix sandbox forbids; provide them up front.
           postPatch = ''
             cp ${pkgs.gnu-config}/config.guess ${pkgs.gnu-config}/config.sub tool/
+            # Bundled gems are downloaded from rubygems.org during the build,
+            # which the sandbox forbids, and the playground does not need them.
+            : > gems/bundled_gems
           '';
 
           preConfigure = "./autogen.sh";
