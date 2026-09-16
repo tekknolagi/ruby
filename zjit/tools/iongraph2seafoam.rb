@@ -12,12 +12,14 @@
 # hanging off the same token are independent, while a write forces everything after it onto a new
 # token.
 #
-# ZJIT gives its control flow instructions (Entries, EntryPoint, Jump, CondBranch, Return, ...)
+# ZJIT gives its control flow instructions (Entries, EntryPoint, Jump, CondBranch, ...)
 # `effects::Any`, which is a conservative "do not move anything across me" marker rather than a
 # claim about a specific location. Taken literally it makes every block boundary a full barrier
 # and every leaf phi at every merge, which drowns out the dependences worth looking at, so by
-# default their effects are folded into the entry tokens. Pass --control-effects to see the
-# graph the effect system literally describes.
+# default their effects are folded into the entry tokens. The instructions that leave the
+# function (Return, SideExit, Throw) are instead read as memory sinks, consuming the final token
+# of every chain so that the last write on each chain has a visible consumer. Pass
+# --control-effects to see the graph the effect system literally describes.
 #
 # Leaves that no instruction in the function tells apart are threaded as a single chain, since
 # their dependence graphs are identical by construction; --no-merge-chains keeps them separate.
@@ -112,7 +114,12 @@ module IonGraph2Seafoam
 
   # Control flow instructions whose `effects::Any` is a placeholder rather than a real access.
   # `Entries` and `EntryPoint` mark where the frame begins, which the entry tokens already model.
-  CONTROL_BARRIERS = %w[Entries EntryPoint Jump CondBranch Return SideExit Throw Unreachable].freeze
+  CONTROL_BARRIERS = %w[Entries EntryPoint Jump CondBranch Unreachable].freeze
+  # Instructions that leave the function. Each is treated as a memory sink: it reads every chain,
+  # so the last write on each one has a visible consumer rather than trailing off the bottom of
+  # the graph, and it writes none, since a token it produced could have no reader. Their declared
+  # `effects::Any` says both, but the write half only adds a dangling token.
+  EXITS = %w[Return SideExit Throw].freeze
   # Instructions drawn as floating nodes: duplicated beside each user instead of occupying a
   # place in the block. `Const` takes no operands and has no effects, so it orders nothing and
   # its position in the instruction stream carries no information. Every constant prints under
@@ -161,8 +168,10 @@ module IonGraph2Seafoam
                                        "the block (default: on)") { |v| options.float_constants = v }
         o.on("--[no-]blocks", "Draw basic blocks as clusters (default: on)") { |v| options.blocks = v }
         o.on("--[no-]control-effects", "Honour the effects::Any on control flow instructions " \
-                                       "(#{CONTROL_BARRIERS.join(", ")}) instead of folding them into " \
-                                       "the entry tokens (default: off)") do |v|
+                                       "(#{CONTROL_BARRIERS.join(", ")}) instead of folding them " \
+                                       "into the entry tokens, and on the exits " \
+                                       "(#{EXITS.join(", ")}) instead of reading them as memory " \
+                                       "sinks (default: off)") do |v|
           options.control_effects = v
         end
         o.on("--[no-]compact-labels", "Strip hex addresses from labels (default: on)") { |v| options.compact_labels = v }
@@ -318,6 +327,20 @@ module IonGraph2Seafoam
       CONTROL_BARRIERS.include?(insn.fetch("opcode")[/\A\w+/])
     end
 
+    # Whether this instruction ends the function and so reads every chain. See EXITS.
+    def sink?(insn)
+      return false if @options.control_effects
+
+      EXITS.include?(insn.fetch("opcode")[/\A\w+/])
+    end
+
+    # Whether this instruction's declared effects are taken at face value. A sink's reads are
+    # imposed rather than declared, and they cover every leaf, so counting them would mark every
+    # leaf as touched and written and defeat both chain merging and the unwritten-chain prune.
+    def declared_effects?(insn)
+      !barrier?(insn) && !sink?(insn)
+    end
+
     def node_for(id)
       @graph.nodes[id]
     end
@@ -390,12 +413,12 @@ module IonGraph2Seafoam
 
     def effectful_instructions
       @effectful_instructions ||= @blocks.flat_map { |block| block.fetch("instructions") }
-        .reject { |insn| barrier?(insn) }
+        .select { |insn| declared_effects?(insn) }
     end
 
     def touched_leaves
       @touched_leaves ||= @blocks.flat_map { |block|
-        block.fetch("instructions").reject { |insn| barrier?(insn) }.flat_map do |insn|
+        block.fetch("instructions").select { |insn| declared_effects?(insn) }.flat_map do |insn|
           effects = insn["effects"] || {}
           Array(effects["read"]) + Array(effects["write"])
         end
@@ -536,9 +559,11 @@ module IonGraph2Seafoam
       @in_state[id] = state.dup
 
       block.fetch("instructions").each do |insn|
-        next if barrier?(insn)
-
-        apply_effects(insn, state)
+        if @builder.sink?(insn)
+          apply_sink(insn, state)
+        elsif !barrier?(insn)
+          apply_effects(insn, state)
+        end
       end
 
       @out_state[id] = state
@@ -563,6 +588,14 @@ module IonGraph2Seafoam
       # A read consumes the current token; a write consumes it and produces a fresh one.
       (reads | writes).each { |chain| @builder.add_memory_edge(state[chain], node, chain.name) }
       writes.each { |chain| state[chain] = node }
+    end
+
+    # An exit consumes the final token of every chain and produces none. See EXITS.
+    def apply_sink(insn, state)
+      node = @builder.node_for(insn.fetch("id"))
+      return unless node
+
+      @chains.each { |chain| @builder.add_memory_edge(state[chain], node, chain.name) }
     end
 
     def entry_state(block)
