@@ -5,12 +5,15 @@
 #
 # Beyond the plain control/data graph, this reconstructs *split memory*: the effect lattice's
 # leaves (`effectLeaves` in the dump) each get their own dependence chain, rooted in a token
-# created at the start of the CFG. An instruction that reads a leaf consumes the current token
-# for that leaf; an instruction that writes a leaf consumes the current token and produces a new
-# one. Where control flow merges, the incoming tokens for a leaf meet in a memory phi. The
-# resulting memory edges are exactly the dependences the effect system is asserting: two reads
-# hanging off the same token are independent, while a write forces everything after it onto a new
-# token.
+# created at the start of the CFG. An instruction that touches a leaf, to read or to write,
+# consumes the current token for that leaf and produces a fresh one, so each token has exactly
+# one consumer and the accesses to a leaf form a single chain. Where control flow merges, the
+# incoming tokens for a leaf meet in a memory phi.
+#
+# --no-linear-tokens makes a read consume its token without producing one, so that reads with no
+# write between them hang off a shared token and are visibly unordered. That says less than the
+# effect system does about what may be reordered, but it splits a token between several consumers
+# and so no longer reads as a chain.
 #
 # ZJIT gives its control flow instructions (Entries, EntryPoint, Jump, CondBranch, ...)
 # `effects::Any`, which is a conservative "do not move anything across me" marker rather than a
@@ -140,7 +143,7 @@ module IonGraph2Seafoam
 
   Options = Struct.new(
     :pass, :list_passes, :leaves, :memory, :data, :control, :blocks,
-    :data_labels, :float_constants, :control_effects, :compact_labels, :merge_chains, :unwritten_chains, :format, :out, :open_with, :seafoam_lib, :dot, :json,
+    :data_labels, :float_constants, :linear_tokens, :control_effects, :compact_labels, :merge_chains, :unwritten_chains, :format, :out, :open_with, :seafoam_lib, :dot, :json,
     keyword_init: true
   )
 
@@ -148,7 +151,7 @@ module IonGraph2Seafoam
     def parse_options(argv)
       options = Options.new(
         pass: nil, list_passes: false, leaves: nil, memory: true, data: true, control: true,
-        blocks: true, data_labels: true, float_constants: true, control_effects: false, compact_labels: true, merge_chains: true, unwritten_chains: false, format: "svg", out: nil, open_with: nil,
+        blocks: true, data_labels: true, float_constants: true, linear_tokens: true, control_effects: false, compact_labels: true, merge_chains: true, unwritten_chains: false, format: "svg", out: nil, open_with: nil,
         seafoam_lib: File.expand_path("~/Documents/code/seafoam/lib"), dot: false, json: false
       )
 
@@ -164,6 +167,11 @@ module IonGraph2Seafoam
         o.on("--[no-]control", "Draw control flow edges between blocks (default: on)") { |v| options.control = v }
         o.on("--[no-]data-labels", "Name each data edge after the operand it carries, vNNN " \
                                    "(default: on)") { |v| options.data_labels = v }
+        o.on("--[no-]linear-tokens", "Give every access a token of its own, so a token has one " \
+                                    "consumer and each leaf reads as a chain; off lets reads " \
+                                    "with no write between them share a token (default: on)") do |v|
+          options.linear_tokens = v
+        end
         o.on("--[no-]float-constants", "Draw #{FLOATING.join("/")} beside each user rather than in " \
                                        "the block (default: on)") { |v| options.float_constants = v }
         o.on("--[no-]blocks", "Draw basic blocks as clusters (default: on)") { |v| options.blocks = v }
@@ -584,10 +592,13 @@ module IonGraph2Seafoam
 
       reads = @chains.select { |chain| chain.touches?(read) }
       writes = @chains.select { |chain| chain.touches?(written) }
+      touched = reads | writes
 
-      # A read consumes the current token; a write consumes it and produces a fresh one.
-      (reads | writes).each { |chain| @builder.add_memory_edge(state[chain], node, chain.name) }
-      writes.each { |chain| state[chain] = node }
+      # Every access consumes the current token; it produces a fresh one so that the token has a
+      # single consumer. Under --no-linear-tokens only a write produces, and a run of reads
+      # shares the token the last write left behind.
+      touched.each { |chain| @builder.add_memory_edge(state[chain], node, chain.name) }
+      (@options.linear_tokens ? touched : writes).each { |chain| state[chain] = node }
     end
 
     # An exit consumes the final token of every chain and produces none. See EXITS.
