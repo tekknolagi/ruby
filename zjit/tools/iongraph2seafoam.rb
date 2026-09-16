@@ -327,6 +327,11 @@ module IonGraph2Seafoam
       CONTROL_BARRIERS.include?(insn.fetch("opcode")[/\A\w+/])
     end
 
+    # Whether this instruction is drawn beside its users instead of in its block. See FLOATING.
+    def floating?(insn)
+      @options.float_constants && FLOATING.include?(insn.fetch("opcode")[/\A\w+/])
+    end
+
     # Whether this instruction ends the function and so reads every chain. See EXITS.
     def sink?(insn)
       return false if @options.control_effects
@@ -446,7 +451,7 @@ module IonGraph2Seafoam
       # Seafoam's `inlined` draws such a node once per user, as a small oval beside the consumer
       # and outside the block, which keeps a shared constant from stretching edges across the
       # graph. See FLOATING in this file's header.
-      props[:inlined] = true if @options.float_constants && FLOATING.include?(opcode[/\A\w+/])
+      props[:inlined] = true if floating?(insn)
       props
     end
 
@@ -494,7 +499,10 @@ module IonGraph2Seafoam
           successor = by_id[successor_id]
           next if successor.nil?
 
-          entry = successor.fetch("instructions").first
+          # A floated instruction is drawn beside its users rather than declared in the block,
+          # so pointing the control edge at it would leave the edge referring to a node Graphviz
+          # never saw and make it invent a blank one. Aim at the first instruction on show.
+          entry = successor.fetch("instructions").find { |insn| !floating?(insn) }
           next if entry.nil?
 
           to = node_for(entry.fetch("id"))
