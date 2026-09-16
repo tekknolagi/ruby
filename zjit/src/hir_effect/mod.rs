@@ -145,6 +145,22 @@ impl AbstractHeap {
     pub const fn print(self, ptr_map: &PtrPrintMap) -> AbstractHeapPrinter<'_> {
         AbstractHeapPrinter { inner: self, ptr_map }
     }
+
+    /// Every leaf of the effect lattice, as `(name, bit)`, ordered by increasing bit.
+    /// Leaves are the patterns with exactly one bit set: unions such as `Memory` and the
+    /// empty heap are not leaves. Each leaf is an independent location, which makes the
+    /// leaves the right granularity for splitting memory into per-location dependence
+    /// chains (see the iongraph dump's `effectLeaves`).
+    pub fn leaves() -> impl DoubleEndedIterator<Item = (&'static str, effect_types::EffectBits)> {
+        bits::AllBitPatterns.into_iter().filter(|(_, pattern)| pattern.count_ones() == 1).rev()
+    }
+
+    /// The names of the lattice leaves that make up this heap, ordered as [`AbstractHeap::leaves`].
+    /// A union decomposes into its leaves, so `Memory` yields `InterruptFlag`, `Other`, and
+    /// the three `Frame` leaves.
+    pub fn leaf_names(self) -> impl Iterator<Item = &'static str> {
+        Self::leaves().filter(move |(_, bit)| (self.bits & bit) != 0).map(|(name, _)| name)
+    }
 }
 
 impl Effect {

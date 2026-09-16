@@ -13,7 +13,7 @@ use std::{
     sync::atomic::Ordering,
 };
 use crate::hir_type::{Type, types};
-use crate::hir_effect::{Effect, abstract_heaps, effects};
+use crate::hir_effect::{AbstractHeap, Effect, abstract_heaps, effects};
 use crate::bitset::BitSet;
 use crate::profile::{ProfiledType, SplatLength, TypeDistributionSummary};
 use crate::stats::{Counter, incr_counter};
@@ -7346,7 +7346,12 @@ impl Function {
     /// Helper function to make an Iongraph JSON "instruction".
     /// `uses`, `memInputs` and `attributes` are left empty for now, but may be populated
     /// in the future.
-    fn make_iongraph_instr(id: InsnId, inputs: Vec<Json>, opcode: &str, ty: &str) -> Json {
+    ///
+    /// `effects` is an extension over what iongraph itself consumes: it records the read and
+    /// write sets of the instruction, decomposed into effect lattice leaves. Consumers can
+    /// thread one dependence chain per leaf to recover memory dependences between
+    /// instructions; iongraph ignores the field.
+    fn make_iongraph_instr(id: InsnId, inputs: Vec<Json>, opcode: &str, ty: &str, effect: Effect) -> Json {
         Json::object()
             // Add an offset of 0x1000 to avoid the `ptr` being 0x0, which iongraph rejects.
             .insert("ptr", id.0 + 0x1000)
@@ -7357,6 +7362,11 @@ impl Function {
             .insert("uses", Json::empty_array())
             .insert("memInputs", Json::empty_array())
             .insert("type", ty)
+            .insert("effects", Json::object()
+                .insert("read", Json::array(effect.read_bits().leaf_names()))
+                .insert("write", Json::array(effect.write_bits().leaf_names()))
+                .build()
+            )
             .build()
     }
 
@@ -7379,6 +7389,9 @@ impl Function {
     fn make_iongraph_function(pass_name: &str, hir_blocks: Vec<Json>) -> Json {
         Json::object()
             .insert("name", pass_name)
+            // Extension over iongraph: the leaves of the effect lattice, in a stable order.
+            // Every per-instruction `effects` entry is a subset of these.
+            .insert("effectLeaves", Json::array(AbstractHeap::leaves().map(|(name, _)| name)))
             .insert("mir", Json::object()
                 .insert("blocks", Json::array(hir_blocks))
                 .build()
@@ -7447,7 +7460,8 @@ impl Function {
                         insn_id,
                         inputs,
                         &opcode,
-                        &type_str
+                        &type_str,
+                        insn.effects_of(),
                     )
                 );
             }
