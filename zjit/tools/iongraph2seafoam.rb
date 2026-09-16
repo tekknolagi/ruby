@@ -113,6 +113,12 @@ module IonGraph2Seafoam
   # Control flow instructions whose `effects::Any` is a placeholder rather than a real access.
   # `Entries` and `EntryPoint` mark where the frame begins, which the entry tokens already model.
   CONTROL_BARRIERS = %w[Entries EntryPoint Jump CondBranch Return SideExit Throw Unreachable].freeze
+  # Instructions drawn as floating nodes: duplicated beside each user instead of occupying a
+  # place in the block. `Const` takes no operands and has no effects, so it orders nothing and
+  # its position in the instruction stream carries no information. Every constant prints under
+  # this one opcode, the kind of value being a variant of its payload (Const CShape(0x100009),
+  # Const CPtr(0x...), Const Value(nil)).
+  FLOATING = %w[Const].freeze
 
   # Hex addresses in labels vary run to run and say nothing about dependence. Method entry
   # pointers are dropped along with their separator so the remaining argument list still reads.
@@ -127,7 +133,7 @@ module IonGraph2Seafoam
 
   Options = Struct.new(
     :pass, :list_passes, :leaves, :memory, :data, :control, :blocks,
-    :data_labels, :control_effects, :compact_labels, :merge_chains, :unwritten_chains, :format, :out, :open_with, :seafoam_lib, :dot, :json,
+    :data_labels, :float_constants, :control_effects, :compact_labels, :merge_chains, :unwritten_chains, :format, :out, :open_with, :seafoam_lib, :dot, :json,
     keyword_init: true
   )
 
@@ -135,7 +141,7 @@ module IonGraph2Seafoam
     def parse_options(argv)
       options = Options.new(
         pass: nil, list_passes: false, leaves: nil, memory: true, data: true, control: true,
-        blocks: true, data_labels: true, control_effects: false, compact_labels: true, merge_chains: true, unwritten_chains: false, format: "svg", out: nil, open_with: nil,
+        blocks: true, data_labels: true, float_constants: true, control_effects: false, compact_labels: true, merge_chains: true, unwritten_chains: false, format: "svg", out: nil, open_with: nil,
         seafoam_lib: File.expand_path("~/Documents/code/seafoam/lib"), dot: false, json: false
       )
 
@@ -151,6 +157,8 @@ module IonGraph2Seafoam
         o.on("--[no-]control", "Draw control flow edges between blocks (default: on)") { |v| options.control = v }
         o.on("--[no-]data-labels", "Name each data edge after the operand it carries, vNNN " \
                                    "(default: on)") { |v| options.data_labels = v }
+        o.on("--[no-]float-constants", "Draw #{FLOATING.join("/")} beside each user rather than in " \
+                                       "the block (default: on)") { |v| options.float_constants = v }
         o.on("--[no-]blocks", "Draw basic blocks as clusters (default: on)") { |v| options.blocks = v }
         o.on("--[no-]control-effects", "Honour the effects::Any on control flow instructions " \
                                        "(#{CONTROL_BARRIERS.join(", ")}) instead of folding them into " \
@@ -410,7 +418,13 @@ module IonGraph2Seafoam
       opcode = ADDRESS_PATTERNS.inject(opcode) { |text, pattern| text.gsub(pattern, "") } if @options.compact_labels
       type = insn["type"].to_s
       label = type.empty? ? opcode : "#{opcode}\n#{type}"
-      { label: label, kind: kind_for(opcode), opcode: opcode, type: type, effects: insn["effects"] }
+      props = { label: label, kind: kind_for(opcode), opcode: opcode, type: type, effects: insn["effects"] }
+      # A constant has no effects and no operands, so where it sits in the block says nothing.
+      # Seafoam's `inlined` draws such a node once per user, as a small oval beside the consumer
+      # and outside the block, which keeps a shared constant from stretching edges across the
+      # graph. See FLOATING in this file's header.
+      props[:inlined] = true if @options.float_constants && FLOATING.include?(opcode[/\A\w+/])
+      props
     end
 
     def kind_for(opcode)
