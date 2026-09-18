@@ -6509,30 +6509,43 @@ impl Function {
 
 
     fn optimize_load_store(&mut self) {
+        use crate::hir_effect::AbstractHeap;
+        #[derive(Clone, Copy)]
+        struct Entry {
+            val: InsnId,
+            heap: AbstractHeap,
+        }
+        impl Entry {
+            fn disjoint_from(self, other: AbstractHeap) -> bool {
+                !self.heap.overlaps(other)
+            }
+        }
         for block in self.reverse_post_order() {
-            let mut compile_time_heap: HashMap<(InsnId, i32), InsnId>  = HashMap::new();
+            let mut compile_time_heap: HashMap<(InsnId, i32), Entry>  = HashMap::new();
             let old_insns = std::mem::take(&mut self.blocks[block].insns);
             let mut new_insns = Vec::with_capacity(old_insns.len());
             for insn_id in old_insns {
-                let replacement_insn: InsnId = match self.resolve(insn_id).insn(self) {
+                match self.resolve(insn_id).insn(self) {
                     &Insn::StoreField { recv, offset, val, .. } => {
                         let key = (self.chase_insn(recv), offset);
                         let heap_entry = compile_time_heap.get(&key).copied();
                         // TODO(Jacob): Switch from actual to partial equality
-                        if Some(val) == heap_entry {
-                            // If the value is already stored, short circuit and don't add an instruction to the block
-                            continue
+                        // if heap_entry is Some and heap_entry.val == val from above
+                        if let Some(Entry { val: cached_val, .. }) = heap_entry {
+                            if cached_val == val {
+                                // If the value is already stored, short circuit and don't add an instruction to the block
+                                continue
+                            }
                         }
                         // TODO(Jacob): Add TBAA to avoid removing so many entries
-                        compile_time_heap.retain(|(_, off), _| *off != offset);
-                        compile_time_heap.insert(key, val);
-                        insn_id
+                        compile_time_heap.retain(|(_, off), entry| entry.disjoint_from(abstract_heaps::Memory) || *off != offset);
+                        compile_time_heap.insert(key, Entry { val, heap: abstract_heaps::Memory });
                     },
                     &Insn::LoadField { recv, offset, return_type, .. } => {
                         let key = (self.chase_insn(recv), offset);
                         match compile_time_heap.entry(key) {
                             std::collections::hash_map::Entry::Occupied(entry) => {
-                                let cached_insn = *entry.get();
+                                let cached_insn = entry.get().val;
 
                                 // TODO (nirvdrum 2026-06-04): Remove the return type guard and supporting code when the type checker becomes more accurate.
                                 // If there's an an embedded<=>heap shape storage transition, it's possible for this `LoadField` to have a different return
@@ -6553,10 +6566,9 @@ impl Function {
                             }
                             std::collections::hash_map::Entry::Vacant(_) => {
                                 // If the value has not been accessed, cache a copy to optimize future loads or stores.
-                                compile_time_heap.insert(key, insn_id);
+                                compile_time_heap.insert(key, Entry { val: insn_id, heap: abstract_heaps::Memory });
                             }
                         }
-                        insn_id
                     }
                     &Insn::WriteBarrier { .. } => {
                         // Currently, WriteBarrier write effects are Allocator and Memory when we'd really like them to be flags.
@@ -6565,18 +6577,17 @@ impl Function {
                         // This special casing in this pass here should be removed once we refine our effects system to provide greater granularity for WriteBarrier.
                         // TODO: use TBAA
                         let offset = RUBY_OFFSET_RBASIC_FLAGS;
-                        compile_time_heap.retain(|(_, off), _| *off != offset);
-                        insn_id
+                        compile_time_heap.retain(|(_, off), entry| entry.disjoint_from(abstract_heaps::Memory) || *off != offset);
                     },
                     insn => {
-                        // If an instruction affects memory and we haven't modeled it, the compile_time_heap is invalidated
+                        // TODO(max): Figure out why you can't use disjoint_from
+                        // compile_time_heap.retain(|_, entry| entry.disjoint_from(insn.effects_of().write_bits()));
                         if insn.effects_of().includes(Effect::write(abstract_heaps::Memory)) {
                             compile_time_heap.clear();
                         }
-                        insn_id
                     }
                 };
-                new_insns.push(replacement_insn);
+                new_insns.push(insn_id);
             }
             self.blocks[block].insns = new_insns;
         }
