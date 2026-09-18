@@ -7,28 +7,40 @@ mod bits {
   pub const Frame: u16 = Locals | PC | Stack;
   pub const InterruptFlag: u16 = 1u16 << 2;
   pub const Locals: u16 = 1u16 << 3;
-  pub const Memory: u16 = Frame | InterruptFlag | Other;
-  pub const Other: u16 = 1u16 << 4;
-  pub const PC: u16 = 1u16 << 5;
-  pub const PatchPoint: u16 = 1u16 << 6;
-  pub const Stack: u16 = 1u16 << 7;
-  pub const Stats: u16 = 1u16 << 8;
-  pub const AllBitPatterns: [(&str, u16); 13] = [
+  pub const Memory: u16 = Frame | InterruptFlag | Object | Other | StringLength;
+  pub const Object: u16 = ObjectOther | ObjectShapeAndFlags;
+  pub const ObjectFlags: u16 = 1u16 << 4;
+  pub const ObjectOther: u16 = 1u16 << 5;
+  pub const ObjectShape: u16 = 1u16 << 6;
+  pub const ObjectShapeAndFlags: u16 = ObjectFlags | ObjectShape;
+  pub const Other: u16 = 1u16 << 7;
+  pub const PC: u16 = 1u16 << 8;
+  pub const PatchPoint: u16 = 1u16 << 9;
+  pub const Stack: u16 = 1u16 << 10;
+  pub const Stats: u16 = 1u16 << 11;
+  pub const StringLength: u16 = 1u16 << 12;
+  pub const AllBitPatterns: [(&str, u16); 19] = [
     ("Any", Any),
-    ("Stats", Stats),
     ("Memory", Memory),
+    ("StringLength", StringLength),
+    ("Stats", Stats),
     ("Frame", Frame),
     ("Stack", Stack),
     ("PatchPoint", PatchPoint),
     ("PC", PC),
     ("Other", Other),
+    ("Object", Object),
+    ("ObjectShapeAndFlags", ObjectShapeAndFlags),
+    ("ObjectShape", ObjectShape),
+    ("ObjectOther", ObjectOther),
+    ("ObjectFlags", ObjectFlags),
     ("Locals", Locals),
     ("InterruptFlag", InterruptFlag),
     ("Control", Control),
     ("Allocator", Allocator),
     ("Empty", Empty),
   ];
-  pub const NumEffectBits: u16 = 9;
+  pub const NumEffectBits: u16 = 13;
 }
 pub mod effect_types {
   pub type EffectBits = u16;
@@ -43,11 +55,17 @@ pub mod abstract_heaps {
   pub const InterruptFlag: AbstractHeap = AbstractHeap::from_bits(bits::InterruptFlag);
   pub const Locals: AbstractHeap = AbstractHeap::from_bits(bits::Locals);
   pub const Memory: AbstractHeap = AbstractHeap::from_bits(bits::Memory);
+  pub const Object: AbstractHeap = AbstractHeap::from_bits(bits::Object);
+  pub const ObjectFlags: AbstractHeap = AbstractHeap::from_bits(bits::ObjectFlags);
+  pub const ObjectOther: AbstractHeap = AbstractHeap::from_bits(bits::ObjectOther);
+  pub const ObjectShape: AbstractHeap = AbstractHeap::from_bits(bits::ObjectShape);
+  pub const ObjectShapeAndFlags: AbstractHeap = AbstractHeap::from_bits(bits::ObjectShapeAndFlags);
   pub const Other: AbstractHeap = AbstractHeap::from_bits(bits::Other);
   pub const PC: AbstractHeap = AbstractHeap::from_bits(bits::PC);
   pub const PatchPoint: AbstractHeap = AbstractHeap::from_bits(bits::PatchPoint);
   pub const Stack: AbstractHeap = AbstractHeap::from_bits(bits::Stack);
   pub const Stats: AbstractHeap = AbstractHeap::from_bits(bits::Stats);
+  pub const StringLength: AbstractHeap = AbstractHeap::from_bits(bits::StringLength);
 }
 pub mod effects {
   use super::*;
@@ -59,9 +77,15 @@ pub mod effects {
   pub const InterruptFlag: Effect = Effect::promote(abstract_heaps::InterruptFlag);
   pub const Locals: Effect = Effect::promote(abstract_heaps::Locals);
   pub const Memory: Effect = Effect::promote(abstract_heaps::Memory);
+  pub const Object: Effect = Effect::promote(abstract_heaps::Object);
+  pub const ObjectFlags: Effect = Effect::promote(abstract_heaps::ObjectFlags);
+  pub const ObjectOther: Effect = Effect::promote(abstract_heaps::ObjectOther);
+  pub const ObjectShape: Effect = Effect::promote(abstract_heaps::ObjectShape);
+  pub const ObjectShapeAndFlags: Effect = Effect::promote(abstract_heaps::ObjectShapeAndFlags);
   pub const Other: Effect = Effect::promote(abstract_heaps::Other);
   pub const PC: Effect = Effect::promote(abstract_heaps::PC);
   pub const PatchPoint: Effect = Effect::promote(abstract_heaps::PatchPoint);
   pub const Stack: Effect = Effect::promote(abstract_heaps::Stack);
   pub const Stats: Effect = Effect::promote(abstract_heaps::Stats);
+  pub const StringLength: Effect = Effect::promote(abstract_heaps::StringLength);
 }

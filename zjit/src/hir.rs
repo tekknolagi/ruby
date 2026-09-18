@@ -1121,7 +1121,7 @@ pub enum Insn {
     LoadSP,
     /// Load cfp->self
     LoadSelf,
-    LoadField { recv: InsnId, id: FieldName, offset: i32, return_type: Type, num_bits: u8 },
+    LoadField { recv: InsnId, id: FieldName, offset: i32, return_type: Type, num_bits: u8, heap: crate::hir_effect::AbstractHeap },
     /// Write `val` at an offset of `recv`.
     /// When writing a Ruby object to a Ruby object, one must use GuardNotFrozen (or equivalent) before and WriteBarrier after.
     StoreField { recv: InsnId, id: FieldName, offset: i32, val: InsnId, num_bits: u8 },
@@ -2426,7 +2426,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::LoadSP => write!(f, "LoadSP"),
             &Insn::GetEP { level } => write!(f, "GetEP {level}"),
             Insn::LoadSelf => write!(f, "LoadSelf"),
-            &Insn::LoadField { recv, id, offset, return_type: _, num_bits: _ } => {
+            &Insn::LoadField { recv, id, offset, return_type: _, num_bits: _, .. } => {
                 write!(f, "LoadField {recv}, :{id}@{:#x}", self.ptr_map.map_offset(offset))
             }
             &Insn::StoreField { recv, id, offset, val, num_bits: _ } => write!(f, "StoreField {recv}, :{id}@{:#x}, {val}", self.ptr_map.map_offset(offset)),
@@ -3217,19 +3217,19 @@ impl Function {
         self.push_insn(block, Insn::GetEP { level })
     }
 
-    pub fn load_field(&mut self, block: BlockId, recv: InsnId, id: FieldName, offset: i32, return_type: Type) -> InsnId {
+    pub fn load_field(&mut self, block: BlockId, recv: InsnId, id: FieldName, offset: i32, return_type: Type, heap: crate::hir_effect::AbstractHeap) -> InsnId {
         let num_bits = return_type.num_bits();
-        self.push_insn(block, Insn::LoadField { recv, id, offset, return_type, num_bits })
+        self.push_insn(block, Insn::LoadField { recv, id, offset, return_type, num_bits, heap })
     }
 
     pub fn load_string_length(&mut self, block: BlockId, str: InsnId) -> InsnId {
-        self.load_field(block, str, FieldName::len, RUBY_OFFSET_RSTRING_LEN, types::CInt64)
+        self.load_field(block, str, FieldName::len, RUBY_OFFSET_RSTRING_LEN, types::CInt64, crate::hir_effect::abstract_heaps::StringLength)
     }
 
     /// Load `captured->code.iseq` from a `struct rb_captured_block *`.
     fn load_captured_code_iseq(&mut self, block: BlockId, captured: InsnId) -> InsnId {
         let offset: i32 = std::mem::offset_of!(rb_captured_block, code).try_into().unwrap();
-        self.load_field(block, captured, FieldName::code_iseq, offset, types::CPtr)
+        self.load_field(block, captured, FieldName::code_iseq, offset, types::CPtr, crate::hir_effect::abstract_heaps::Other)
     }
 
     /// Untag an ISEQ block handler into its `struct rb_captured_block *`:
@@ -4562,7 +4562,7 @@ impl Function {
         // a (u32, u32) inside a u64 at RUBY_OFFSET_RBASIC_FLAGS (offset 0). It's fine to load the
         // shape alongside the flags, but make sure not to *store* the shape accidentally by
         // writing a u64.
-        self.load_field(block, recv, FieldName::RBASIC_FLAGS, RUBY_OFFSET_RBASIC_FLAGS, types::CUInt64)
+        self.load_field(block, recv, FieldName::RBASIC_FLAGS, RUBY_OFFSET_RBASIC_FLAGS, types::CUInt64, crate::hir_effect::abstract_heaps::ObjectShapeAndFlags)
     }
 
     fn load_ep_flags(&mut self, block: BlockId, ep: InsnId) -> InsnId {
@@ -4570,7 +4570,7 @@ impl Function {
     }
 
     fn load_ep_env_field(&mut self, block: BlockId, ep: InsnId, id: FieldName, index: i32, return_type: Type) -> InsnId {
-        self.load_field(block, ep, id, SIZEOF_VALUE_I32 * index, return_type)
+        self.load_field(block, ep, id, SIZEOF_VALUE_I32 * index, return_type, crate::hir_effect::abstract_heaps::Frame)
     }
 
     pub fn guard_not_frozen(&mut self, block: BlockId, recv: InsnId, state: InsnId) {
@@ -4604,7 +4604,7 @@ impl Function {
             .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to i32"));
         let offset = -(SIZEOF_VALUE_I32 * ep_offset);
 
-        self.load_field(block, ep, local_id.into(), offset, return_type)
+        self.load_field(block, ep, local_id.into(), offset, return_type, crate::hir_effect::abstract_heaps::Locals)
     }
 
     /// See `get_local_from_ep` for why `iseq` is threaded through explicitly rather
@@ -4622,7 +4622,7 @@ impl Function {
             .unwrap_or_else(|_| panic!("Could not convert ep_offset {ep_offset} to i32"));
         let offset = -(SIZEOF_VALUE_I32 * (ep_offset + 1));
 
-        self.load_field(block, sp, local_id.into(), offset, return_type)
+        self.load_field(block, sp, local_id.into(), offset, return_type, crate::hir_effect::abstract_heaps::Locals)
     }
 
     fn try_inline_invoke_builtin(&mut self, block: BlockId, insn: Insn) -> InsnId {
@@ -5046,7 +5046,7 @@ impl Function {
                                         let offset = RUBY_OFFSET_RSTRUCT_AS_ARY + (SIZEOF_VALUE_I32 * index);
                                         (recv, offset)
                                     } else {
-                                        let as_heap = self.load_field(block, recv, FieldName::as_heap, RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR, types::CPtr);
+                                        let as_heap = self.load_field(block, recv, FieldName::as_heap, RUBY_OFFSET_RSTRUCT_AS_HEAP_PTR, types::CPtr, crate::hir_effect::abstract_heaps::Object);
                                         let offset = SIZEOF_VALUE_I32 * index;
                                         (as_heap, offset)
                                     };
@@ -5056,7 +5056,7 @@ impl Function {
                                         self.push_insn(block, Insn::WriteBarrier { recv, val });
                                         val
                                     } else { // StructAref
-                                        self.load_field(block, target, mid.into(), offset, types::BasicObject)
+                                        self.load_field(block, target, mid.into(), offset, types::BasicObject, crate::hir_effect::abstract_heaps::Object)
                                     };
                                     self.make_equal_to(insn_id, replacement);
                                 },
@@ -5339,11 +5339,11 @@ impl Function {
                             let level = get_lvar_level(local_iseq);
                             let lep = fun.get_ep(block, level);
                             // Load ep[VM_ENV_DATA_INDEX_ME_CREF]
-                            let method_entry = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_ME_CREF, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_ME_CREF, types::RubyValue);
+                            let method_entry = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_ME_CREF, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_ME_CREF, types::RubyValue, crate::hir_effect::abstract_heaps::Frame);
                             // Guard that it matches the expected CME
                             fun.push_insn(block, Insn::GuardBitEquals { val: method_entry, expected: Const::Value(current_cme.into()), reason: Box::new(SideExitReason::GuardSuperMethodEntry), state, recompile: None });
 
-                            let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::RubyValue);
+                            let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::RubyValue, crate::hir_effect::abstract_heaps::Frame);
                             fun.push_insn(block, Insn::GuardBitEquals {
                                 val: block_handler,
                                 expected: Const::Value(VALUE(VM_BLOCK_HANDLER_NONE as usize)),
@@ -5981,7 +5981,7 @@ impl Function {
     }
 
     fn load_shape(&mut self, block: BlockId, recv: InsnId) -> InsnId {
-        self.load_field(block, recv, FieldName::shape_id, unsafe { rb_shape_id_offset() } as i32, types::CShape)
+        self.load_field(block, recv, FieldName::shape_id, unsafe { rb_shape_id_offset() } as i32, types::CShape, crate::hir_effect::abstract_heaps::ObjectShape)
     }
 
     fn guard_shape(&mut self, block: BlockId, val: InsnId, expected: ShapeId, state: InsnId, recompile: Option<Recompile>) -> InsnId {
@@ -6011,7 +6011,7 @@ impl Function {
         // See ROBJECT_FIELDS() from include/ruby/internal/core/robject.h
         let offset = ROBJECT_OFFSET_AS_ARY
             + (SIZEOF_VALUE * ivar_index.to_usize()) as i32;
-        self.load_field(block, recv, id.into(), offset, types::BasicObject)
+        self.load_field(block, recv, id.into(), offset, types::BasicObject, crate::hir_effect::abstract_heaps::Object)
     }
 
     /// Guard that `recv` is a heap allocated object
@@ -6043,7 +6043,7 @@ impl Function {
                     TDATA_OFFSET_FIELDS_OBJ
                 };
 
-                let fields_obj = self.load_field(block, self_val, FieldName::fields_obj, offset, types::IMemo);
+                let fields_obj = self.load_field(block, self_val, FieldName::fields_obj, offset, types::IMemo, crate::hir_effect::abstract_heaps::Object);
                 // All fields objects are embedded
                 self.load_ivar_embedded(block, fields_obj, id, ivar_index)
             },
@@ -6171,7 +6171,7 @@ impl Function {
                 (self_val, true)
             },
             ShapeLayout::Extended => {
-                let fields = self.load_field(block, self_val, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::IMemo);
+                let fields = self.load_field(block, self_val, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::IMemo, crate::hir_effect::abstract_heaps::Object);
                 (fields, false)
             },
             ShapeLayout::Other | ShapeLayout::RClass => {
@@ -6509,6 +6509,10 @@ impl Function {
 
 
     fn optimize_load_store(&mut self) {
+        struct HeapLocation {
+            recv: InsnId,
+            offset: i32,
+        }
         use crate::hir_effect::AbstractHeap;
         #[derive(Clone, Copy)]
         struct Entry {
@@ -6541,7 +6545,7 @@ impl Function {
                         compile_time_heap.retain(|(_, off), entry| entry.disjoint_from(abstract_heaps::Memory) || *off != offset);
                         compile_time_heap.insert(key, Entry { val, heap: abstract_heaps::Memory });
                     },
-                    &Insn::LoadField { recv, offset, return_type, .. } => {
+                    &Insn::LoadField { recv, offset, return_type, heap, .. } => {
                         let key = (self.chase_insn(recv), offset);
                         match compile_time_heap.entry(key) {
                             std::collections::hash_map::Entry::Occupied(entry) => {
@@ -6566,7 +6570,7 @@ impl Function {
                             }
                             std::collections::hash_map::Entry::Vacant(_) => {
                                 // If the value has not been accessed, cache a copy to optimize future loads or stores.
-                                compile_time_heap.insert(key, Entry { val: insn_id, heap: abstract_heaps::Memory });
+                                compile_time_heap.insert(key, Entry { val: insn_id, heap });
                             }
                         }
                     }
@@ -6577,7 +6581,7 @@ impl Function {
                         // This special casing in this pass here should be removed once we refine our effects system to provide greater granularity for WriteBarrier.
                         // TODO: use TBAA
                         let offset = RUBY_OFFSET_RBASIC_FLAGS;
-                        compile_time_heap.retain(|(_, off), entry| entry.disjoint_from(abstract_heaps::Memory) || *off != offset);
+                        compile_time_heap.retain(|(_, off), entry| entry.disjoint_from(abstract_heaps::ObjectShapeAndFlags) || *off != offset);
                     },
                     insn => {
                         // TODO(max): Figure out why you can't use disjoint_from
@@ -9747,7 +9751,7 @@ fn add_iseq_to_hir(
                         state.setlocal(ep_offset, val);
                     }
                     let ep = fun.get_ep(block, level);
-                    let flags = fun.load_field(block, ep, FieldName::VM_ENV_DATA_INDEX_FLAGS, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32), types::CInt64);
+                    let flags = fun.load_field(block, ep, FieldName::VM_ENV_DATA_INDEX_FLAGS, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32), types::CInt64, crate::hir_effect::abstract_heaps::Frame);
                     let modified_flag = fun.push_insn(block, Insn::Const {
                         val: Const::CInt64(VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM.into()),
                     });
@@ -10559,7 +10563,7 @@ fn add_iseq_to_hir(
                         // callee containing this `invokeblock`.
                         let level = get_lvar_level(exit_state.iseq);
                         let lep = fun.get_ep(block, level);
-                        let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::CInt64);
+                        let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::CInt64, crate::hir_effect::abstract_heaps::Frame);
 
                         // Check IFUNC tag: (block_handler & 0x3) == 0x3
                         let tag_mask = fun.push_insn(block, Insn::Const { val: Const::CInt64(0x3) });
@@ -11761,8 +11765,8 @@ mod validation_tests {
         let mut function = Function::new(std::ptr::null());
         let entry = function.entry_block;
         let recv = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
-        function.load_field(entry, recv, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::CPtr);
-        let ivar = function.load_field(entry, recv, FieldName::Id(ID(1)), ROBJECT_OFFSET_AS_ARY, types::BasicObject);
+        function.load_field(entry, recv, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::CPtr, crate::hir_effect::abstract_heaps::Object);
+        let ivar = function.load_field(entry, recv, FieldName::Id(ID(1)), ROBJECT_OFFSET_AS_ARY, types::BasicObject, crate::hir_effect::abstract_heaps::Object);
         function.push_insn(entry, Insn::Return { val: ivar });
         function.seal_entries();
 
@@ -11784,8 +11788,8 @@ mod validation_tests {
         let mut function = Function::new(std::ptr::null());
         let entry = function.entry_block;
         let recv = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
-        function.load_field(entry, recv, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::BasicObject);
-        let ivar = function.load_field(entry, recv, FieldName::Id(ID(1)), ROBJECT_OFFSET_AS_ARY, types::Array);
+        function.load_field(entry, recv, FieldName::as_heap, ROBJECT_OFFSET_AS_HEAP_FIELDS, types::BasicObject, crate::hir_effect::abstract_heaps::Object);
+        let ivar = function.load_field(entry, recv, FieldName::Id(ID(1)), ROBJECT_OFFSET_AS_ARY, types::Array, crate::hir_effect::abstract_heaps::Object);
         function.push_insn(entry, Insn::Return { val: ivar });
         function.seal_entries();
 

@@ -338,10 +338,10 @@ fn inline_trueclass_and(fun: &mut hir::Function, block: hir::BlockId, _recv: hir
 fn inline_thread_current(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
     let &[] = args else { return None; };
     let ec = fun.push_insn(block, hir::Insn::LoadEC);
-    let thread_ptr = fun.load_field(block, ec, FieldName::thread_ptr, RUBY_OFFSET_EC_THREAD_PTR, types::CPtr);
+    let thread_ptr = fun.load_field(block, ec, FieldName::thread_ptr, RUBY_OFFSET_EC_THREAD_PTR, types::CPtr, crate::hir_effect::abstract_heaps::Other);
     // TODO(max): Add Thread type. But Thread.current is not guaranteed to be an exact Thread.
     // You can make subclasses...
-    let thread_self = fun.load_field(block, thread_ptr, FieldName::SelfParam, RUBY_OFFSET_THREAD_SELF, types::BasicObject);
+    let thread_self = fun.load_field(block, thread_ptr, FieldName::SelfParam, RUBY_OFFSET_THREAD_SELF, types::BasicObject, crate::hir_effect::abstract_heaps::Object);
     Some(thread_self)
 }
 
@@ -368,7 +368,7 @@ fn inline_kernel_block_given_p(fun: &mut hir::Function, block: hir::BlockId, _re
         // Equivalent of GET_LEP() macro.
         let level = crate::cruby::get_lvar_level(call_site_iseq);
         let lep = fun.push_insn(block, hir::Insn::GetEP { level });
-        let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::RubyValue);
+        let block_handler = fun.load_field(block, lep, FieldName::VM_ENV_DATA_INDEX_SPECVAL, SIZEOF_VALUE_I32 * VM_ENV_DATA_INDEX_SPECVAL, types::RubyValue, crate::hir_effect::abstract_heaps::Frame);
         Some(fun.push_insn(block, hir::Insn::IsBlockGiven { block_handler }))
     } else {
         Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }))
