@@ -1865,6 +1865,11 @@ pub struct Assembler {
     /// consumes this through Insn::CCall, after it knows whether each live VReg
     /// is in a saved register or an allocator spill slot.
     stack_map: Option<StackMap>,
+
+    /// Instruction-local temporary registers requested by the backend's
+    /// legalizer before register allocation (VRegs), rewritten to physical
+    /// registers after register allocation.
+    pub(super) insn_tmps: HashMap<InsnId, Vec<Opnd>>,
 }
 
 impl Assembler
@@ -1881,6 +1886,7 @@ impl Assembler
             num_vregs: 0,
             idx: 0,
             stack_map: None,
+            insn_tmps: HashMap::default(),
         }
     }
 
@@ -2021,9 +2027,16 @@ impl Assembler
     }
 
     pub fn linearize_instructions(&self) -> Vec<Insn> {
+        self.linearize_instructions_with_ids().into_iter().map(|(insn, _)| insn).collect()
+    }
+
+    /// Like [`Self::linearize_instructions`], but also returns each instruction's
+    /// [`InsnId`] (None for instructions synthesized during or after register allocation).
+    pub(super) fn linearize_instructions_with_ids(&self) -> Vec<(Insn, Option<InsnId>)> {
 
         // Emit instructions with labels, expanding branch parameters
         let mut insns = Vec::with_capacity(ASSEMBLER_INSNS_CAPACITY);
+        let mut insn_ids: Vec<Option<InsnId>> = Vec::with_capacity(ASSEMBLER_INSNS_CAPACITY);
         let block_ids = self.block_order();
 
         for (i, block_id) in block_ids.iter().enumerate() {
@@ -2034,16 +2047,18 @@ impl Assembler
                 perf::push_insns_with_synthetic_symbol(&mut insns, "BoundaryPad", |insns| {
                     insns.push(Insn::BoundaryPad);
                 });
+                insn_ids.resize(insns.len(), None);
             }
 
             // Process each instruction, expanding branch params if needed
             let mut block_end_pos_marker = None;
-            for insn in &block.insns {
+            for (insn, insn_id) in block.insns.iter().zip(block.insn_ids.iter()) {
                 if let Insn::PosMarkerAtBlockEnd(marker) = insn {
                     assert!(block_end_pos_marker.is_none(), "only one PosMarkerAtBlockEnd is supported per block");
                     block_end_pos_marker = Some(marker.clone());
                 } else {
                     self.expand_branch_insn(insn, &mut insns);
+                    insn_ids.resize(insns.len(), *insn_id);
                 }
             }
 
@@ -2055,20 +2070,23 @@ impl Assembler
                 if let Some(Insn::Jmp(Target::Label(label))) = insns.last() {
                     if *label == next_label {
                         insns.pop();
+                        insn_ids.pop();
                     }
                 }
             }
 
             if let Some(marker) = block_end_pos_marker {
                 insns.push(Insn::PosMarker(marker));
+                insn_ids.push(None);
             }
         }
         // Make sure we don't stomp on the next function
         perf::push_insns_with_synthetic_symbol(&mut insns, "BoundaryPad", |insns| {
             insns.push(Insn::BoundaryPad);
         });
+        insn_ids.resize(insns.len(), None);
 
-        insns
+        insns.into_iter().zip(insn_ids).collect()
     }
 
     /// Expand and linearize a branch instruction:
