@@ -685,6 +685,90 @@ static const rb_box_t * current_box_on_cfp(const rb_execution_context_t *ec, con
 
 #include "vm_exec.c"
 
+/* Call-threaded instruction handlers for ZJIT's baseline compiler.
+ *
+ * This compiles vm.inc a second time, with each instruction as a standalone
+ * function (the OPT_CALL_THREADED_CODE shape) instead of a label inside
+ * vm_exec_core(). The baseline compiler emits one call per instruction. The
+ * handlers keep all state in the control frame, so the interpreter can resume
+ * after any instruction. */
+
+#if USE_ZJIT && !OPT_CALL_THREADED_CODE
+
+/* vm_exec_core() redefines these to use its pinned reg_pc. */
+#undef VM_REG_PC
+#undef GET_PC
+#undef SET_PC
+#undef RESTORE_REGS
+#define VM_REG_PC (VM_REG_CFP->pc)
+#define GET_PC() (VM_REG_PC)
+#define SET_PC(x) (VM_REG_PC = (x))
+#define RESTORE_REGS() (VM_REG_CFP = ec->cfp)
+
+#undef LABEL
+#undef LABEL_PTR
+#undef INSN_ENTRY
+#undef END_INSN
+#undef NEXT_INSN
+#undef START_OF_ORIGINAL_INSN
+#undef DISPATCH_ORIGINAL_INSN
+#undef THROW_EXCEPTION
+#undef LEAVE_FINISH_FRAME
+#define LABEL(x) zjit_insn_func_##x
+#define LABEL_PTR(x) ((const void *)&LABEL(x))
+#define INSN_ENTRY(insn) \
+  static rb_control_frame_t * \
+    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp) {
+#define END_INSN(insn) return reg_cfp;}
+#define NEXT_INSN() return reg_cfp;
+#define START_OF_ORIGINAL_INSN(x) /* ignore */
+#define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
+#define THROW_EXCEPTION(exc) do { \
+    ec->errinfo = (VALUE)(exc); \
+    return 0; \
+} while (0)
+/* Leave the return value in the popped frame's stack slot */
+#define LEAVE_FINISH_FRAME(val) do { \
+    *GET_SP() = (val); \
+    return 0; \
+} while (0)
+
+#define insns_address_table zjit_insn_func_table
+#include "vm.inc"
+#include "vmtc.inc"
+#undef insns_address_table
+
+/* Execute the instruction at cfp->pc as `opcode`. Return Qundef if the JIT
+ * code should continue in the same frame at the new cfp->pc. Otherwise, the
+ * instruction was leave, and the return value is the frame's return value. */
+VALUE
+rb_zjit_baseline_exec_insn(rb_execution_context_t *ec, rb_control_frame_t *cfp, int opcode)
+{
+    rb_control_frame_t *next_cfp = ((rb_insn_func_t)zjit_insn_func_table[opcode])(ec, cfp);
+    if (next_cfp == cfp) return Qundef;
+
+    if (next_cfp == NULL) {
+        /* leave from a FINISH frame. throw also returns NULL, but the JIT code
+         * lets the interpreter run it instead. */
+        return *cfp->sp;
+    }
+
+    if (next_cfp == RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp)) {
+        /* leave: the frame is popped and val is pushed to the caller's stack,
+         * but the caller of JIT code expects to push it. */
+        return *--next_cfp->sp;
+    }
+
+    /* The instruction pushed a callee frame. Run it to completion like rb_vm_send(). */
+    stack_check(ec);
+    VALUE val = Qundef;
+    VM_EXEC(ec, val);
+    *cfp->sp++ = val;
+    return Qundef;
+}
+
+#endif
+
 #include "vm_method.c"
 #include "vm_eval.c"
 

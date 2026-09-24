@@ -238,6 +238,10 @@ fn gen_iseq_entry_point(cb: &mut CodeBlock, iseq: IseqPtr, jit_exception: bool) 
         return gen_exception_handler_counter(cb);
     }
 
+    if get_option!(baseline) {
+        return crate::baseline::gen_baseline(cb, iseq);
+    }
+
     let iseq_name = iseq_get_location(iseq, 0);
     trace_compile_phase(&iseq_name, || {
         // Compile ISEQ into High-level IR

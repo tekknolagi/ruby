@@ -157,6 +157,16 @@ default:                        \
 #define THROW_EXCEPTION(exc) return (VALUE)(exc)
 #endif
 
+/* Return from the interpreter loop after popping a FINISH frame */
+#if OPT_CALL_THREADED_CODE
+#define LEAVE_FINISH_FRAME(val) do { \
+    rb_ec_thread_ptr(ec)->retval = (val); \
+    return 0; \
+} while (0)
+#else
+#define LEAVE_FINISH_FRAME(val) return (val)
+#endif
+
 // Run the interpreter from the JIT
 #define VM_EXEC(ec, val) do { \
     if (UNDEF_P(val)) { \

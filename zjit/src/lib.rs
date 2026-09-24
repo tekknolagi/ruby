@@ -21,6 +21,7 @@ pub mod hir;
 mod hir_type;
 mod hir_effect;
 mod codegen;
+mod baseline;
 mod stats;
 mod cast;
 mod virtualmem;
