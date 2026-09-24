@@ -86,6 +86,7 @@ pub fn gen_baseline(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<CodePtr> {
     let insn_labels: Vec<Label> = (0..iseq_size).map(|idx| cb.new_label(format!("insn_{idx}"))).collect();
     let exec_label = cb.new_label("exec".into());
     let return_label = cb.new_label("return".into());
+    let frame_changed_label = cb.new_label("frame_changed".into());
 
     // Save EC and CFP in callee-saved registers
     let start_ptr = cb.get_write_ptr();
@@ -112,19 +113,21 @@ pub fn gen_baseline(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<CodePtr> {
         let next_idx = insn_idx + insn_len(opcode as usize);
         let continue_label = cb.new_label(format!("continue_{insn_idx}"));
 
-        // Call the instruction function, and call rb_zjit_baseline_frame_changed() if it returns non-NULL.
+        // Call the instruction function. If it may push or pop a frame, call the frame_changed stub when it returns non-NULL.
         // TracePoint patches the start of it to jump to exec_label.
         cb.write_label(insn_labels[insn_idx as usize]);
         patch_ptrs.push(cb.get_write_ptr());
         call(cb, unsafe { rb_zjit_baseline_insn_func(opcode as i32) });
-        cb.label_ref(continue_label, 4, |cb, src_addr, dst_addr| {
-            cbz(cb, X0, InstructionOffset::from_insns(((dst_addr - src_addr) / 4 + 1) as i32));
-            Ok(())
-        });
-        mov(cb, C_ARG_REGS[2], X0);
-        call(cb, rb_zjit_baseline_frame_changed as *const u8);
-        cmp(cb, X0, A64Opnd::new_uimm(Qundef.as_u64()));
-        branch(cb, Some(Condition::NE), return_label);
+        if may_change_frame(opcode) {
+            cb.label_ref(continue_label, 4, |cb, src_addr, dst_addr| {
+                cbz(cb, X0, InstructionOffset::from_insns(((dst_addr - src_addr) / 4 + 1) as i32));
+                Ok(())
+            });
+            cb.label_ref(frame_changed_label, 4, |cb, src_addr, dst_addr| {
+                bl(cb, InstructionOffset::from_insns(((dst_addr - src_addr) / 4 + 1) as i32));
+                Ok(())
+            });
+        }
 
         // Follow the PC if the instruction may jump
         cb.write_label(continue_label);
@@ -141,6 +144,17 @@ pub fn gen_baseline(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<CodePtr> {
         }
         insn_idx = next_idx;
     }
+
+    // Call rb_zjit_baseline_frame_changed(ec, cfp, x0). Return to the caller of the stub
+    // if it returns Qundef, or return the value from the ISEQ otherwise.
+    cb.write_label(frame_changed_label);
+    stp_pre(cb, X30, X9, A64Opnd::new_mem(128, SP, -16));
+    mov(cb, C_ARG_REGS[2], X0);
+    call(cb, rb_zjit_baseline_frame_changed as *const u8);
+    ldp_post(cb, X30, X9, A64Opnd::new_mem(128, SP, 16));
+    cmp(cb, X0, A64Opnd::new_uimm(Qundef.as_u64()));
+    branch(cb, Some(Condition::NE), return_label);
+    ret(cb, A64Opnd::None);
 
     // Run the rest of the frame in C
     cb.write_label(exec_label);
@@ -166,6 +180,23 @@ pub fn gen_baseline(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<CodePtr> {
         track_no_trace_point_assumption(patch_ptr, exec_ptr, version);
     }
     Some(start_ptr)
+}
+
+/// Return true if the instruction function may push or pop a frame, i.e. it may return non-NULL.
+/// Keep this in sync with RESTORE_REGS(), vm_pop_frame(), and CALL_SIMPLE_METHOD() in insns.def.
+#[cfg(target_arch = "aarch64")]
+fn may_change_frame(opcode: u32) -> bool {
+    matches!(opcode,
+        YARVINSN_send | YARVINSN_sendforward | YARVINSN_opt_send_without_block | YARVINSN_invokesuper
+        | YARVINSN_invokesuperforward | YARVINSN_invokeblock | YARVINSN_defineclass
+        | YARVINSN_leave | YARVINSN_opt_invokebuiltin_delegate_leave
+        // Instructions that fall back to opt_send_without_block
+        | YARVINSN_objtostring | YARVINSN_opt_str_freeze | YARVINSN_opt_ary_freeze | YARVINSN_opt_hash_freeze
+        | YARVINSN_opt_str_uminus | YARVINSN_opt_plus | YARVINSN_opt_minus | YARVINSN_opt_mult | YARVINSN_opt_div
+        | YARVINSN_opt_mod | YARVINSN_opt_eq | YARVINSN_opt_neq | YARVINSN_opt_lt | YARVINSN_opt_le | YARVINSN_opt_gt
+        | YARVINSN_opt_ge | YARVINSN_opt_ltlt | YARVINSN_opt_and | YARVINSN_opt_or | YARVINSN_opt_aref | YARVINSN_opt_aset
+        | YARVINSN_opt_length | YARVINSN_opt_size | YARVINSN_opt_empty_p | YARVINSN_opt_succ | YARVINSN_opt_not
+        | YARVINSN_opt_regexpmatch2 | YARVINSN_opt_nil_p)
 }
 
 #[cfg(not(target_arch = "aarch64"))]
