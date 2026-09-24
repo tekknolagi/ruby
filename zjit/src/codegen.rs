@@ -194,6 +194,12 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, ec: EcPtr, jit_exc
     // Take a lock to avoid writing to ISEQ in parallel with Ractors.
     // with_vm_lock() does nothing if the program doesn't use Ractors.
     with_vm_lock(src_loc!(), || {
+        if get_option!(baseline) && !jit_exception {
+            // Mark the code region executable for the entry trampoline
+            ZJITState::get_code_block().mark_all_executable();
+            return crate::baseline::gen_baseline(iseq);
+        }
+
         // The current frame is this ISEQ's method frame, so its method entry tells
         // us the owning class and thus whether `self` is always a heap object.
         update_self_is_heap_object(iseq, unsafe { get_ec_cfp(ec) });
@@ -236,10 +242,6 @@ fn gen_iseq_entry_point(cb: &mut CodeBlock, iseq: IseqPtr, jit_exception: bool) 
     // We don't support exception handlers yet
     if jit_exception {
         return gen_exception_handler_counter(cb);
-    }
-
-    if get_option!(baseline) {
-        return crate::baseline::gen_baseline(cb, iseq);
     }
 
     let iseq_name = iseq_get_location(iseq, 0);

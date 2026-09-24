@@ -27,6 +27,8 @@ pub struct IseqPayload {
     pub self_is_heap_object: bool,
     /// Number of recompile exits before invalidating the current version. See `exit_recompile`.
     pub num_exits_until_invalidate: NumExits,
+    /// Instruction handlers for the baseline compiler. See [`crate::baseline`].
+    pub baseline_sled: Vec<crate::baseline::BaselineSlot>,
 }
 
 impl IseqPayload {
@@ -37,6 +39,7 @@ impl IseqPayload {
             was_invalidated_for_singleton_class_creation: false,
             self_is_heap_object: false,
             num_exits_until_invalidate: get_option!(num_exits_until_invalidate),
+            baseline_sled: vec![],
         }
     }
 }

@@ -685,15 +685,55 @@ static const rb_box_t * current_box_on_cfp(const rb_execution_context_t *ec, con
 
 #include "vm_exec.c"
 
-/* Call-threaded instruction handlers for ZJIT's baseline compiler.
- *
- * This compiles vm.inc a second time, with each instruction as a standalone
- * function (the OPT_CALL_THREADED_CODE shape) instead of a label inside
- * vm_exec_core(). The baseline compiler emits one call per instruction. The
- * handlers keep all state in the control frame, so the interpreter can resume
- * after any instruction. */
+/* ZJIT's baseline compiler. This compiles vm.inc a second time, with each
+ * instruction as a standalone function (the OPT_CALL_THREADED_CODE shape)
+ * instead of a label inside vm_exec_core(). A "compiled" ISEQ is an array of
+ * these handlers, one slot per YARV instruction, which rb_zjit_baseline_exec()
+ * runs like the call-threaded interpreter loop. The handlers keep all state in
+ * the control frame, so it behaves exactly like the interpreter. */
 
-#if USE_ZJIT && !OPT_CALL_THREADED_CODE
+#if USE_ZJIT && !OPT_CALL_THREADED_CODE && defined(__has_attribute)
+#if __has_attribute(musttail)
+#define ZJIT_BASELINE 1
+#endif
+#endif
+
+#if ZJIT_BASELINE
+/* The baseline compiler of ZJIT. It re-includes vm.inc to turn each
+ * instruction into a function and runs an ISEQ with a "sled" that has a
+ * handler for each instruction. Each handler tail-calls the handler of the
+ * next instruction until the frame changes, which is like direct threading
+ * but lets ZJIT profile and run code in between frames. */
+
+/* A sled slot caches the opcode of each instruction in iseq_encoded. The
+ * instruction changes when TracePoint or profiling rewrites it. It's a single
+ * word so that Ractors can race on it. */
+typedef unsigned int rb_zjit_baseline_slot_t;
+typedef rb_control_frame_t *(*rb_zjit_baseline_func_t)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+                                                        rb_zjit_baseline_slot_t *sled, const VALUE *iseq_encoded);
+
+static const void *const zjit_insn_func_table[];
+static const void *const *zjit_insn_addr_table; /* rb_vm_get_insns_address_table() */
+
+/* Tail-call the handler at the PC. Return to rb_zjit_baseline_exec() if the frame changed. */
+#define ZJIT_BASELINE_DISPATCH() do { \
+    if (UNLIKELY(reg_cfp != zjit_cfp)) return reg_cfp; \
+    rb_zjit_baseline_slot_t *zjit_slot = &zjit_sled[reg_cfp->pc - zjit_iseq_encoded]; \
+    rb_zjit_baseline_slot_t zjit_opcode = *zjit_slot; \
+    if (UNLIKELY(zjit_insn_addr_table[zjit_opcode] != (const void *)*reg_cfp->pc)) { \
+        *zjit_slot = zjit_opcode = rb_vm_insn_addr2opcode((const void *)*reg_cfp->pc); \
+    } \
+    rb_zjit_baseline_func_t zjit_func = (rb_zjit_baseline_func_t)zjit_insn_func_table[zjit_opcode]; \
+    __attribute__((musttail)) return zjit_func(ec, reg_cfp, zjit_sled, zjit_iseq_encoded); \
+} while (0)
+
+static rb_control_frame_t *
+zjit_baseline_dispatch(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+                       rb_zjit_baseline_slot_t *zjit_sled, const VALUE *zjit_iseq_encoded)
+{
+    rb_control_frame_t *const zjit_cfp = reg_cfp;
+    ZJIT_BASELINE_DISPATCH();
+}
 
 /* vm_exec_core() redefines these to use its pinned reg_pc. */
 #undef VM_REG_PC
@@ -718,14 +758,18 @@ static const rb_box_t * current_box_on_cfp(const rb_execution_context_t *ec, con
 #define LABEL_PTR(x) ((const void *)&LABEL(x))
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
-    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp) {
-#define END_INSN(insn) return reg_cfp;}
-#define NEXT_INSN() return reg_cfp;
+    LABEL(insn)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, \
+                rb_zjit_baseline_slot_t *zjit_sled, const VALUE *zjit_iseq_encoded) { \
+    rb_control_frame_t *const zjit_cfp = reg_cfp;
+#define END_INSN(insn) ZJIT_BASELINE_DISPATCH();}
+#define NEXT_INSN() ZJIT_BASELINE_DISPATCH()
 #define START_OF_ORIGINAL_INSN(x) /* ignore */
-#define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
+#define DISPATCH_ORIGINAL_INSN(x) \
+    __attribute__((musttail)) return LABEL(x)(ec, reg_cfp, zjit_sled, zjit_iseq_encoded)
+/* Unwind to vm_exec() like rb_zjit_throw() */
 #define THROW_EXCEPTION(exc) do { \
     ec->errinfo = (VALUE)(exc); \
-    return 0; \
+    EC_JUMP_TAG(ec, ec->tag->state); \
 } while (0)
 /* Leave the return value in the popped frame's stack slot */
 #define LEAVE_FINISH_FRAME(val) do { \
@@ -738,35 +782,41 @@ static const rb_box_t * current_box_on_cfp(const rb_execution_context_t *ec, con
 #include "vmtc.inc"
 #undef insns_address_table
 
-/* Execute the instruction at cfp->pc as `opcode`. Return Qundef if the JIT
- * code should continue in the same frame at the new cfp->pc. Otherwise, the
- * instruction was leave, and the return value is the frame's return value. */
+rb_zjit_baseline_slot_t *rb_zjit_baseline_sled(const rb_iseq_t *iseq); // defined in Rust
+
+/* Run the current frame until it returns. This is the jit_entry of ISEQs
+ * compiled by the baseline compiler. */
 VALUE
-rb_zjit_baseline_exec_insn(rb_execution_context_t *ec, rb_control_frame_t *cfp, int opcode)
+rb_zjit_baseline_exec(rb_execution_context_t *ec, rb_control_frame_t *cfp)
 {
-    rb_control_frame_t *next_cfp = ((rb_insn_func_t)zjit_insn_func_table[opcode])(ec, cfp);
-    if (next_cfp == cfp) return Qundef;
+    rb_zjit_baseline_slot_t *sled = rb_zjit_baseline_sled(CFP_ISEQ(cfp));
+    const VALUE *iseq_encoded = ISEQ_BODY(CFP_ISEQ(cfp))->iseq_encoded;
+    zjit_insn_addr_table = rb_vm_get_insns_address_table();
 
-    if (next_cfp == NULL) {
-        /* leave from a FINISH frame. throw also returns NULL, but the JIT code
-         * lets the interpreter run it instead. */
-        return *cfp->sp;
+    while (1) {
+        rb_control_frame_t *next_cfp = zjit_baseline_dispatch(ec, cfp, sled, iseq_encoded);
+
+        /* leave from a FINISH frame */
+        if (next_cfp == NULL) return *cfp->sp;
+
+        /* leave: the frame is popped and the return value is pushed to the
+         * caller's stack, but the caller of JIT code expects to push it. */
+        if (next_cfp == RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp)) return *--next_cfp->sp;
+
+        /* The instruction pushed a callee frame. Run it to completion like rb_vm_send(). */
+        stack_check(ec);
+        VALUE val = Qundef;
+        VM_EXEC(ec, val);
+        *cfp->sp++ = val;
     }
-
-    if (next_cfp == RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp)) {
-        /* leave: the frame is popped and val is pushed to the caller's stack,
-         * but the caller of JIT code expects to push it. */
-        return *--next_cfp->sp;
-    }
-
-    /* The instruction pushed a callee frame. Run it to completion like rb_vm_send(). */
-    stack_check(ec);
-    VALUE val = Qundef;
-    VM_EXEC(ec, val);
-    *cfp->sp++ = val;
+}
+#elif USE_ZJIT
+/* Let the interpreter run the ISEQ without musttail */
+VALUE
+rb_zjit_baseline_exec(rb_execution_context_t *ec, rb_control_frame_t *cfp)
+{
     return Qundef;
 }
-
 #endif
 
 #include "vm_method.c"
