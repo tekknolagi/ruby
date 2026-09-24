@@ -21647,6 +21647,146 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_range_each() {
+        eval("(1..3).each { |x| x }");
+        assert_snapshot!(hir_string_proc("Range.instance_method(:each)"), @"
+        fn each@<internal:range>:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          Jump bb3(v6)
+        bb3(v10:BasicObject):
+          v147:NilClass = Const Value(nil)
+          v146:NilClass = Const Value(nil)
+          v16:NilClass = Const Value(nil)
+          v18:TrueClass|NilClass = Defined yield, v16
+          v20:CBool = Test v18
+          CondBranch v20, bb12(), bb4()
+        bb12():
+          v40:BasicObject = InvokeBuiltin range_each_fixnum_limit, v10
+          PatchPoint NoEPEscape(each)
+          v47:CBool = Test v40
+          v48:Falsy = RefineType v40, Falsy
+          CondBranch v47, bb15(), bb10()
+        bb15():
+          v50:Truthy = RefineType v40, Truthy
+          v53:BasicObject = InvokeBuiltin <inline_expr>, v10
+          PatchPoint NoEPEscape(each)
+          Jump bb8(v53)
+        bb8(v79:BasicObject):
+          v84:Fixnum = RefineType v79, Fixnum
+          v85:Fixnum = RefineType v50, Fixnum
+          v86:BoolExact = FixnumLt v84, v85
+          v88:CBool = Test v86
+          CondBranch v88, bb18(), bb9()
+        bb18():
+          PatchPoint NoEPEscape(each)
+          v125:CPtr = GetEP 0
+          v126:CInt64 = LoadField v125, :VM_ENV_DATA_INDEX_SPECVAL@0x1000
+          v127:CInt64[3] = Const CInt64(3)
+          v128:CInt64 = IntAnd v126, v127
+          v129:CInt64[1] = GuardBitEquals v128, CInt64(1) recompile
+          v130:CInt64[-4] = Const CInt64(-4)
+          v131:CInt64 = IntAnd v126, v130
+          v132:CPtr = LoadField v131, :code_iseq@0x1001
+          v133:CPtr[CPtr(0x1002)] = GuardBitEquals v132, CPtr(0x1002) recompile
+          v134:BasicObject = InvokeBlockIseqDirect (0x1002), v131, v79
+          v138:Fixnum = RefineType v79, Fixnum
+          v139:Fixnum[1] = Const Value(1)
+          v140:Fixnum = FixnumAdd v138, v139
+          PatchPoint NoEPEscape(each)
+          Jump bb8(v140)
+        bb9():
+          CheckInterrupts
+          Return v10
+        bb10():
+          v75:BasicObject = InvokeBuiltin range_each_generic, v10
+          CheckInterrupts
+          Return v75
+        bb4():
+          v32:BasicObject = InvokeBuiltin <inline_expr>, v10
+          CheckInterrupts
+          Return v32
+        ");
+    }
+
+    #[test]
+    fn test_inline_range_each_with_block_folds_defined_yield() {
+        set_inline_threshold(100);
+        eval(r"
+            def test(n) = (0...n).each { |x| x }
+            test(3)
+        ");
+        assert_snapshot!(hir_string("test"), @"
+        fn test@<compiled>:2:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:CPtr = LoadSP
+          v3:BasicObject = LoadField v2, :n@0x1000
+          Jump bb3(v1, v3)
+        bb2():
+          EntryPoint JIT(0)
+          v6:BasicObject = LoadArg :self@0
+          v7:BasicObject = LoadArg :n@1
+          Jump bb3(v6, v7)
+        bb3(v9:BasicObject, v10:BasicObject):
+          v14:Fixnum[0] = Const Value(0)
+          v27:Fixnum = GuardType v10, Fixnum
+          v28:RangeExact = NewRangeFixnum v14 NewRangeExclusive v27
+          PatchPoint NoSingletonClass(Range@0x1008)
+          PatchPoint MethodRedefined(Range@0x1008, each@0x1010, cme:0x1018)
+          v164:NilClass = Const Value(nil)
+          v165:NilClass = Const Value(nil)
+          PushInlineFrame :each, v28 (0x1040), num_args=0
+          v64:BasicObject = InvokeBuiltin range_each_fixnum_limit, v28
+          PatchPoint NoEPEscape(each)
+          v71:CBool = Test v64
+          v72:Falsy = RefineType v64, Falsy
+          CondBranch v71, bb17(), bb12()
+        bb17():
+          v74:Truthy = RefineType v64, Truthy
+          v77:BasicObject = InvokeBuiltin <inline_expr>, v28
+          PatchPoint NoEPEscape(each)
+          Jump bb10(v77)
+        bb10(v103:BasicObject):
+          v108:Fixnum = RefineType v103, Fixnum
+          v109:Fixnum = RefineType v74, Fixnum
+          v110:BoolExact = FixnumLt v108, v109
+          v112:CBool = Test v110
+          CondBranch v112, bb20(), bb11()
+        bb20():
+          PatchPoint NoEPEscape(each)
+          v149:CPtr = GetEP 0
+          v150:CInt64 = LoadField v149, :VM_ENV_DATA_INDEX_SPECVAL@0x1060
+          v151:CInt64[-4] = Const CInt64(-4)
+          v152:CInt64 = IntAnd v150, v151
+          v153:BasicObject = InvokeBlockIseqDirect (0x1068), v152, v103
+          v157:Fixnum = RefineType v103, Fixnum
+          v158:Fixnum[1] = Const Value(1)
+          v159:Fixnum = FixnumAdd v157, v158
+          PatchPoint NoEPEscape(each)
+          Jump bb10(v159)
+        bb11():
+          CheckInterrupts
+          Jump bb4(v28)
+        bb12():
+          v99:BasicObject = InvokeBuiltin range_each_generic, v28
+          CheckInterrupts
+          Jump bb4(v99)
+        bb4(v166:BasicObject):
+          PopInlineFrame
+          PatchPoint NoEPEscape(test)
+          CheckInterrupts
+          Return v166
+        ");
+    }
+
+    #[test]
     fn test_delete_duplicate_store() {
         eval("
             class C
