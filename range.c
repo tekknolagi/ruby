@@ -1138,12 +1138,10 @@ range_each_fixnum_loop(VALUE beg, VALUE end, VALUE range)
  */
 
 static VALUE
-range_each(VALUE range)
+range_each_body(VALUE range)
 {
     VALUE beg, end;
     long i;
-
-    RETURN_SIZED_ENUMERATOR(range, 0, 0, range_enum_size);
 
     beg = RANGE_BEG(range);
     end = RANGE_END(range);
@@ -1229,6 +1227,45 @@ range_each(VALUE range)
         }
     }
     return range;
+}
+
+static VALUE
+range_each(VALUE range)
+{
+    RETURN_SIZED_ENUMERATOR(range, 0, 0, range_enum_size);
+    return range_each_body(range);
+}
+
+// Builtin primitives for the Ruby implementation of Range#each in range.rb, which replaces the
+// C method above when a JIT is enabled (like Array#each in array.rb). They are only called with
+// the operand kinds range.rb has checked for, so they can use unchecked helpers such as FIX2LONG.
+
+// The exclusive fixnum limit of a fixnum..fixnum range (as in range_each_fixnum_loop), or false if
+// the range cannot be iterated by the fixnum loop in range.rb (non-fixnum bounds, or a limit past
+// FIXNUM_MAX).
+static VALUE
+range_each_fixnum_limit(rb_execution_context_t *ec, VALUE self)
+{
+    VALUE beg = RANGE_BEG(self), end = RANGE_END(self);
+    if (!FIXNUM_P(beg) || !FIXNUM_P(end)) return Qfalse;
+    long lim = FIX2LONG(end) + !EXCL(self);
+    if (!FIXABLE(lim)) return Qfalse;
+    return LONG2FIX(lim);
+}
+
+// Whether the fixnum a is less than the fixnum b.
+VALUE
+rb_builtin_fixnum_lt(rb_execution_context_t *ec, VALUE self, VALUE a, VALUE b)
+{
+    return RBOOL(FIX2LONG(a) < FIX2LONG(b));
+}
+
+// The C implementation of Range#each for everything but fixnum ranges, yielding to the block of
+// the calling range.rb method (invokebuiltin does not push a frame).
+static VALUE
+range_each_generic(rb_execution_context_t *ec, VALUE self)
+{
+    return range_each_body(self);
 }
 
 RBIMPL_ATTR_NORETURN()
@@ -3004,3 +3041,5 @@ Init_Range(void)
     rb_define_method(rb_cRange, "overlap?", range_overlap, 1);
     rb_define_method(rb_cRange, "clamp", range_clamp, -1);
 }
+
+#include "range.rbinc"

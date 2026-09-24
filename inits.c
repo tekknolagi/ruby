@@ -103,6 +103,7 @@ rb_call_builtin_inits(void)
     BUILTIN(pathname_builtin);
     BUILTIN(warning);
     BUILTIN(array);
+    BUILTIN(range);
     BUILTIN(hash);
     BUILTIN(string);
     BUILTIN(symbol);

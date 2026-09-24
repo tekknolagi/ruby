@@ -24,6 +24,7 @@ nilclass.rb
 pack.rb
 pathname_builtin.rb
 ractor.rb
+range.rb
 string.rb
 symbol.rb
 timev.rb

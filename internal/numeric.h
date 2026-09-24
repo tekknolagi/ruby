@@ -323,4 +323,8 @@ rb_float_new_inline(double d)
     return rb_float_new_in_heap(d);
 }
 
+/* array.c / range.c: fixnum primitives for the builtin Ruby methods in array.rb and range.rb */
+VALUE rb_builtin_fixnum_inc(struct rb_execution_context_struct *ec, VALUE self, VALUE num);
+VALUE rb_builtin_fixnum_lt(struct rb_execution_context_struct *ec, VALUE self, VALUE a, VALUE b);
+
 #endif /* INTERNAL_NUMERIC_H */

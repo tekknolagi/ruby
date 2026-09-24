@@ -19,6 +19,7 @@ unsafe extern "C" {
     fn rb_builtin_ary_at_end(ec: EcPtr, self_: VALUE, index: VALUE) -> VALUE;
     fn rb_builtin_ary_at(ec: EcPtr, self_: VALUE, index: VALUE) -> VALUE;
     fn rb_builtin_fixnum_inc(ec: EcPtr, self_: VALUE, num: VALUE) -> VALUE;
+    fn rb_builtin_fixnum_lt(ec: EcPtr, self_: VALUE, a: VALUE, b: VALUE) -> VALUE;
     fn rb_str_equal(str1: VALUE, str2: VALUE) -> VALUE;
 }
 
@@ -304,6 +305,7 @@ pub fn init() -> Annotations {
 
     // Array iteration builtins (used in with_jit Array#each, map, select, find)
     builtin_funcs.insert(rb_builtin_fixnum_inc as *mut c_void, FnProperties { inline: inline_fixnum_inc, return_type: types::Fixnum, ..Default::default() });
+    builtin_funcs.insert(rb_builtin_fixnum_lt as *mut c_void, FnProperties { inline: inline_fixnum_lt, return_type: types::BoolExact, ..Default::default() });
     builtin_funcs.insert(rb_builtin_ary_at as *mut c_void, FnProperties { inline: inline_ary_at, ..Default::default() });
     builtin_funcs.insert(rb_builtin_ary_at_end as *mut c_void, FnProperties { inline: inline_ary_at_end, return_type: types::BoolExact, ..Default::default() });
 
@@ -1134,8 +1136,26 @@ fn inline_kernel_class(fun: &mut hir::Function, block: hir::BlockId, _recv: hir:
 /// num is always a Fixnum (starts at 0 and is incremented by fixnum_inc).
 fn inline_fixnum_inc(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
     let &[_self, num] = args else { return None; };
+    let num = refine_fixnum(fun, block, num);
     let one = fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(VALUE::fixnum_from_usize(1)) });
     let result = fun.push_insn(block, hir::Insn::FixnumAdd { left: num, right: one, state });
+    Some(result)
+}
+
+/// The fixnum builtins (Array#each, Range#each) are only ever passed fixnums, but the value may
+/// come from a C builtin ZJIT cannot type (e.g. the begin of a Range), so assert the type like
+/// the C helpers' unchecked FIX2LONG does. (Types are not inferred yet when builtins are inlined.)
+fn refine_fixnum(fun: &mut hir::Function, block: hir::BlockId, val: hir::InsnId) -> hir::InsnId {
+    fun.push_insn(block, hir::Insn::RefineType { val, new_type: types::Fixnum })
+}
+
+/// Inline `fixnum_lt(ec, self, a, b)` as a fixnum comparison.
+/// Called from Range#each where both operands are Fixnum.
+fn inline_fixnum_lt(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], _state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[_self, a, b] = args else { return None; };
+    let a = refine_fixnum(fun, block, a);
+    let b = refine_fixnum(fun, block, b);
+    let result = fun.push_insn(block, hir::Insn::FixnumLt { left: a, right: b });
     Some(result)
 }
 
