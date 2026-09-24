@@ -195,9 +195,10 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, ec: EcPtr, jit_exc
     // with_vm_lock() does nothing if the program doesn't use Ractors.
     with_vm_lock(src_loc!(), || {
         if get_option!(baseline) && !jit_exception {
-            // Mark the code region executable for the entry trampoline
-            ZJITState::get_code_block().mark_all_executable();
-            return crate::baseline::gen_baseline(iseq);
+            let cb = ZJITState::get_code_block();
+            let code_ptr = crate::baseline::gen_baseline(cb, iseq);
+            cb.mark_all_executable();
+            return code_ptr.map_or(std::ptr::null(), |ptr| ptr.raw_ptr(cb));
         }
 
         // The current frame is this ISEQ's method frame, so its method entry tells
