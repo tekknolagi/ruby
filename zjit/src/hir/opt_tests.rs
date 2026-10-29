@@ -27484,13 +27484,15 @@ mod hir_opt_tests {
               def return_true = true
               def return_false = false
 
-              def self.from(env)
+              singleton_class.alias_method :old_new, :new
+
+              def self.new(env)
                 DEFAULT_ENVIRONMENTS.each do |name|
                   if env == name
-                    return Object.const_get("#{name.capitalize}EnvironmentInquirer").new
+                    return Object.const_get("#{name.capitalize}EnvironmentInquirer").old_new(env)
                   end
                 end
-                EnvironmentInquirer.new(env)
+                old_new env
               end
 
               def self.init_predicates(env)
@@ -27511,14 +27513,14 @@ mod hir_opt_tests {
             end
 
             class Rails
-              @env = EnvironmentInquirer.from("production")
+              @env = EnvironmentInquirer.new("production")
               def self.env = @env
             end
             def is_prod = Rails.env.production?
             is_prod
         "##);
         assert_snapshot!(hir_string("is_prod"), @"
-        fn is_prod@<compiled>:38:
+        fn is_prod@<compiled>:40:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
