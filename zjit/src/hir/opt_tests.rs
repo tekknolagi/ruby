@@ -27478,27 +27478,51 @@ mod hir_opt_tests {
     #[test]
     fn test_rails_env() {
         eval(r##"
+            DEFAULT_ENVIRONMENTS = %w[ development test production ].freeze
+            # Do the following thing but generate classes dynamically and making sure to burn in the true/false
             class EnvironmentInquirer < String
-              DEFAULT_ENVIRONMENTS = %w[ development test production ].freeze
               def return_true = true
               def return_false = false
-              def initialize(env)
-                self.class.class_eval do
+
+              def self.from(env)
+                DEFAULT_ENVIRONMENTS.each do |name|
+                  if env == name
+                    return Object.const_get("#{name.capitalize}EnvironmentInquirer").new
+                  end
+                end
+                EnvironmentInquirer.new(env)
+              end
+
+              def self.init_predicates(env)
+                class_eval do
                   DEFAULT_ENVIRONMENTS.each do |name|
                     alias_method "#{name}?", (env == name ? :return_true : :return_false)
                   end
                 end
               end
+
+              init_predicates("other")
             end
+
+            class ProductionEnvironmentInquirer < EnvironmentInquirer
+              init_predicates("production")
+            end
+            class DevelopmentEnvironmentInquirer < EnvironmentInquirer
+              init_predicates("development")
+            end
+            class TestEnvironmentInquirer < EnvironmentInquirer
+              init_predicates("test")
+            end
+
             class Rails
-              @env = EnvironmentInquirer.new("production")
+              @env = EnvironmentInquirer.from("production")
               def self.env = @env
             end
             def is_prod = Rails.env.production?
             is_prod
         "##);
         assert_snapshot!(hir_string("is_prod"), @"
-        fn is_prod@<compiled>:18:
+        fn is_prod@<compiled>:42:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
@@ -27518,9 +27542,9 @@ mod hir_opt_tests {
           v37:IMemo = LoadField v11, :fields_obj@0x106a
           v38:BasicObject = LoadField v37, :@env@0x106b
           PopInlineFrame
-          PatchPoint NoSingletonClass(EnvironmentInquirer@0x1070)
-          PatchPoint MethodRedefined(EnvironmentInquirer@0x1070, production?@0x1078, cme:0x1080)
-          v26:StringSubclass[class_exact:EnvironmentInquirer] = GuardType v38, StringSubclass[class_exact:EnvironmentInquirer] recompile
+          PatchPoint NoSingletonClass(ProductionEnvironmentInquirer@0x1070)
+          PatchPoint MethodRedefined(ProductionEnvironmentInquirer@0x1070, production?@0x1078, cme:0x1080)
+          v26:StringSubclass[class_exact:ProductionEnvironmentInquirer] = GuardType v38, StringSubclass[class_exact:ProductionEnvironmentInquirer] recompile
           v27:TrueClass = Const Value(true)
           CheckInterrupts
           Return v27
