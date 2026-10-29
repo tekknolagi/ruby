@@ -27474,4 +27474,67 @@ mod hir_opt_tests {
           Return v100
         ");
     }
+
+    #[test]
+    fn test_rails_env() {
+        eval(r#"
+            class EnvironmentInquirer < String
+              DEFAULT_ENVIRONMENTS = %w[ development test production ].freeze
+              def initialize(env)
+                DEFAULT_ENVIRONMENTS.each do |default|
+                  instance_variable_set :"@#{default}", env == default
+                end
+              end
+              def development? = @development
+              def test? = @test
+              def production? = @production
+            end
+            class Rails
+              def self.env = @env ||= EnvironmentInquirer.new("production")
+            end
+            def is_prod = Rails.env.production?
+            is_prod
+        "#);
+        assert_snapshot!(hir_string("is_prod"), @"
+        fn is_prod@<compiled>:16:
+        bb1():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          Jump bb3(v1)
+        bb2():
+          EntryPoint JIT(0)
+          v4:BasicObject = LoadArg :self@0
+          Jump bb3(v4)
+        bb3(v6:BasicObject):
+          PatchPoint StableConstantNames(0x1000, Rails)
+          v11:ClassSubclass[Rails@0x1008] = Const Value(VALUE(0x1008))
+          PatchPoint MethodRedefined(Class@0x1010, env@0x1018, cme:0x1020)
+          PushInlineFrame :env, v11 (0x1048), num_args=0
+          v34:CShape = LoadField v11, :shape_id@0x1068
+          v35:CShape[0x1069] = GuardBitEquals v34, CShape(0x1069) recompile
+          PatchPoint SingleRactorMode
+          v46:NilClass = Const Value(nil)
+          PatchPoint StableConstantNames(0x1070, EnvironmentInquirer)
+          v49:ClassSubclass[EnvironmentInquirer@0x1078] = Const Value(VALUE(0x1078))
+          v51:StringExact[VALUE(0x1080)] = Const Value(VALUE(0x1080))
+          v52:StringExact = StringCopy v51
+          PatchPoint MethodRedefined(EnvironmentInquirer@0x1078, new@0x1088, cme:0x1090)
+          PatchPoint MethodRedefined(Class@0x10b8, new@0x1088, cme:0x1090)
+          v116:BasicObject = CCallVariadic v49, :String.new@0x10c0, v52
+          v107:ClassSubclass[Rails@0x1008] = Const Value(VALUE(0x1008))
+          SetIvar v107, :@env, v116
+          PopInlineFrame
+          PatchPoint NoSingletonClass(EnvironmentInquirer@0x1078)
+          PatchPoint MethodRedefined(EnvironmentInquirer@0x1078, production?@0x10c1, cme:0x10c8)
+          v26:StringSubclass[class_exact:EnvironmentInquirer] = GuardType v116, StringSubclass[class_exact:EnvironmentInquirer] recompile
+          PushInlineFrame :production?, v26 (0x10f0), num_args=0
+          v96:CShape = LoadField v26, :shape_id@0x1068
+          v97:CShape[0x1110] = GuardBitEquals v96, CShape(0x1110) recompile
+          v98:CAttrIndex[2] = Const CAttrIndex(2)
+          v99:BasicObject = CCall v26, :rb_ivar_get_at_no_ractor_check@0x1111, v98
+          PopInlineFrame
+          CheckInterrupts
+          Return v99
+        ");
+    }
 }
