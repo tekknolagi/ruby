@@ -27504,14 +27504,10 @@ mod hir_opt_tests {
               init_predicates("other")
             end
 
-            class ProductionEnvironmentInquirer < EnvironmentInquirer
-              init_predicates("production")
-            end
-            class DevelopmentEnvironmentInquirer < EnvironmentInquirer
-              init_predicates("development")
-            end
-            class TestEnvironmentInquirer < EnvironmentInquirer
-              init_predicates("test")
+            DEFAULT_ENVIRONMENTS.each do |name|
+              Object.const_set("#{name.capitalize}EnvironmentInquirer", Class.new(EnvironmentInquirer) do
+                init_predicates(name)
+              end)
             end
 
             class Rails
@@ -27522,7 +27518,7 @@ mod hir_opt_tests {
             is_prod
         "##);
         assert_snapshot!(hir_string("is_prod"), @"
-        fn is_prod@<compiled>:42:
+        fn is_prod@<compiled>:38:
         bb1():
           EntryPoint interpreter
           v1:BasicObject = LoadSelf
