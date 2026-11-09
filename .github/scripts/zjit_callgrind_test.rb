@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+# Comment-only change to smoke-test the Callgrind PR feedback workflow.
+
 require 'minitest/autorun'
 require 'tmpdir'
 require 'fileutils'
