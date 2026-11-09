@@ -292,6 +292,7 @@ pub fn init() -> Annotations {
     annotate!(rb_cFloat, "/", inline_float_div);
     annotate!(rb_cFloat, "to_i", inline_float_to_i);
     annotate!(rb_cFloat, "to_int", inline_float_to_i);
+    annotate!(rb_cFloat, "==", inline_float_eq);
     annotate!(rb_cString, "to_s", inline_string_to_s, types::StringExact);
     annotate!(rb_cString, "to_sym", inline_string_to_sym, types::Symbol);
     annotate!(rb_cString, "freeze", inline_freeze);
@@ -884,6 +885,29 @@ fn inline_float_to_i(fun: &mut hir::Function, block: hir::BlockId, recv: hir::In
     None
 }
 
+fn inline_float_eq(fun: &mut hir::Function, block: hir::BlockId, _recv: hir::InsnId, args: &[hir::InsnId], state: hir::InsnId) -> Option<hir::InsnId> {
+    let &[other] = args else { return None; };
+    // Heuristic: Objects get compared to nil a lot, so we can optimize that case:
+    // * `Float#==` (`rb_float_equal`) checks if the other object is not `Integer`/`Float`, and, if not,
+    //   dispatches to `#==` on the other object. If the other object is `nil` and `NilClass#==`
+    //   (`rb_obj_equal`, pointer equality) has not been redefined, it returns `Qfalse`
+    if fun.is_a(other, types::NilClass)
+        && fun.assume_expected_cfunc(block, unsafe { rb_cNilClass }, ID!(eq), rb_obj_equal as _, state) {
+        return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
+    }
+    // Same with TrueClass.
+    if fun.is_a(other, types::TrueClass)
+        && fun.assume_expected_cfunc(block, unsafe { rb_cTrueClass }, ID!(eq), rb_obj_equal as _, state) {
+        return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
+    }
+    // Same with FalseClass.
+    if fun.is_a(other, types::FalseClass)
+        && fun.assume_expected_cfunc(block, unsafe { rb_cFalseClass }, ID!(eq), rb_obj_equal as _, state) {
+        return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
+    }
+    None
+}
+
 fn try_inline_fixnum_op(fun: &mut hir::Function, block: hir::BlockId, f: &dyn Fn(hir::InsnId, hir::InsnId) -> hir::Insn, bop: u32, left: hir::InsnId, right: hir::InsnId, state: hir::InsnId) -> Option<hir::InsnId> {
     if !unsafe { rb_BASIC_OP_UNREDEFINED_P(bop, INTEGER_REDEFINED_OP_FLAG) } {
         // If the basic operation is already redefined, we cannot optimize it.
@@ -908,6 +932,16 @@ fn inline_integer_eq(fun: &mut hir::Function, block: hir::BlockId, recv: hir::In
     //   (`rb_obj_equal`, pointer equality) has not been redefined, it returns `Qfalse`
     if fun.is_a(other, types::NilClass)
         && fun.assume_expected_cfunc(block, unsafe { rb_cNilClass }, ID!(eq), rb_obj_equal as _, state) {
+        return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
+    }
+    // Same with TrueClass.
+    if fun.is_a(other, types::TrueClass)
+        && fun.assume_expected_cfunc(block, unsafe { rb_cTrueClass }, ID!(eq), rb_obj_equal as _, state) {
+        return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
+    }
+    // Same with FalseClass.
+    if fun.is_a(other, types::FalseClass)
+        && fun.assume_expected_cfunc(block, unsafe { rb_cFalseClass }, ID!(eq), rb_obj_equal as _, state) {
         return Some(fun.push_insn(block, hir::Insn::Const { val: hir::Const::Value(Qfalse) }));
     }
     None
